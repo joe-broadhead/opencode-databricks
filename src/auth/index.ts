@@ -211,16 +211,17 @@ export class AuthCore implements AuthPort {
   /** A doctor report raised `role`: remember the credential it proved, so `account().enforcement` can say so in this process. */
   certify(report: DoctorReport): void {
     if (report.role?.name !== undefined) this.roleNames.set(report.alias, report.role.name)
-    if (report.enforcement !== "role") return
-    const seen = this.current.get(report.alias)
-    if (seen) this.certified.set(report.alias, seen)
+    if (report.enforcement !== "role" || report.role === undefined || report.binding === undefined) return
+    // The report proved the credential it ran with. A sign-in that landed during the run is not covered (R2-L1).
+    const current = this.current.get(report.alias)
+    if (current && sameSeen(report.binding, current)) this.certified.set(report.alias, current)
   }
 
   private enforcementFor(alias: string, info: AccountBase): EnforcementKind {
     const base = info.mode === "m2m" ? "service-principal" : info.role !== undefined ? "role-requested" : "identity"
     const certified = this.certified.get(alias)
     const current = this.current.get(alias)
-    return certified && current && sameSeen(certified, current) ? "role" : base
+    return info.role !== undefined && certified && current && sameSeen(certified, current) ? "role" : base
   }
 
   private settings(alias?: string): AccountSettings {

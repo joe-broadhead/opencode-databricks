@@ -80,6 +80,13 @@ export interface DoctorWarning {
   readonly message: string
 }
 
+/** The credential a report's checks ran against, so a certification is bound to what was checked (review R2-L1). */
+export interface ReportBinding {
+  readonly host: string
+  readonly roleGroupId?: string
+  readonly grantedScopes: readonly string[]
+}
+
 export interface DoctorReport {
   readonly alias: string
   readonly mode: AccountSettings["mode"]
@@ -90,6 +97,8 @@ export interface DoctorReport {
   readonly enforcement: "role" | "role-requested" | "identity" | "service-principal"
   /** The exact guarantee `enforcement: "role"` carries, and its exclusions. */
   readonly claim?: string
+  /** The credential this report checked; `certify` accepts it only while it is still the one in force. */
+  readonly binding?: ReportBinding
   readonly checks: readonly DoctorCheck[]
   readonly warnings: readonly DoctorWarning[]
   readonly nextStep: string
@@ -164,10 +173,11 @@ export interface RolePrincipals {
   readonly note?: string
 }
 
+const INHERITED_GROUPS = ["users", "account users"] as const
+
 export function rolePrincipals(identity: Identity | undefined, roleGroupId: string | undefined): RolePrincipals {
   if (!roleGroupId) return { names: [], resolved: false }
-  const groups = identity?.groups
-  const own = groups?.find((group) => group.id === roleGroupId)
+  const own = identity?.groups?.find((group) => group.id === roleGroupId)
   if (!own?.displayName) {
     return {
       names: [],
@@ -175,12 +185,9 @@ export function rolePrincipals(identity: Identity | undefined, roleGroupId: stri
       note: "SCIM Me did not return the role group's name, so every principal's grants were counted; a grant another principal holds is not the role's.",
     }
   }
-  const names = new Set<string>([own.displayName])
-  for (const inherited of ["users", "account users"]) {
-    const found = groups?.find((group) => group.displayName?.toLowerCase() === inherited)
-    if (found?.displayName) names.add(found.displayName)
-  }
-  return { names: [...names], resolved: true }
+  // A role inherits these two groups' grants (design §3.4), and SCIM is not documented to list them: query them by name
+  // whatever SCIM returns, or a role whose only write grant comes through `account users` would look clean (R2-M1).
+  return { names: [own.displayName, ...INHERITED_GROUPS], resolved: true }
 }
 
 /**
@@ -521,7 +528,9 @@ async function reportFor(input: DoctorInput, settings: AccountSettings): Promise
   }
 
   let principals: RolePrincipals = { names: [], resolved: false }
+  let binding: ReportBinding | undefined
   if (token) {
+    binding = { host: token.host, ...(info?.role?.groupId !== undefined ? { roleGroupId: info.role.groupId } : {}), grantedScopes: [...token.scopes] }
     try {
       identity = await port.me(alias, input.signal)
       checks.push(check("identity", "OK", `Signed in as ${identity.displayName ?? identity.userName} (${identity.userName}).`))
@@ -584,6 +593,7 @@ async function reportFor(input: DoctorInput, settings: AccountSettings): Promise
     ...(role !== undefined ? { role: { ...role, ...(principals.resolved && principals.names[0] !== undefined ? { name: principals.names[0] } : {}) } } : {}),
     enforcement,
     ...(enforcement === "role" ? { claim: ROLE_ENFORCEMENT_TEXT } : {}),
+    ...(binding !== undefined ? { binding } : {}),
     checks,
     warnings,
     nextStep: checks.find((item) => item.next !== undefined)?.next ?? "No next step: every check this version can run passed.",

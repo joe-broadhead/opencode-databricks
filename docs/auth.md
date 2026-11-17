@@ -77,14 +77,21 @@ Only the identity's privileges are enforced by Databricks. Under fine-grained sc
 > SQL writes refused on what doctor checked; secret scopes and serving endpoints not checked; job runs use each job's
 > Run as identity
 
-The doctor checks the role's own grants on every visible catalog, on the workspace catalog's `default` schema, on
-external functions where the role holds `EXECUTE`, and `USE` or `MANAGE` on every visible connection (which would let
-`http_request` act with the connection's credential). Every list is paged to its end; if a cap stops one, the report says
-`NOT_CHECKED` and a role is not certified over it. It does **not** check schema- or table-level grants outside the
-default schema, secret scopes, serving endpoints, or job permissions. Under `all-apis` those last two are reachable, so
+The doctor checks the role's own grants, and those of the `users` and `account users` groups a role inherits, on every
+visible catalog and on the workspace catalog's `default` schema; the `EXTERNAL` functions in each `default` schema are
+checked for a function-level `EXECUTE`, and a catalog- or schema-level `EXECUTE` is refused when an `EXTERNAL` function
+exists beneath it. It also checks `USE` or `MANAGE` on every visible connection, which would let `http_request` act with
+the connection's credential. Every list is paged to its end; if a cap stops one, the report says `NOT_CHECKED` and a role
+is not certified over it. It does **not** check schema- or table-level grants outside the `default` schema, secret
+scopes, serving endpoints, or job permissions. Under `all-apis` secret scopes and serving endpoints are reachable, so
 they block the claim; jobs are `OK` without the `jobs` scope (no job can run through that token) and `NOT_CHECKED` with
 it. After a restart status says `role-requested` until `/databricks-doctor` runs again; the certification is held in
-memory only, and any sign-in or refresh that changes its workspace, role or granted scopes clears it.
+memory only, bound to the credential the report ran against, and any sign-in or refresh that changes its workspace, role
+or granted scopes clears it.
+
+SCIM `Me` is not documented to list the inherited `users` and `account users` groups, so the doctor always queries them
+by name along with the role group. Whether `effective-permissions?principal=<role group>` already includes a parent
+group's grants is live check L3; the explicit inherited groups cover it either way.
 
 ## Known limits
 

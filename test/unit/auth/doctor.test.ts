@@ -111,6 +111,58 @@ describe("M2: the role's own principals", () => {
     expect(catalog.detail).toContain("every principal's grants were counted")
   }, 30_000)
 
+  it("R2-M1: always counts account users and users, even when SCIM does not list them", async () => {
+    const asked: string[] = []
+    const port = fakeDatabricks({
+      me: () => ({ id: "1", userName: "ada@example.com", groups: [{ id: "123", displayName: "readers" }] }),
+      listCatalogs: () => ({ items: [{ name: "main" }] }),
+      listSchemas: () => ({ items: [{ name: "default" }] }),
+      listFunctions: () => ({ items: [] }),
+      listWarehouses: () => [],
+      listConnections: () => ({ items: [] }),
+      currentMetastoreAssignment: () => ({ defaultCatalogName: "main" }),
+      // A port that honours `principal`, as the contract's does: only the asked principal's entries come back.
+      effectivePermissions: (_account: unknown, securable: unknown, _signal: unknown, principal: unknown) => {
+        const name = typeof principal === "string" ? principal : "readers"
+        asked.push(name)
+        const scope = securable as { type: string; fullName: string }
+        if (scope.type === "catalog") return [{ principal: "readers", privileges: ["USE_CATALOG"] }]
+        if (scope.type === "schema") {
+          if (name === "account users") return [{ principal: "account users", privileges: ["USE_SCHEMA", "CREATE_TABLE"] }]
+          return name === "readers" ? [{ principal: "readers", privileges: ["USE_SCHEMA"] }] : []
+        }
+        return []
+      },
+    }).port
+    const [report] = await runDoctor({ options: options(), auth: fakeAuth(), databricks: port, signal: signal(), now: () => NOW, families: cleanFamilies() })
+    expect(asked).toEqual(expect.arrayContaining(["readers", "users", "account users"]))
+    expect(byId(report!.checks, "privileges:default-schema:main.default")).toMatchObject({ status: "ROLE_CAN_WRITE" })
+    expect(report!.enforcement).toBe("role-requested")
+  }, 30_000)
+
+  it("R2-M1: a write grant held only by users is counted too", async () => {
+    const port = fakeDatabricks({
+      me: () => ({ id: "1", userName: "ada@example.com", groups: [{ id: "123", displayName: "readers" }] }),
+      listCatalogs: () => ({ items: [{ name: "main" }] }),
+      listSchemas: () => ({ items: [{ name: "default" }] }),
+      listFunctions: () => ({ items: [] }),
+      listWarehouses: () => [],
+      listConnections: () => ({ items: [] }),
+      currentMetastoreAssignment: () => ({ defaultCatalogName: "main" }),
+      effectivePermissions: (_account: unknown, securable: unknown, _signal: unknown, principal: unknown) => {
+        const scope = securable as { type: string; fullName: string }
+        if (scope.type === "catalog") return [{ principal: "readers", privileges: ["USE_CATALOG"] }]
+        if (scope.type === "schema") {
+          if (principal === "users") return [{ principal: "users", privileges: ["USE_SCHEMA", "CREATE_TABLE"] }]
+          return principal === "readers" ? [{ principal: "readers", privileges: ["USE_SCHEMA"] }] : []
+        }
+        return []
+      },
+    }).port
+    const [report] = await runDoctor({ options: options(), auth: fakeAuth(), databricks: port, signal: signal(), now: () => NOW, families: cleanFamilies() })
+    expect(byId(report!.checks, "privileges:default-schema:main.default")).toMatchObject({ status: "ROLE_CAN_WRITE" })
+  }, 30_000)
+
   it("reads the role's name and the inherited groups from SCIM Me when they are returned", async () => {
     const port = fakePort({ groups: [{ id: "123", displayName: "readers" }], entries: () => [] })
     const [report] = await runDoctor({ options: options(), auth: fakeAuth(), databricks: port, signal: signal(), now: () => NOW, families: cleanFamilies() })
@@ -313,6 +365,47 @@ describe("the rest of the report", () => {
     const port = fakePort({ catalogs: [], schemas: [] })
     const [report] = await runDoctor({ options: options(), auth: fakeAuth(), databricks: port, signal: signal(), now: () => NOW, families: cleanFamilies() })
     expect(byId(report!.checks, "privileges:catalogs")).toMatchObject({ status: "OK" })
+  }, 30_000)
+})
+
+describe("R2-L1: a certification is bound to the credential the report checked", () => {
+  const clean = (): DatabricksPort => fakePort({ entries: () => [{ principal: "readers", privileges: ["USE_CATALOG"] }], groups: [{ id: "123", displayName: "readers" }] })
+
+  it("does not certify a sign-in that landed while the doctor ran", async () => {
+    const credential = hostCredential({ roleGroupId: "123", grantedScopes: [...FINE] })
+    const { core } = authCore({ accounts: { work: { role: "123", warehouse: "wh" } } }, { credential, now: () => NOW })
+    await core.load()
+    await core.token("work", ["sql"], signal())
+    const [report] = await runDoctor({ options: options({ accounts: { work: { role: "123", warehouse: "wh" } } }), auth: core.port, databricks: clean(), signal: signal(), now: () => NOW })
+    expect(report!.enforcement).toBe("role")
+    expect(report!.binding).toEqual({ host: FAKE_HOST, roleGroupId: "123", grantedScopes: FINE })
+    // The person's browser completes a new sign-in before the command stores the report.
+    await core.remember("work", hostCredential({ roleGroupId: "123", grantedScopes: [...FINE, "jobs"] }), "sign-in")
+    core.certify(report!)
+    expect(core.account("work").enforcement).toBe("role-requested")
+  }, 30_000)
+
+  it("never says role when the account has no role, even after a report", async () => {
+    const credential = hostCredential({ roleGroupId: "123", grantedScopes: [...FINE] })
+    const { core } = authCore({ accounts: { work: { role: "123", warehouse: "wh" } } }, { credential, now: () => NOW })
+    await core.load()
+    await core.token("work", ["sql"], signal())
+    const [report] = await runDoctor({ options: options({ accounts: { work: { role: "123", warehouse: "wh" } } }), auth: core.port, databricks: clean(), signal: signal(), now: () => NOW })
+    expect(report!.enforcement).toBe("role")
+    await core.remember("work", hostCredential({ grantedScopes: [...FINE] }), "sign-in")
+    core.certify(report!)
+    expect(core.account("work").role).toBeUndefined()
+    expect(core.account("work").enforcement).not.toBe("role")
+  }, 30_000)
+
+  it("certifies the credential the report ran against, as a positive control", async () => {
+    const credential = hostCredential({ roleGroupId: "123", grantedScopes: [...FINE] })
+    const { core } = authCore({ accounts: { work: { role: "123", warehouse: "wh" } } }, { credential, now: () => NOW })
+    await core.load()
+    await core.token("work", ["sql"], signal())
+    const [report] = await runDoctor({ options: options({ accounts: { work: { role: "123", warehouse: "wh" } } }), auth: core.port, databricks: clean(), signal: signal(), now: () => NOW })
+    core.certify(report!)
+    expect(core.account("work").enforcement).toBe("role")
   }, 30_000)
 })
 
