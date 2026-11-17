@@ -64,7 +64,9 @@ export type FunctionDecision =
  * `system.builtin.<name>`. `system.ai.*` is NEEDS_PLAN (run), and `session.*` / `system.session.*` are refused: a
  * statement sent alone has no temporary functions. `builtin.<name>` is a two-part name Databricks qualifies with
  * current_catalog(), but open-source Spark also tries `system.builtin.<name>` for it, so the exclusions apply to it
- * exactly as to `system.builtin.<name>` (review #1, LOW 1); otherwise it is `unknown`. Anything else is `unknown`.
+ * exactly as to `system.builtin.<name>` (review #1, LOW 1); otherwise it is `unknown`. Any other `system.*` name is
+ * NEEDS_PLAN (`notAllowlisted`). Anything else is `unknown`. On the read path parts are ASCII: a non-ASCII function
+ * name is refused before this decision matters (src/sql/analyze.ts).
  */
 export function decideFunction(parts: readonly string[], position: "scalar" | "table"): FunctionDecision {
   const name = parts.join(".")
@@ -79,10 +81,18 @@ export function decideFunction(parts: readonly string[], position: "scalar" | "t
     if (exclusion) return { kind: "refused", name, code: exclusion.code, ...(exclusion.category ? { category: exclusion.category } : {}), why: exclusion.why }
     if (excludable.startsWith(AI_PREFIX)) return { kind: "refused", name, code: "NEEDS_PLAN", category: "write", why: "AI functions are billed outside the warehouse." }
   }
-  if (builtin === undefined) return { kind: "unknown", name }
+  if (builtin === undefined) return parts[0] === "system" ? notAllowlisted(name) : { kind: "unknown", name }
   if (position === "table" ? TABLE_ALLOWLIST.has(builtin) : ALLOWLIST.has(builtin)) return { kind: "builtin", name: builtin }
-  return { kind: "unknown", name }
+  return parts.length === 3 ? notAllowlisted(name) : { kind: "unknown", name }
 }
+
+/**
+ * A `system.*` routine that is not an allowlisted built-in: a built-in added after the pin (`system.builtin.newfn`),
+ * one allowlisted only in another position, or another system schema. Databricks' own, with no Unity Catalog body for
+ * §5.4 to check, so Day 0 decides it: NEEDS_PLAN, as design §5.2 says of "any built-in added after the pin", and never
+ * a user function for package C (review of #1, round 2, LOW 2).
+ */
+const notAllowlisted = (name: string): FunctionDecision => ({ kind: "refused", name, code: "NEEDS_PLAN", category: "run", why: "A system routine that is not on the built-in allowlist, such as a built-in added after the pin." })
 
 /**
  * How Databricks resolves a routine name (LOW 3), from its docs, fetched 17 Nov 2026:

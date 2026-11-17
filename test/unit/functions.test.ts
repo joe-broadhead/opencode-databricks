@@ -59,6 +59,73 @@ describe("the allowlist", () => {
   })
 })
 
+describe("non-ASCII names are refused on the read path (review of #2, R2-M1)", () => {
+  const refused = (sql: string) => {
+    const result = read(sql)
+    expect(result.ok, sql).toBe(false)
+    return result.ok ? undefined : result.refusal
+  }
+
+  it.each([
+    ["the reviewer's LATERAL VIEW probe (ſ)", "select * from main.s.t lateral view poſexplode(arr) v"],
+    ["a LATERAL VIEW generator with ſ", "select * from main.s.t lateral view ſtack(1, a) v"],
+    ["the reviewer's qualified probe", "select ſystem.builtin.upper(a) from main.s.t"],
+    ["İ (U+0130) in a qualifier", "select system.buİltin.secret('s', 'k')"],
+    ["İ in a generator", "select * from main.s.t lateral view İnline(structs) v"],
+    ["ı (U+0131) in a qualifier", "select system.buıltin.secret('s', 'k')"],
+    ["ſ in the catalog part", "select ſystem.builtin.secret('s', 'k')"],
+    ["ſ in a one-part name", "select ſum(a) from main.s.t"],
+    ["the Kelvin sign K (U+212A)", "select * from read_\u212Aafka(bootstrapServers => 'h')"],
+    ["Kelvin in a scalar built-in", "select uppe\u212A(a) from main.s.t"],
+    ["full-width letters", "select ｓｅｃｒｅｔ('s', 'k')"],
+    ["full-width in a table function", "select * from ｒａｎｇｅ(3)"],
+    ["a combining mark", "select upper\u0301(a) from main.s.t"],
+    ["a ligature", "select cat.sch.\uFB00oo(1)"],
+    ["a backquoted non-ASCII name", "select `ſecret`('s', 'k')"],
+    ["a non-ASCII user function, fully named", "select cat.sch.ſecret_fn(1)"],
+    ["a keyword form spelt with ſ", "select ſubstring(s from 2) from main.s.t"],
+    ["a keyword form spelt with ı", "select extract(year from d), trım(both 'x' from s) from main.s.t"],
+    ["a niladic keyword spelt with ı", "select current_tımestamp"],
+    ["LEFT as a function name, spelt with ſ", "select * from main.s.t where a > 0 and ſelect_x = 1 or left(s, 1) = 'x' and ſELECT 1"],
+  ])("%s → refused", (_what, sql) => {
+    expect(refused(sql)).toBeDefined()
+  })
+
+  it("answers with the ASCII next step for a function name", () => {
+    expect(refused("select * from main.s.t lateral view poſexplode(arr) v")).toMatchObject({ code: "SQL_INVALID", next: "Write the function's name in ASCII." })
+    // ſystem upper-cases to SYSTEM, a keyword token: refused by the keyword rule.
+    expect(refused("select ſystem.builtin.upper(a) from main.s.t")).toMatchObject({ code: "SQL_INVALID", next: "Write keywords and function names in ASCII." })
+    expect(refused("select system.buİltin.upper(a) from main.s.t")).toMatchObject({ code: "SQL_INVALID", next: "Write the function's name in ASCII." })
+    expect(refused("select ſubstring(s from 2) from main.s.t")).toMatchObject({ code: "SQL_INVALID", next: "Write keywords and function names in ASCII." })
+  })
+
+  it("keeps the worst code when the name is refused anyway, and leaves plain ASCII and non-ASCII data alone", () => {
+    expect(refused("select secret('s', 'k'), ſum(a) from main.s.t")).toMatchObject({ code: "SECRET_FUNCTION_REFUSED" })
+    expect(sent("select upper(a), 'ſ', ünïcode, `straße` from main.s.t")).toBe("select system.builtin.upper(a), 'ſ', ünïcode, `straße` from main.s.t")
+    expect(sent("select * from main.s.t lateral view posexplode(arr) v")).toBe("select * from main.s.t lateral view posexplode(arr) v")
+    expect(sent("select system.builtin.upper(a) from main.s.t")).toBe("select system.builtin.upper(a) from main.s.t")
+  })
+})
+
+describe("system.* names that are not allowlisted built-ins (review of #1, round 2, LOW 2)", () => {
+  it("are NEEDS_PLAN (run) on the read path, never user functions for package C", () => {
+    for (const sql of ["select system.builtin.newfn(1)", "select system.information_schema.f(1)", "select * from system.builtin.upper('a')", "select system.f(1)", "select SYSTEM.BUILTIN.NEWFN(1)"]) {
+      const result = read(sql)
+      expect(!result.ok && result.refusal, sql).toMatchObject({ code: "NEEDS_PLAN", category: "run" })
+    }
+    expect(decideFunction(["system", "builtin", "newfn"], "scalar")).toMatchObject({ kind: "refused", code: "NEEDS_PLAN" })
+    expect(decideFunction(["system", "builtin", "upper"], "scalar")).toEqual({ kind: "builtin", name: "upper" })
+  })
+
+  it("leave every user function package C receives outside the system catalog", () => {
+    for (const sql of ["select cat.sch.f(1)", "select upper(a), main.s.g(b) from main.s.t"]) {
+      const result = read(sql)
+      if (!result.ok) throw new Error(sql)
+      for (const call of result.userFunctions) expect(call.parts[0], sql).not.toBe("system")
+    }
+  })
+})
+
 describe("every invocation position (R2-M1)", () => {
   it.each([
     ["SELECT * FROM read_files('s3://bucket/x')", "NEEDS_PLAN"],

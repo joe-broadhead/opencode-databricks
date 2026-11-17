@@ -85,8 +85,10 @@ export interface ReadAnalysis {
   readonly invocations: readonly Invocation[]
   /**
    * Scalar calls the allowlist does not hold, each written with its full three-part name (review #1, M2: a one- or
-   * two-part name is refused, because Databricks resolves it along PATH, not where package C would check it). Sent as
-   * written; package C checks each under §5.4, or answers NEEDS_PLAN.
+   * two-part name is refused, because Databricks resolves it along PATH, not where package C would check it). Never in
+   * the `system` catalog (a `system.*` name that is not an allowlisted built-in is NEEDS_PLAN here), and always in
+   * ASCII (a non-ASCII function name is refused). Sent as written; package C checks each under §5.4, and a
+   * function Unity Catalog does not return (not found, not visible) is NEEDS_PLAN.
    */
   readonly userFunctions: readonly Invocation[]
   readonly tables: readonly TableReference[]
@@ -199,6 +201,40 @@ function functionNameParts(ctx: FunctionNameContext): string[] | undefined {
 /** `<format>.\`<path>\`` reads files directly (review #1, LOW 4): the formats Spark and Databricks read by path. */
 export const PATH_FORMATS: ReadonlySet<string> = new Set(["delta", "parquet", "json", "csv", "text", "orc", "avro", "binaryfile", "xml"])
 
+/** Any character outside ASCII. */
+const NON_ASCII = /[^\u0000-\u007f]/u
+
+/**
+ * A function name with a non-ASCII character is refused on the read path (review of #2, R2-M1). Spark compares the
+ * system qualifiers with Java's `equalsIgnoreCase` (`ſystem` is `system`) but looks names up with
+ * `toLowerCase(Locale.ROOT)` (`poſexplode` is not `posexplode`), and Databricks' matching is undocumented, so no single
+ * reading of such a name is safe: the plugin decides only names written in ASCII, exactly as they are sent.
+ */
+const NON_ASCII_NAME: Refusal = { code: "SQL_INVALID", detail: "A function name is written with a non-ASCII character, which Spark and Databricks may read as another name.", next: "Write the function's name in ASCII." }
+
+/** Tokens whose text is the user's own: names, strings, comments and white space. Every other token is a keyword or symbol. */
+const FREE_TEXT: ReadonlySet<number> = new Set([
+  SqlBaseLexer.IDENTIFIER,
+  SqlBaseLexer.BACKQUOTED_IDENTIFIER,
+  SqlBaseLexer.STRING_LITERAL,
+  SqlBaseLexer.DOUBLEQUOTED_STRING,
+  SqlBaseLexer.BEGIN_DOLLAR_QUOTED_STRING,
+  SqlBaseLexer.DOLLAR_QUOTED_STRING_BODY,
+  SqlBaseLexer.END_DOLLAR_QUOTED_STRING,
+  SqlBaseLexer.SIMPLE_COMMENT,
+  SqlBaseLexer.BRACKETED_COMMENT,
+  SqlBaseLexer.WS,
+])
+
+/**
+ * A keyword spelt with a non-ASCII letter: the lexer reads upper case, so `ſubstring` is the keyword SUBSTRING (ſ upper-
+ * cases to S). That covers the keyword forms' names (`EXTRACT`, `TRIM`, `current_date`, …) and FILTER, LEFT and RIGHT
+ * as function names; refused like a non-ASCII function name.
+ */
+export function nonAsciiKeyword(tokens: readonly Token[]): boolean {
+  return tokens.some((token) => token.channel === 0 && token.type !== -1 && !FREE_TEXT.has(token.type) && NON_ASCII.test(token.text ?? ""))
+}
+
 export interface Walk {
   readonly invocations: Invocation[]
   readonly tables: TableReference[]
@@ -229,6 +265,7 @@ export function walk(tree: ParserRuleContext): Walk {
     if (name === "FunctionCallContext" || rule === "tableFunctionCall") {
       const fn = (ctx as unknown as { functionName(): FunctionNameContext }).functionName()
       const parts = functionNameParts(fn)
+      if (NON_ASCII.test(fn.getText())) result.refusals.push(NON_ASCII_NAME)
       if (!parts) result.refusals.push({ code: "IDENTIFIER_REFUSED", detail: "IDENTIFIER(…) as a function name chooses it at run time." })
       else {
         const position = rule === "tableFunctionCall" ? "table" : "scalar"
@@ -240,6 +277,7 @@ export function walk(tree: ParserRuleContext): Walk {
       const qualified = descendants(ctx, (child) => ruleName(child) === "qualifiedName")[0] as QualifiedNameContext | undefined
       if (qualified) {
         const parts = nameParts(qualified)
+        if (NON_ASCII.test(qualified.getText())) result.refusals.push(NON_ASCII_NAME)
         result.invocations.push({ node: "lateralView", parts, position: "table", decision: decideFunction(parts, "table"), start: qualified.start!.start, stop: qualified.stop!.stop, countStar: false })
       }
     }
@@ -330,6 +368,7 @@ export function analyzeRead(input: string): ReadResult {
   const kind = statementKind(parsed)
   if (SESSION_STATEMENTS.has(kind)) return refuse("SESSION_STATEMENT_REFUSED", "Session statements such as SET, SET PATH and USE are refused.")
   if (kind !== "StatementDefaultContext") return refuse("STATEMENT_NOT_READ", "The text is a statement, not a query.")
+  if (nonAsciiKeyword(parsed.tokens)) return { ok: false, refusal: { code: "SQL_INVALID", detail: "A keyword is written with a non-ASCII letter, which the lexer reads as its ASCII form.", next: "Write keywords and function names in ASCII." } }
   const found = walk(parsed.tree)
   const refusals = [...found.refusals]
   for (const call of found.invocations) {
