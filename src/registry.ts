@@ -17,6 +17,7 @@ import type { PlanStorePort } from "./domain/plans.js"
 import { classifyPlan } from "./domain/statements.js"
 import type { Options } from "./options.js"
 import type { AuthPort, Clock, DatabricksPort, LedgerPort, PermissionPort, ReadGuardPort } from "./ports.js"
+import { READ_HANDLERS } from "./tools/reads/index.js"
 import type { Call, Handler, Handlers } from "./tool-spec.js"
 
 export interface Deps {
@@ -148,17 +149,20 @@ const commit = <T extends "write" | "delete" | "share" | "export" | "run" | "adm
     throw new DatabricksError("NOT_IMPLEMENTED", `Committing a ${tool} plan is not built yet (package D).`)
   }) as Handler<T>
 
-/** Every tool's handler. A package swaps its own entries here when it lands. */
+/**
+ * Every tool's handler. A package swaps its own entries here when it lands: `catalog`, `table`, `warehouses`, `explain`,
+ * `query`, `statement`, `history` and `profile` are package C's (`src/tools/reads/`), and the rest are still Day 0 stubs.
+ */
 export const HANDLERS: Handlers = {
   status: stub("status"),
-  catalog: stub("catalog"),
-  table: stub("table"),
-  warehouses: stub("warehouses"),
-  explain: stub("explain"),
-  query: stub("query"),
-  statement: stub("statement"),
-  history: stub("history"),
-  profile: stub("profile"),
+  catalog: READ_HANDLERS.catalog,
+  table: READ_HANDLERS.table,
+  warehouses: READ_HANDLERS.warehouses,
+  explain: READ_HANDLERS.explain,
+  query: READ_HANDLERS.query,
+  statement: READ_HANDLERS.statement,
+  history: READ_HANDLERS.history,
+  profile: READ_HANDLERS.profile,
   jobs: stub("jobs"),
   workspace: stub("workspace"),
   plan,
