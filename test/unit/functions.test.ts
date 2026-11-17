@@ -5,6 +5,7 @@ import * as generated from "../../src/sql/generated/SqlBaseParser.js"
 import { BUILTIN_NAMES } from "../../src/domain/builtins.generated.js"
 import { AI_PREFIX, ALLOWLIST, decideFunction, EXCLUSIONS, KEYWORD_FORMS, NILADIC_FIXED, pathIsSafe, TABLE_ALLOWLIST } from "../../src/domain/functions.js"
 import { analyzeRead } from "../../src/sql/analyze.js"
+import { foldName } from "../../src/sql/parse.js"
 
 const read = (sql: string) => analyzeRead(sql)
 const code = (sql: string) => {
@@ -56,6 +57,51 @@ describe("the allowlist", () => {
   it("allows only table and generator built-ins in a table position", () => {
     expect([...TABLE_ALLOWLIST].sort()).toEqual(expect.arrayContaining(["explode", "inline", "posexplode", "range", "stack"]))
     expect(decideFunction(["upper"], "table").kind).toBe("unknown")
+  })
+})
+
+describe("the system qualifiers, folded as Spark compares them (review of #1, round 2, LOW 1)", () => {
+  it("folds ſ, ı, Kelvin K and İ as Java's equalsIgnoreCase does", () => {
+    expect(foldName("ſystem")).toBe("system")
+    expect(foldName("buıltin")).toBe("builtin")
+    expect(foldName("\u212Aafka")).toBe("kafka")
+    expect(foldName("\u0130D")).toBe("id")
+    expect(foldName("SYSTEM")).toBe("system")
+    expect(foldName("straße")).toBe("straße")
+  })
+
+  it("decides the reviewer's probes as system.builtin.secret and system.ai.python_exec", () => {
+    expect(code("select ſystem.builtin.secret('s', 'k')")).toBe("SECRET_FUNCTION_REFUSED")
+    expect(code("select system.buıltin.secret('s', 'k')")).toBe("SECRET_FUNCTION_REFUSED")
+    expect(code("select ſystem.ai.python_exec('x')")).toBe("NEEDS_PLAN")
+    expect(code("select ſecret('s', 'k')")).toBe("SECRET_FUNCTION_REFUSED")
+    expect(code("select * from read_\u212Aafka(bootstrapServers => 'h')")).toBe("NEEDS_PLAN")
+  })
+
+  it("never hands package C a user function whose name only reads as another under Java's case rules", () => {
+    const result = read("select caſ.sch.f(1)")
+    expect(!result.ok && result.refusal.code).toBe("SQL_INVALID")
+    const plain = read("select cat.sch.f(1)")
+    expect(plain.ok && plain.userFunctions.map((call) => call.confusable)).toEqual([false])
+  })
+})
+
+describe("system.* names that are not allowlisted built-ins (review of #1, round 2, LOW 2)", () => {
+  it("are NEEDS_PLAN (run) on the read path, never user functions for package C", () => {
+    for (const sql of ["select system.builtin.newfn(1)", "select system.information_schema.f(1)", "select * from system.builtin.upper('a')", "select system.f(1)", "select SYSTEM.BUILTIN.NEWFN(1)"]) {
+      const result = read(sql)
+      expect(!result.ok && result.refusal, sql).toMatchObject({ code: "NEEDS_PLAN", category: "run" })
+    }
+    expect(decideFunction(["system", "builtin", "newfn"], "scalar")).toMatchObject({ kind: "refused", code: "NEEDS_PLAN" })
+    expect(decideFunction(["system", "builtin", "upper"], "scalar")).toEqual({ kind: "builtin", name: "upper" })
+  })
+
+  it("leave every user function package C receives outside the system catalog", () => {
+    for (const sql of ["select cat.sch.f(1)", "select upper(a), main.s.g(b) from main.s.t"]) {
+      const result = read(sql)
+      if (!result.ok) throw new Error(sql)
+      for (const call of result.userFunctions) expect(call.parts[0], sql).not.toBe("system")
+    }
   })
 })
 

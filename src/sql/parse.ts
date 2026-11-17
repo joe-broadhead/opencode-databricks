@@ -33,6 +33,28 @@ export function upperCodePoint(codePoint: number): number {
   return upper.length === String.fromCodePoint(first).length ? first : codePoint
 }
 
+/**
+ * Java's `Character.toLowerCase(int)`: the simple lower-case mapping, one code point to one. JavaScript's full mapping
+ * turns U+0130 (İ) into two code points; its simple mapping is `i`.
+ */
+export function lowerCodePoint(codePoint: number): number {
+  if (codePoint < 0x80) return codePoint >= 0x41 && codePoint <= 0x5a ? codePoint + 32 : codePoint
+  if (codePoint === 0x130) return 0x69
+  const lower = String.fromCodePoint(codePoint).toLowerCase()
+  const first = lower.codePointAt(0)!
+  return lower.length === String.fromCodePoint(first).length ? first : codePoint
+}
+
+/**
+ * A name folded as Java's `String.equalsIgnoreCase` compares it: per code point, upper case then lower case. Spark
+ * v4.3.0 matches `system`, `builtin` and `session` that way (`FunctionResolution.isQualifiedWithSystemNamespace`), so
+ * `ſystem` (U+017F) and `buıltin` (U+0131) name the system catalog; this fold makes them `system` and `builtin`. The
+ * only code points that fold to an ASCII letter are those two, U+212A (Kelvin) and U+0130, and each folds exactly.
+ */
+export function foldName(text: string): string {
+  return Array.from(text, (character) => String.fromCodePoint(lowerCodePoint(upperCodePoint(character.codePointAt(0)!)))).join("")
+}
+
 /** Spark's UpperCaseCharStream: LA() sees upper case; the text of tokens keeps the original. */
 export class UpperCaseCharStream extends CharStreamImpl {
   override LA(offset: number): number {

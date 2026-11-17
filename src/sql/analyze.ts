@@ -22,7 +22,7 @@ import {
   type QualifiedNameContext,
   SqlBaseParser,
 } from "./generated/SqlBaseParser.js"
-import { contextName, isKeyword, lex, parseStatement, type Parsed } from "./parse.js"
+import { contextName, foldName, isKeyword, lex, parseStatement, type Parsed } from "./parse.js"
 
 /** The most bytes a read's text may have (the server allows 16 MiB). */
 export const MAX_SQL_BYTES = 1024 * 1024
@@ -53,6 +53,8 @@ export interface Invocation {
   readonly stop: number
   /** `count(*)`: kept unqualified, because Spark's AstBuilder rewrites COUNT(*) by its bare name. */
   readonly countStar: boolean
+  /** The written name differs from its fold (`ſ`, `ı`, `K`, `İ`): decided on the fold; never a user function. */
+  readonly confusable: boolean
 }
 
 export interface TableReference {
@@ -85,8 +87,10 @@ export interface ReadAnalysis {
   readonly invocations: readonly Invocation[]
   /**
    * Scalar calls the allowlist does not hold, each written with its full three-part name (review #1, M2: a one- or
-   * two-part name is refused, because Databricks resolves it along PATH, not where package C would check it). Sent as
-   * written; package C checks each under §5.4, or answers NEEDS_PLAN.
+   * two-part name is refused, because Databricks resolves it along PATH, not where package C would check it). Never in
+   * the `system` catalog (a `system.*` name that is not an allowlisted built-in is NEEDS_PLAN here), and never a name
+   * whose parts fold differently under Java's case rules. Sent as written; package C checks each under §5.4, and a
+   * function Unity Catalog does not return (not found, not visible) is NEEDS_PLAN.
    */
   readonly userFunctions: readonly Invocation[]
   readonly tables: readonly TableReference[]
@@ -199,6 +203,15 @@ function functionNameParts(ctx: FunctionNameContext): string[] | undefined {
 /** `<format>.\`<path>\`` reads files directly (review #1, LOW 4): the formats Spark and Databricks read by path. */
 export const PATH_FORMATS: ReadonlySet<string> = new Set(["delta", "parquet", "json", "csv", "text", "orc", "avro", "binaryfile", "xml"])
 
+/**
+ * A call's name parts, folded as Spark compares the system qualifiers (`foldName`), and whether the fold changed any
+ * part beyond lower case: a name that only reads as `system`, `builtin` or another word under Java's case rules.
+ */
+function foldParts(parts: readonly string[]): { readonly parts: string[]; readonly confusable: boolean } {
+  const folded = parts.map(foldName)
+  return { parts: folded, confusable: folded.some((part, index) => part !== parts[index]) }
+}
+
 export interface Walk {
   readonly invocations: Invocation[]
   readonly tables: TableReference[]
@@ -228,19 +241,20 @@ export function walk(tree: ParserRuleContext): Walk {
     if (name === "IdentifierLiteralContext") result.refusals.push({ code: "IDENTIFIER_REFUSED", detail: "IDENTIFIER('…') names an object through a string." })
     if (name === "FunctionCallContext" || rule === "tableFunctionCall") {
       const fn = (ctx as unknown as { functionName(): FunctionNameContext }).functionName()
-      const parts = functionNameParts(fn)
+      const written = functionNameParts(fn)
+      const { parts, confusable } = written ? foldParts(written) : { parts: undefined, confusable: false }
       if (!parts) result.refusals.push({ code: "IDENTIFIER_REFUSED", detail: "IDENTIFIER(…) as a function name chooses it at run time." })
       else {
         const position = rule === "tableFunctionCall" ? "table" : "scalar"
         const countStar = position === "scalar" && parts.length === 1 && parts[0] === "count" && /^count\(\*\)/iu.test(ctx.getText().replace(/\s+/gu, ""))
-        result.invocations.push({ node: position === "table" ? "tableFunctionCall" : "functionCall", parts, position, decision: decideFunction(parts, position), start: fn.start!.start, stop: fn.stop!.stop, countStar })
+        result.invocations.push({ node: position === "table" ? "tableFunctionCall" : "functionCall", parts, position, decision: decideFunction(parts, position), start: fn.start!.start, stop: fn.stop!.stop, countStar, confusable })
       }
     }
     if (rule === "lateralView") {
       const qualified = descendants(ctx, (child) => ruleName(child) === "qualifiedName")[0] as QualifiedNameContext | undefined
       if (qualified) {
-        const parts = nameParts(qualified)
-        result.invocations.push({ node: "lateralView", parts, position: "table", decision: decideFunction(parts, "table"), start: qualified.start!.start, stop: qualified.stop!.stop, countStar: false })
+        const { parts, confusable } = foldParts(nameParts(qualified))
+        result.invocations.push({ node: "lateralView", parts, position: "table", decision: decideFunction(parts, "table"), start: qualified.start!.start, stop: qualified.stop!.stop, countStar: false, confusable })
       }
     }
     const tableNode = name === "TableNameContext" ? "tableName" : name === "ChangelogTableNameContext" ? "changelogTableName" : name === "StreamTableNameContext" ? "streamTableName" : rule === "functionTableSubqueryArgument" ? "tableArgument" : undefined
@@ -336,7 +350,9 @@ export function analyzeRead(input: string): ReadResult {
     const decision = call.decision
     if (decision.kind === "refused") refusals.push({ code: decision.code, detail: `${decision.name} is not allowed in a read: ${decision.why}`, ...(decision.category ? { category: decision.category } : {}) })
     else if (decision.kind === "unknown" && call.position === "table") refusals.push({ code: "NEEDS_PLAN", detail: `${decision.name} in a table position is a user-defined table function or not on the allowlist.`, category: "run" })
-    else if (decision.kind === "unknown" && call.parts.length < 3) {
+    else if (decision.kind === "unknown" && call.confusable) {
+      refusals.push({ code: "SQL_INVALID", detail: `A part of the function name ${decision.name} is written with a letter that Spark's case rules read as another (ſ, ı, K or İ).`, next: "Write the function's name in plain letters." })
+    } else if (decision.kind === "unknown" && call.parts.length < 3) {
       refusals.push({ code: "FUNCTION_NAME_PARTIAL", detail: `${decision.name} is not an allowlisted built-in, and a one- or two-part name resolves along the SQL path, not where the plugin checks it.`, next: "Write the function's full name, catalog.schema.function." })
     }
     if (call.node === "lateralView" && call.parts.length > 2) refusals.push({ code: "SQL_UNSUPPORTED", detail: "A LATERAL VIEW generator takes a one- or two-part name in Spark.", next: "Write the generator unqualified, such as LATERAL VIEW explode(arr)." })
