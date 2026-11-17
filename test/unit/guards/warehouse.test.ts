@@ -24,7 +24,7 @@ import { dbuPerHour, minStartUsd, startVerdict, usdPerHour } from "../../../src/
 import { createLedger, localDay } from "../../../src/ledger.js"
 import { loadOptions } from "../../../src/options.js"
 import type { LedgerPort, ReadRequest, Warehouse } from "../../../src/ports.js"
-import { fakeClock } from "../../fake/ports.js"
+import { fakeClock, RecordingPermission } from "../../fake/ports.js"
 import { harness, runningWarehouse, statementsSent, tableOf } from "../reads/harness.js"
 
 const SIGNAL = new AbortController().signal
@@ -157,6 +157,26 @@ describe("the state machine", () => {
     expect(result.code).toBe("UNAVAILABLE")
     expect(result.error?.detail).toContain("never starts one")
     expect(result.h.databricks.calls.map((entry) => entry.method)).not.toContain("startWarehouse")
+  })
+})
+
+describe("the start is the person's to allow (review LOW 1)", () => {
+  it("a denied databricks.start neither starts the warehouse nor charges the ledger", async () => {
+    const permission = new RecordingPermission((entry) => (entry.action === "databricks.start" ? "deny" : "allow"))
+    const h = harness({ permission, answers: answersFor(warehouse({ state: "STOPPED" })) as never })
+    await expect(prepareRead(h.deps, request({ start: true }), SIGNAL)).rejects.toThrow(/denied: databricks.start on work:warehouse:wh-small/)
+    expect(h.databricks.calls.map((entry) => entry.method)).not.toContain("startWarehouse")
+    // A `refuse` budget of N starts keeps its N: a denied start never used one up.
+    expect(h.ledger.charges).toEqual([])
+  })
+})
+
+describe("the call's own wait (review LOW 3)", () => {
+  it("governs how long a STARTING warehouse is awaited, not the wait option", async () => {
+    const h = harness({ options: { accounts: { work: { warehouse: "wh-small" } }, wait: 50 }, answers: answersFor(warehouse({ state: "STARTING" })) as never })
+    // With the call's wait of 0, nothing is polled: the call fails at once instead of blocking for 50 seconds.
+    await expect(prepareRead(h.deps, request(), SIGNAL, 0)).rejects.toThrow(/did not reach RUNNING within 0 seconds/)
+    expect(h.databricks.calls.filter((entry) => entry.method === "getWarehouse")).toHaveLength(1)
   })
 })
 

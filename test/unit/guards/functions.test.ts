@@ -225,3 +225,110 @@ describe("functions", () => {
     expect(h.databricks.calls.filter((entry) => entry.method === "getTable").map((entry) => entry.args[0])).toEqual(["work", "home"])
   })
 })
+
+describe("M1: a function's names resolve in the function's own context", () => {
+  it("refuses a SQL wrapper whose body calls a name Unity Catalog records as a Python UDF", async () => {
+    // The review's probe: `upper(x)` in the body, recorded as depending on `workspace.default.upper`, a Python UDF. The
+    // plugin must never let a SQL wrapper launder a Python UDF into a read.
+    const result = await code("select workspace.default.wrap(a) from main.s.t", {
+      ...tables({ "main.s.t": managed("main.s.t") }),
+      ...functions({
+        "workspace.default.wrap": sqlFunction("workspace.default.wrap", "upper(a)", { routineDependencies: [{ kind: "function", name: "workspace.default.upper" }] }),
+        "workspace.default.upper": { fullName: "workspace.default.upper", routineBody: "EXTERNAL", externalLanguage: "PYTHON", isTableFunction: false },
+      }),
+    })
+    expect(result.code).toBe("NEEDS_PLAN")
+    expect(result.h.databricks.calls.filter((entry) => entry.method === "submit")).toEqual([])
+  })
+
+  it("fences the table a function's recorded dependencies name, even when the body only says `salaries`", async () => {
+    const result = await code(
+      "select main.public.wrap(a) from main.public.orders",
+      {
+        ...tables({ "main.public.orders": managed("main.public.orders"), "main.hr.salaries": managed("main.hr.salaries") }),
+        ...functions({ "main.public.wrap": sqlFunction("main.public.wrap", "salaries", { routineDependencies: [{ kind: "table", name: "main.hr.salaries" }] }) }),
+      },
+      { accounts: { work: { warehouse: "wh-small", fence: { deny: ["*.hr.*"] } } } },
+    )
+    // `salaries` alone is never resolved (the caller's schema is not where the function was created); the recorded
+    // dependency is, and the fence refuses it.
+    expect(result.code).toBe("FENCED")
+  })
+
+  it("needs the path captured at CREATE FUNCTION when the body resolves a name, and refuses when it is absent", async () => {
+    const body = { ...tables({ "main.s.t": managed("main.s.t") }), ...functions({ "main.s.wrap": sqlFunction("main.s.wrap", "upper(a)") }) }
+    expect((await code("select main.s.wrap(a) from main.s.t", body)).code).toBe("NEEDS_PLAN")
+    const safe = await code("select main.s.wrap(a) from main.s.t", {
+      ...tables({ "main.s.t": managed("main.s.t") }),
+      ...functions({ "main.s.wrap": sqlFunction("main.s.wrap", "upper(a)", { sqlPath: "system.session,system.builtin,system.ai,main.s" } as never) }),
+    })
+    expect(safe.code).toBe("OK")
+    const unsafe = await code("select main.s.wrap(a) from main.s.t", {
+      ...tables({ "main.s.t": managed("main.s.t") }),
+      ...functions({ "main.s.wrap": sqlFunction("main.s.wrap", "upper(a)", { sqlPath: "main.s,system.builtin" } as never) }),
+    })
+    expect(unsafe.code).toBe("NEEDS_PLAN")
+  })
+
+  it("lets a body of constants and parameters through without a path: nothing in it resolves by name", async () => {
+    const result = await code("select main.s.plusone(a) from main.s.t", {
+      ...tables({ "main.s.t": managed("main.s.t") }),
+      ...functions({ "main.s.plusone": sqlFunction("main.s.plusone", "a + 1") }),
+    })
+    expect(result.code).toBe("OK")
+  })
+})
+
+describe("M2: a view's tables and functions come from its recorded dependencies", () => {
+  it("reads a view whose body uses an unqualified name, completing it from the view's own schema", async () => {
+    // The review's probe 1: `main.hr.v` selects `salaries`, recorded as depending on `main.hr.salaries`, read by a call
+    // whose own schema is `public`. The body's name must not be completed from the caller's.
+    const result = await code(
+      "select * from main.hr.v",
+      {
+        ...tables({
+          "main.hr.v": { ...managed("main.hr.v"), tableType: "VIEW", viewDefinition: "SELECT * FROM salaries", viewDependencies: [{ kind: "table", name: "main.hr.salaries" }] },
+          "main.hr.salaries": managed("main.hr.salaries"),
+          "main.public.salaries": managed("main.public.salaries"),
+        }),
+      },
+      { accounts: { work: { warehouse: "wh-small", catalog: "main", schema: "public" } } },
+    )
+    expect(result.code).toBe("OK")
+    expect(result.prepared?.tables).toEqual(["main.hr.v", "main.hr.salaries"])
+  })
+
+  it("does not resolve a body's names when its dependencies are absent, so it cannot name the wrong table", async () => {
+    const result = await code(
+      "select * from main.hr.v",
+      {
+        ...tables({ "main.hr.v": { ...managed("main.hr.v"), tableType: "VIEW", viewDefinition: "SELECT * FROM salaries" }, "main.public.salaries": managed("main.public.salaries") }),
+      },
+      { accounts: { work: { warehouse: "wh-small", catalog: "main", schema: "public" } } },
+    )
+    expect(result.code).toBe("OK")
+    expect(result.prepared?.tables).toEqual(["main.hr.v"])
+    expect(result.prepared?.warnings.map((warning) => warning.code)).toContain("DEPENDENCIES_UNKNOWN")
+  })
+
+  it("accepts a view that calls an unqualified Unity Catalog function its dependencies name in full", async () => {
+    const result = await code("select * from main.s.v", {
+      ...tables({
+        "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDefinition: "SELECT year_of(d) AS y FROM main.s.t", viewDependencies: [{ kind: "table", name: "main.s.t" }, { kind: "function", name: "main.s.year_of" }] },
+        "main.s.t": managed("main.s.t"),
+      }),
+      ...functions({ "main.s.year_of": sqlFunction("main.s.year_of", "year(d)", { sqlPath: "system.session,system.builtin,system.ai,main.s" } as never) }),
+    })
+    expect(result.code).toBe("OK")
+    expect(result.prepared?.tables).toEqual(["main.s.v", "main.s.t"])
+  })
+
+  it("still refuses a body that calls an excluded built-in, whatever its dependencies say", async () => {
+    const result = await code("select * from main.s.v", {
+      ...tables({
+        "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDefinition: "SELECT http_request(conn => 'c') AS r", viewDependencies: [] },
+      }),
+    })
+    expect(result.code).toBe("NEEDS_PLAN")
+  })
+})

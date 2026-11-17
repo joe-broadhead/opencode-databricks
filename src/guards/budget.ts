@@ -18,9 +18,12 @@
  *   is visible only through status's totals: see the PR's contract requests.
  */
 import { statementDbuHours, type Size } from "../domain/cost.js"
+import { WARNINGS } from "../domain/errors.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { Options } from "../options.js"
 import type { Budget, Clock, LedgerPort, SpendTotals } from "../ports.js"
+import type { Warning } from "./dependencies.js"
+import { addedWarning } from "./codes.js"
 
 /** The budget the person set, if any (design §13: `budget` is the plugin's top-level option, not per account). */
 export function budgetOf(options: Options): Budget | undefined {
@@ -73,10 +76,20 @@ export interface StartCharge {
   readonly dbuHours: number
 }
 
+/**
+ * The `BUDGET_OVER` warning a `warn` budget earns when a charge pushes past a limit: the estimate is in status, and the
+ * call goes on (design §6.2). Absent until the contract declares the warning (see codes.ts).
+ */
+function overWarning(budget: Budget | undefined, exceeded: string | undefined): Warning | undefined {
+  if (!exceeded || budget?.action !== "warn") return undefined
+  return addedWarning("BUDGET_OVER", `${WARNINGS.ESTIMATE_ONLY} The ${exceeded} budget is now exceeded; databricks_status({ include: ["spend"] }) shows today's estimate.`)
+}
+
 /** Charges a start before it happens; a `refuse` budget that this start would exceed throws and nothing is started. */
-export async function chargeStart(ledger: LedgerPort, options: Options, charge: StartCharge): Promise<void> {
+export async function chargeStart(ledger: LedgerPort, options: Options, charge: StartCharge): Promise<{ readonly warning?: Warning }> {
   const result = await ledger.charge({ account: charge.account, ...(charge.sessionId ? { sessionId: charge.sessionId } : {}), warehouseId: charge.warehouseId, kind: "start", dbuHours: charge.dbuHours }, budgetOf(options))
-  if (result.recorded) return
+  const warning = overWarning(budgetOf(options), result.exceeded)
+  if (result.recorded) return { ...(warning ? { warning } : {}) }
   const limit = result.exceeded ?? "the budget"
   throw new DatabricksError(
     "BUDGET_REACHED",
@@ -108,7 +121,7 @@ export interface StatementCharge {
 }
 
 /** Records one finished statement's estimated DBU-hours. Never throws: the result is already paid for. */
-export async function chargeStatement(ledger: LedgerPort, clock: Clock, options: Options, charge: StatementCharge): Promise<{ readonly recorded: boolean; readonly exceeded?: string }> {
+export async function chargeStatement(ledger: LedgerPort, clock: Clock, options: Options, charge: StatementCharge): Promise<{ readonly recorded: boolean; readonly exceeded?: string; readonly warning?: Warning }> {
   const key = `${charge.account}|${charge.warehouseId}`
   const now = clock.now()
   const previous = lastStatementAt.get(key)
@@ -131,5 +144,6 @@ export async function chargeStatement(ledger: LedgerPort, clock: Clock, options:
     },
     budgetOf(options),
   )
-  return { recorded: result.recorded, ...(result.exceeded ? { exceeded: result.exceeded } : {}) }
+  const warning = overWarning(budgetOf(options), result.exceeded)
+  return { recorded: result.recorded, ...(result.exceeded ? { exceeded: result.exceeded } : {}), ...(warning ? { warning } : {}) }
 }

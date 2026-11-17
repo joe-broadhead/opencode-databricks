@@ -1,18 +1,20 @@
 /**
- * The three live checks package C must prove (design §15.4), as far as a unit test without a workspace can prove them, and
- * what remains for the live run.
+ * **The local side of L4, L6 and L14** (design §15.4, review `databricks-4.md`, LOW 2). These are live checks by
+ * definition — Databricks' own parse of a wrapped change, network reach from a serverless Python UDF, masks as a role
+ * sees them — so this suite proves only what a unit test without a workspace can: the plugin's half. The live items stay
+ * open in the release notes.
  *
- * **L4 — the wrapper.** Every mutating statement form of §5.5 fails before the wrapper: the read path refuses it, and the
+ * **L4 — the wrapper (local side).** Every mutating statement form of §5.5 fails before the wrapper: the read path refuses it, and the
  * pinned grammar refuses it inside the wrapper too (`SELECT * FROM (DELETE …) AS oc_q`). An `ORDER BY` and duplicate
  * column names survive, because the wrapper is a subquery: the text is sent unchanged apart from qualification. A `;`
  * separates statements and is refused on the read path as well as by the API [35]. **Not provable here:** that a
  * particular warehouse's parser refuses each form (the live check).
  *
- * **L6 — a Python UDF cannot reach the network on serverless.** v0.1.0 does not rely on it: a Python or Scala function,
+ * **L6 — a Python UDF cannot reach the network on serverless (local side).** v0.1.0 does not rely on it: a Python or Scala function,
  * with or without a connection dependency, is `NEEDS_PLAN`, so a read never runs one (design §5.4: "such UDFs need a plan
  * until it passes"). **Not provable here:** the network behaviour itself.
  *
- * **L14 — masks, filters, parameters and definition visibility.** A masked column and a row filter are shown by name, and
+ * **L14 — masks, filters, parameters and definition visibility (local side).** A masked column and a row filter are shown by name, and
  * a sample's values are whatever Databricks returned to this identity: the plugin never widens or re-filters. A view
  * whose `view_definition` is not returned warns (`VIEW_BODY_UNREAD`) and, under a fence, is refused; a function whose
  * `routine_definition` is not returned is `NEEDS_PLAN`. **Not provable here:** whether a reader with only `SELECT` or
@@ -30,7 +32,7 @@ import { asserted, harness, readRequests, statementsSent, tableOf } from "./tool
 const SIGNAL = new AbortController().signal
 const request = (sql: string): ReadRequest => ({ account: "work", sql, tool: "query", sessionID: "ses_test", messageID: "msg_test", callID: "call_1" })
 
-describe("L4: the wrapper", () => {
+describe("L4, local side: the wrapper", () => {
   const MUTATING = [
     "insert into main.s.t select 1",
     "insert overwrite main.s.t select 1",
@@ -99,7 +101,7 @@ describe("L4: the wrapper", () => {
   })
 })
 
-describe("L6: a Python UDF needs a plan, so no read depends on the live check", () => {
+describe("L6, local side: a Python UDF needs a plan, so no read depends on the live check", () => {
   it.each([
     ["without a connection", { routineBody: "EXTERNAL", externalLanguage: "PYTHON", isTableFunction: false }],
     ["with a connection", { routineBody: "EXTERNAL", externalLanguage: "PYTHON", isTableFunction: false, routineDependencies: [{ kind: "connection", name: "pg" }] }],
@@ -116,7 +118,7 @@ describe("L6: a Python UDF needs a plan, so no read depends on the live check", 
   })
 })
 
-describe("L14: masks, filters and definition visibility", () => {
+describe("L14, local side: masks, filters and definition visibility", () => {
   const masked = {
     getTable: () =>
       Promise.resolve(

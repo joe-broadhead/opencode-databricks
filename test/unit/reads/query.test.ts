@@ -17,7 +17,7 @@ import { forgetStatementTimes } from "../../../src/guards/budget.js"
 import { HANDLERS } from "../../../src/registry.js"
 import { runTool } from "../../../src/tool-spec.js"
 import { analyzeRead } from "../../../src/sql/analyze.js"
-import { asserted, cells, queryHarness, readRequests, statementsSent } from "./tool-harness.js"
+import { asserted, cells, harness, queryHarness, readRequests, statementsSent, tableOf } from "./tool-harness.js"
 
 beforeEach(() => forgetStatementTimes())
 
@@ -181,6 +181,41 @@ describe("what databricks_query answers", () => {
     const h = queryHarness({})
     const result = await runTool("query", { sql: "select http_request(conn => 'c')" }, h.call(), h.deps, HANDLERS)
     expect(result).toMatchObject({ state: "refused", error: "NEEDS_PLAN" })
+    expect(statementsSent(h.databricks)).toEqual([])
+  })
+})
+
+describe("what a query says about masks, filters and the wait (review LOW 3, LOW 5)", () => {
+  it("carries MASKED_COLUMNS and ROW_FILTERED for a source table that has them", async () => {
+    const h = harness({
+      answers: {
+        getTable: () =>
+          Promise.resolve(
+            tableOf({
+              fullName: "main.s.t",
+              columns: [
+                { name: "id", typeText: "BIGINT" },
+                { name: "email", typeText: "STRING", mask: { functionName: "main.masks.email" } },
+              ],
+              rowFilter: { functionName: "main.filters.region" },
+            }),
+          ),
+        submit: () => answer(),
+      } as never,
+    })
+    const result = await runTool("query", { sql: SQL }, h.call(), h.deps, HANDLERS)
+    expect((result.warnings as { code: string }[]).map((warning) => warning.code)).toEqual(["MASKED_COLUMNS", "ROW_FILTERED"])
+    expect(JSON.stringify(result.warnings)).toContain("main.s.t")
+  })
+
+  it("passes the call's wait to the warehouse start-up wait: wait 0 answers at once on a STARTING warehouse", async () => {
+    const h = harness({
+      options: { accounts: { work: { warehouse: "wh-small" } }, wait: 50 },
+      answers: { getTable: () => Promise.resolve(tableOf({ fullName: "main.s.t" })), getWarehouse: () => ({ ...(answer() as object), id: "wh-small", name: "bi", state: "STARTING", warehouseType: "PRO", serverless: true, clusterSize: "Small", autoStopMins: 10, minNumClusters: 1, maxNumClusters: 1 }) } as never,
+    })
+    const result = await runTool("query", { sql: SQL, wait: 0 }, h.call(), h.deps, HANDLERS)
+    expect(result).toMatchObject({ state: "failed", error: "UNAVAILABLE" })
+    expect(String(result.message)).toContain("0 seconds")
     expect(statementsSent(h.databricks)).toEqual([])
   })
 })

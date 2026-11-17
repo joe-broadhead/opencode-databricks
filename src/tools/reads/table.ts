@@ -13,6 +13,7 @@
  *   (`MASKED_COLUMNS`, `ROW_FILTERED`): the plugin never widens access, and it cannot see the functions behind a mask
  *   (design §5.7 and its disclosure).
  */
+import { actionOf, tableResource } from "../../domain/actions.js"
 import { DatabricksError } from "../../domain/errors.js"
 import { WARNINGS } from "../../domain/errors.js"
 import type { Warning } from "../../guards/dependencies.js"
@@ -26,9 +27,15 @@ import { shapeRows } from "./values.js"
 /** How much of a view's stored SQL a result carries (design §4). */
 export const VIEW_DEFINITION_LIMIT = 2000
 
+/** Both lists can carry the same warning (the tool's own metadata read and the read guard's resolved tables). */
 const merge = (base: readonly Warning[], extra: readonly Warning[]): Warning[] => {
-  const seen = new Set(base.map((warning) => `${warning.code}|${warning.message}`))
-  return [...base, ...extra.filter((warning) => !seen.has(`${warning.code}|${warning.message}`))]
+  const seen = new Set<string>()
+  return [...base, ...extra].filter((warning) => {
+    const key = `${warning.code}|${warning.message}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 const cut = (text: string): string => (text.length <= VIEW_DEFINITION_LIMIT ? text : `${text.slice(0, VIEW_DEFINITION_LIMIT)}…[cut ${text.length - VIEW_DEFINITION_LIMIT} chars]`)
@@ -36,6 +43,19 @@ const cut = (text: string): string => (text.length <= VIEW_DEFINITION_LIMIT ? te
 const table: Handler<"table"> = async (input, call, deps) => {
   const account = accountOf(input, deps)
   await assertTool("table", account, call, deps)
+  // The table itself, under the tool's own action, so a person's `deny databricks.table on …:table:…` stops a metadata
+  // read too (design §10.1, review `databricks-4.md`, LOW 4).
+  const parts = input.name.split(".")
+  await deps.permission.assert(
+    {
+      action: actionOf("table"),
+      resource: parts.length === 3 && parts[0] && parts[1] && parts[2] ? tableResource(account, parts[0], parts[1], parts[2]) : `${account}:table:${input.name}`,
+      sessionID: call.sessionID,
+      messageID: call.messageID,
+      callID: call.id,
+    },
+    call.signal,
+  )
   if (input.sample === undefined && input.lineage !== true && (input.warehouse || input.start === true)) {
     throw new DatabricksError("INPUT_INVALID", "warehouse and start only apply to sample and lineage, which this call did not ask for.", "Pass sample or lineage: true, or leave warehouse and start out.")
   }
@@ -53,6 +73,7 @@ const table: Handler<"table"> = async (input, call, deps) => {
       deps,
       { account, sql: sampleQuery(input.name, Math.min(input.sample, SAMPLE_LIMIT)), ...(input.warehouse ? { warehouse: input.warehouse } : {}), ...(input.start === undefined ? {} : { start: input.start }), tool: "table", sessionID: call.sessionID, messageID: call.messageID, callID: call.id },
       call.signal,
+      wait,
     )
     const { answer } = await submitRead(deps, { account, tool: "table", call, prepared, rowLimit: Math.min(input.sample, SAMPLE_LIMIT), wait })
     const failure = failureOf(answer, wait)
@@ -76,6 +97,7 @@ const table: Handler<"table"> = async (input, call, deps) => {
         callID: call.id,
       },
       call.signal,
+      wait,
     )
     const { answer } = await submitRead(deps, { account, tool: "table", call, prepared, parameters: [{ name: LINEAGE_PARAM, value: input.name, type: "STRING" }], rowLimit: 200, wait })
     const failure = failureOf(answer, wait)

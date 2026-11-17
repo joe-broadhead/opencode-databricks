@@ -142,7 +142,7 @@ describe("the cache (design §5.4: five minutes, per account and warehouse)", ()
   })
 })
 
-describe("a function body's keyword form", () => {
+describe("a function body resolves along its own captured path", () => {
   it("an unqualified table name asks for the path too, once the call says which catalog and schema complete it", async () => {
     const h = harness({
       options: { accounts: { work: { warehouse: "wh-small", catalog: "main", schema: "default" } } },
@@ -153,14 +153,28 @@ describe("a function body's keyword form", () => {
     expect(requestsSent(h.databricks)[0]?.statement).toBe(PROBE_SENT)
   })
 
-  it("makes the read path-sensitive, so the path is checked even when the caller's own text is not", async () => {
+  it("needs the function's captured path to be safe, not the caller's: no current_path() probe runs for it", async () => {
+    // `extract(year from d)` is a keyword form, which Databricks resolves along the PATH captured at CREATE FUNCTION
+    // (review M1). With that path safe the read is allowed — and the caller's own path is irrelevant, so no probe.
     const result = await code("select main.s.year_of(d) from main.s.t", {
       getTable: () => Promise.resolve(tableOf({ fullName: "main.s.t" })),
-      getFunction: () => Promise.resolve({ fullName: "main.s.year_of", routineBody: "SQL", routineDefinition: "extract(year from d)", isTableFunction: false }),
+      getFunction: () => Promise.resolve({ fullName: "main.s.year_of", routineBody: "SQL", routineDefinition: "extract(year from d)", isTableFunction: false, sqlPath: "system.session,system.builtin,system.ai,main.s" }),
       submit: () => answer(PATH_SQL),
     })
     expect(result.code).toBe("OK")
-    expect(requestsSent(result.h.databricks)).toHaveLength(1)
-    expect((requestsSent(result.h.databricks)[0]?.queryTags as Record<string, string>).oc_tool).toBe("path-check")
+    expect(requestsSent(result.h.databricks)).toEqual([])
+  })
+
+  it("refuses the body when the captured path is unsafe or was not returned", async () => {
+    const unsafe = await code("select main.s.year_of(d) from main.s.t", {
+      getTable: () => Promise.resolve(tableOf({ fullName: "main.s.t" })),
+      getFunction: () => Promise.resolve({ fullName: "main.s.year_of", routineBody: "SQL", routineDefinition: "extract(year from d)", isTableFunction: false, sqlPath: "main.s,system.builtin" }),
+    })
+    expect(unsafe.code).toBe("NEEDS_PLAN")
+    const absent = await code("select main.s.year_of(d) from main.s.t", {
+      getTable: () => Promise.resolve(tableOf({ fullName: "main.s.t" })),
+      getFunction: () => Promise.resolve({ fullName: "main.s.year_of", routineBody: "SQL", routineDefinition: "extract(year from d)", isTableFunction: false }),
+    })
+    expect(absent.code).toBe("NEEDS_PLAN")
   })
 })

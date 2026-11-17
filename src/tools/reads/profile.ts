@@ -93,6 +93,7 @@ const profile: Handler<"profile"> = async (input, call, deps) => {
       callID: call.id,
     },
     call.signal,
+    deps.options.wait,
   )
   const wait = deps.options.wait
   const { answer } = await submitRead(deps, { account, tool: "profile", call, prepared, rowLimit: 1, wait })

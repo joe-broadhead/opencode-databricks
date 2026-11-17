@@ -1,6 +1,10 @@
 /**
  * The read path (design §5.1): the one entry point every read goes through, as `ReadGuardPort` (`src/ports.ts`).
  *
+ * `wait` is the calling tool's own wait in seconds: a `STARTING` warehouse is awaited for at most that long, so a call
+ * that asked for 10 seconds does not block 50 (review `databricks-4.md`, LOW 3). The port's `prepare` has no wait and
+ * uses the `wait` option.
+ *
  * `analyzeRead` decides steps 1 and 2 on the plugin's own parse (`src/sql/analyze.ts`), then this module does the rest:
  *
  * 3. **Dependencies** (`src/guards/dependencies.ts`): every table reference resolved with `tables.get`, every view's
@@ -10,17 +14,19 @@
  * 5. **The warehouse policy** (`src/guards/warehouse.ts`): `warehouses.get`; a stopped warehouse without an allowed
  *    start is `WAREHOUSE_STOPPED`, and a start asserts `databricks.start`, is charged to the ledger and is waited for.
  * 6. **Tables are asserted** as `<account>:table:<c>.<s>.<t>` under the calling tool's own dotted action, before any
- *    statement is sent; a start is asserted as `databricks.start` on `<account>:warehouse:<id>`. A table's assert comes
- *    after `tables.get`, because a one- or two-part reference cannot be named before it is resolved; it is still before
- *    the statement and before a start, so a person's rule stops the read before anything runs or bills.
+ *    statement is sent; a start is asserted as `databricks.start` on `<account>:warehouse:<id>`, before the ledger's
+ *    charge, so a denied start neither starts nor bills. A table's assert comes after `tables.get`, because a one- or
+ *    two-part reference cannot be named before it is resolved; it is still before the statement and before a start, so
+ *    a person's rule stops the read before anything runs or bills.
  * 7. **The path check** (`src/guards/path.ts`) for the forms the plugin cannot qualify.
  *
  * The statement itself is the caller's: `prepared.sent` is exactly `analyzeRead(sql).sent` — the wrapper around the
  * caller's text with every allowlisted call qualified. A read never sends anything else.
  *
  * Every step fails closed. Anything this version cannot classify is refused or needs a plan: an unresolvable table, a
- * function Unity Catalog does not return, a body that does not parse, a dependency deeper than `dependencyDepth`, a path
- * read under a fence, an inline rule the plugin cannot evaluate.
+ * function Unity Catalog does not return, a body that does not parse or that resolves names along a path Unity Catalog
+ * did not return, a dependency deeper than `dependencyDepth`, a path read under a fence, an inline rule the plugin
+ * cannot evaluate.
  *
  * **TOCTOU**, said plainly: a warehouse that stops between the check and the submit is restarted by Databricks [18]; the
  * guard's own view of the warehouse can be one round trip stale.
@@ -32,6 +38,7 @@ import type { Options } from "../options.js"
 import type { AccountInfo, AuthPort, Clock, DatabricksPort, LedgerPort, PermissionPort, PreparedRead, ReadGuardPort, ReadRequest, Warehouse } from "../ports.js"
 import { analyzeRead } from "../sql/analyze.js"
 import { assertBudgetRoom, chargeStart } from "./budget.js"
+import { addedCode } from "./codes.js"
 import { resolveRead, type Warning } from "./dependencies.js"
 import { fenceRefusal } from "./fence.js"
 import { inlineRefusal } from "./inline.js"
@@ -64,9 +71,9 @@ export function throwRefusal(refusal: Refusal): never {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-async function waitForRunning(deps: GuardDeps, account: string, warehouse: Warehouse, signal: AbortSignal): Promise<Warehouse | undefined> {
+async function waitForRunning(deps: GuardDeps, account: string, warehouse: Warehouse, wait: number, signal: AbortSignal): Promise<Warehouse | undefined> {
   if (warehouse.state === "RUNNING") return warehouse
-  const seconds = Math.max(0, deps.options.wait)
+  const seconds = Math.max(0, wait)
   let current: Warehouse = warehouse
   for (let elapsed = 0; elapsed < seconds; elapsed++) {
     if (signal.aborted) throw new DatabricksError("CANCELLED")
@@ -83,16 +90,20 @@ function checkRunSize(deps: GuardDeps, warehouse: Warehouse): void {
   if (!limit) return
   const size = sizeOf(warehouse)
   if (size && sizeRank(size) > sizeRank(limit)) {
-    throw new DatabricksError("START_REFUSED", `${describe(warehouse, deps.options)} is above maxRunSize ${limit}, so an agent may not run on it.`, "Use a smaller warehouse, or raise maxRunSize.")
+    throw new DatabricksError(addedCode("RUN_SIZE_REFUSED", "START_REFUSED"), `${describe(warehouse, deps.options)} is above maxRunSize ${limit}, so an agent may not run on it.`, "Use a smaller warehouse, or raise maxRunSize.")
   }
 }
 
 interface EnsuredWarehouse {
   readonly warehouse: Warehouse
   readonly started: boolean
+  readonly warnings: readonly Warning[]
 }
 
-async function ensureWarehouse(deps: GuardDeps, input: { readonly account: string; readonly warehouseId: string; readonly request: ReadRequest; readonly signal: AbortSignal }): Promise<EnsuredWarehouse> {
+async function ensureWarehouse(
+  deps: GuardDeps,
+  input: { readonly account: string; readonly warehouseId: string; readonly request: ReadRequest; readonly wait: number; readonly signal: AbortSignal; readonly warnings: Warning[] },
+): Promise<EnsuredWarehouse> {
   const warehouse = await deps.databricks.getWarehouse(input.account, input.warehouseId, input.signal)
   const state = stateClass(warehouse.state)
   if (input.request.runningOnly) {
@@ -101,20 +112,20 @@ async function ensureWarehouse(deps: GuardDeps, input: { readonly account: strin
       throw new DatabricksError("UNAVAILABLE", `${describe(warehouse, deps.options)} is ${warehouse.state.toLowerCase()}, and this source never starts one.`, "Start it in Databricks, or pick a warehouse that is already running.")
     }
     checkRunSize(deps, warehouse)
-    return { warehouse, started: false }
+    return { warehouse, started: false, warnings: [] }
   }
   if (state === "ready") {
     checkRunSize(deps, warehouse)
-    return { warehouse, started: false }
+    return { warehouse, started: false, warnings: [] }
   }
   if (state === "hopeless") throwRefusal(stoppedRefusal(warehouse, deps.options, warehouse.state))
   if (state === "starting") {
-    const running = await waitForRunning(deps, input.account, warehouse, input.signal)
+    const running = await waitForRunning(deps, input.account, warehouse, input.wait, input.signal)
     if (!running) {
-      throw new DatabricksError("UNAVAILABLE", `${describe(warehouse, deps.options)} is starting and did not reach RUNNING within ${deps.options.wait} seconds.`, "Try again in a few seconds.")
+      throw new DatabricksError("UNAVAILABLE", `${describe(warehouse, deps.options)} is starting and did not reach RUNNING within ${input.wait} seconds.`, "Try again in a few seconds.")
     }
     checkRunSize(deps, running)
-    return { warehouse: running, started: false }
+    return { warehouse: running, started: false, warnings: [] }
   }
   // STOPPED: a start needs start: true, the start policy, its own action and its ledger charge.
   if (input.request.start !== true) throwRefusal(stoppedRefusal(warehouse, deps.options, warehouse.state))
@@ -123,26 +134,28 @@ async function ensureWarehouse(deps: GuardDeps, input: { readonly account: strin
   checkRunSize(deps, warehouse)
   const size = sizeOf(warehouse)
   if (!size) throwRefusal(startRefusal(warehouse, deps.options, { allowed: false, reasons: ["its size is not one this version's DBU table knows"] }))
-  await chargeStart(deps.ledger, deps.options, {
+  // The person's rules first: a denied `databricks.start` must not use up a `refuse` budget's last start either.
+  await deps.permission.assert(
+    { action: START_ACTION, resource: warehouseResource(input.account, warehouse.id), sessionID: input.request.sessionID, ...(input.request.messageID && input.request.callID ? { messageID: input.request.messageID, callID: input.request.callID } : {}) },
+    input.signal,
+  )
+  const charged = await chargeStart(deps.ledger, deps.options, {
     account: input.account,
     sessionId: input.request.sessionID,
     warehouseId: warehouse.id,
     dbuHours: startDbuHours({ size, autoStopMinutes: warehouse.autoStopMins, clusters: Math.max(1, warehouse.numClusters ?? warehouse.minNumClusters ?? 1) }),
   })
-  await deps.permission.assert(
-    { action: START_ACTION, resource: warehouseResource(input.account, warehouse.id), sessionID: input.request.sessionID, ...(input.request.messageID && input.request.callID ? { messageID: input.request.messageID, callID: input.request.callID } : {}) },
-    input.signal,
-  )
+  if (charged.warning) input.warnings.push(charged.warning)
   await deps.databricks.startWarehouse(input.account, warehouse.id, input.signal)
-  const running = await waitForRunning(deps, input.account, { ...warehouse, state: "STARTING" }, input.signal)
+  const running = await waitForRunning(deps, input.account, { ...warehouse, state: "STARTING" }, input.wait, input.signal)
   if (!running) {
     throw new DatabricksError(
       "UNAVAILABLE",
-      `${describe(warehouse, deps.options)} was started and did not reach RUNNING within ${deps.options.wait} seconds.`,
+      `${describe(warehouse, deps.options)} was started and did not reach RUNNING within ${input.wait} seconds.`,
       `Check it with databricks_warehouses; the start already bills at least about $${(minStartUsd(warehouse, deps.options) ?? 0).toFixed(2)} until it auto-stops.`,
     )
   }
-  return { warehouse: running, started: true }
+  return { warehouse: running, started: true, warnings: [] }
 }
 
 function enforcementOf(account: AccountInfo): PreparedRead["enforcement"] {
@@ -164,7 +177,7 @@ const dedupe = (warnings: readonly Warning[]): readonly Warning[] => {
  * Steps 1–7 for one read. Answers the exact text to send and where; the caller submits it. Throws the read path's
  * codes; nothing is sent here except the `current_path()` probe, after the warehouse policy.
  */
-export async function prepareRead(deps: GuardDeps, request: ReadRequest, signal: AbortSignal): Promise<PreparedReadEx> {
+export async function prepareRead(deps: GuardDeps, request: ReadRequest, signal: AbortSignal, wait = deps.options.wait): Promise<PreparedReadEx> {
   const account = deps.auth.account(request.account)
   const analysis = analyzeRead(request.sql)
   if (!analysis.ok) throwRefusal(analysis.refusal)
@@ -201,12 +214,13 @@ export async function prepareRead(deps: GuardDeps, request: ReadRequest, signal:
       signal,
     )
   }
-  const ensured = await ensureWarehouse(deps, { account: account.alias, warehouseId, request, signal })
+  const warehouseWarnings: Warning[] = []
+  const ensured = await ensureWarehouse(deps, { account: account.alias, warehouseId, request, wait, signal, warnings: warehouseWarnings })
   await assertBudgetRoom(deps.ledger, deps.options, account.alias, request.sessionID)
   if (analysis.pathSensitive.length > 0 || resolved.pathSensitive.length > 0) {
     await assertPathSafe({ databricks: deps.databricks, now: deps.clock.now }, { account: account.alias, warehouseId: ensured.warehouse.id, sessionID: request.sessionID }, signal)
   }
-  const warnings = dedupe([...resolved.warnings, ...(ensured.started ? [{ code: "STARTED_WAREHOUSE" as const, message: WARNINGS.STARTED_WAREHOUSE }] : [])])
+  const warnings = dedupe([...resolved.warnings, ...warehouseWarnings, ...(ensured.started ? [{ code: "STARTED_WAREHOUSE" as const, message: WARNINGS.STARTED_WAREHOUSE }] : [])])
   return { sent: analysis.sent, warehouseId: ensured.warehouse.id, started: ensured.started, tables: resolved.tables, enforcement: enforcementOf(account), warnings, warehouse: ensured.warehouse }
 }
 

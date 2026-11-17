@@ -38,6 +38,7 @@ const query: Handler<"query"> = async (input, call, deps) => {
       callID: call.id,
     },
     call.signal,
+    wait,
   )
   const maxRows = input.maxRows ?? deps.options.maxRows
   const { answer, durationMs } = await submitRead(deps, {

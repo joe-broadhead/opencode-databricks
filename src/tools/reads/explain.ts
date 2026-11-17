@@ -61,6 +61,7 @@ const explain: Handler<"explain"> = async (input, call, deps) => {
       callID: call.id,
     },
     call.signal,
+    50,
   )
   const sent = `${input.extended ? "EXPLAIN EXTENDED" : "EXPLAIN"} ${prepared.sent}`
   const { answer } = await submitRead(deps, {
