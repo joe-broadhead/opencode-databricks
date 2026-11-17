@@ -15,9 +15,10 @@ import { arch, platform } from "node:os"
 import { basename, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { PLUGIN_ID, SUPPORTED_HOST, TESTED_HOSTS } from "../../src/constants.js"
+import { RPC_METHODS } from "../../src/domain/actions.js"
 import { defaultRules, type Rule } from "../../src/permissions.js"
 import { SKILL_IDS } from "../../src/skills.js"
-import { METHODS, TOOLS_RPC_ID } from "../../src/tools-rpc.js"
+import { TOOLS_RPC_ID } from "../../src/tools-rpc.js"
 
 const root = fileURLToPath(new URL("../..", import.meta.url))
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
@@ -38,7 +39,8 @@ afterAll(() => rmSync(work, { recursive: true, force: true }), { timeout: 120_00
 
 
 const MAX_FILES = 30
-const MAX_PACKED_BYTES = 150 * 1024
+// The generated SQL parser and its runtime are most of the bundle (docs/parser.md): about 280 KB packed at this pin.
+const MAX_PACKED_BYTES = 400 * 1024
 // The two self-contained entry bundles, and nothing else, in dist/.
 const DIST = ["dist/index.js", "dist/tui.js"]
 // Modules the host serves to plugins at runtime. Everything else must be inlined in the bundle.
@@ -133,10 +135,13 @@ describe("package tarball", () => {
     expect(paths.filter((path) => path.endsWith(".d.ts"))).toEqual([])
   }, 120_000)
 
-  test("declares no runtime or peer dependency", () => {
+  test("declares no runtime or peer dependency, and bundles the generated parser and its runtime", () => {
     expect(pkg.dependencies).toBeUndefined()
     expect(pkg.peerDependencies).toBeUndefined()
-  })
+    const server = readFileSync(join(installedPackage(true), "dist", "index.js"), "utf8")
+    expect(server).toContain("SqlBaseParser")
+    expect(server).not.toMatch(/from\s*["']antlr4ng["']/)
+  }, 300_000)
 
   test("installs with scripts disabled and loads both entry points under Bun, next to the host packages", () => {
     const consumer = install(true)
@@ -199,17 +204,17 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
         state: "not_configured",
         access: "all",
         writes: "without asking",
-        tools: { declared: 0, built: 0 },
+        tools: { declared: 23, built: 1 },
         unguardedAgents: ["reviewer"],
         host: { version, range: SUPPORTED_HOST, tested: true },
       })
       expect(output).not.toHaveProperty("problems")
       expect(output).not.toHaveProperty("shadowedSkills")
 
-      // The tools RPC answers with no model: its id, and no method until the tools exist.
+      // The tools RPC answers with no model: its id, and exactly the read tools, probe and saved_list.
       const { output: described } = await host.api<{ output: { id: string; methods: { name: string }[] } }>("POST", `/api/rpc/${TOOLS_RPC_ID}/describe`, { input: {} })
       expect(described.id).toBe(TOOLS_RPC_ID)
-      expect(described.methods.map((method) => method.name)).toEqual(METHODS.map((method) => method.name))
+      expect(described.methods.map((method) => method.name)).toEqual([...RPC_METHODS])
 
       // The project's agents are exactly OpenCode's own and the one its config defines: nothing came from a folder
       // above the temp root.

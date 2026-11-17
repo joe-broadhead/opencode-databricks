@@ -52,7 +52,9 @@
     "test:host": "node scripts/check.mjs host",
     "test:pack": "node scripts/check.mjs pack",
     "lint": "node scripts/check-forbidden.mjs --self-test && node scripts/check.mjs forbidden copies",
-    "icons": "node scripts/check.mjs icons"
+    "icons": "node scripts/check.mjs icons",
+    "parser": "node scripts/check.mjs parser",
+    "fuzz": "node test/fuzz/run.mjs"
   },
   "devDependencies": {
     "@babel/core": "7.29.7",
@@ -65,6 +67,8 @@
     "@types/bun": "1.4.4",
     "@types/node": "24.19.2",
     "@we-the-rebel-alliance/source-contract": "github:we-the-rebel-alliance/source-contract#v0.2.0",
+    "antlr-ng": "1.0.10",
+    "antlr4ng": "3.0.16",
     "babel-preset-solid": "1.9.16",
     "esbuild": "0.28.2",
     "solid-js": "1.9.18",
@@ -109,7 +113,164 @@
     "icon": "assets/icon.svg",
     "cost": "Queries run on a SQL warehouse your workspace bills by the hour while it runs (serverless list price about $0.70 per DBU, a 2X-Small uses 4 DBU an hour); starting a stopped one bills until it auto-stops. AI functions and jobs bill separately.",
     "admin": "add an OAuth app connection (public client) with this plugin's redirect URLs in the account console, and give you Can use on a SQL warehouse and SELECT on the data you read",
-    "tools": [],
+    "tools": [
+      {
+        "name": "databricks.status",
+        "permission": "databricks.status",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.catalog",
+        "permission": "databricks.catalog",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.table",
+        "permission": "databricks.table",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.warehouses",
+        "permission": "databricks.warehouses",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.explain",
+        "permission": "databricks.explain",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.query",
+        "permission": "databricks.query",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.statement",
+        "permission": "databricks.statement",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.history",
+        "permission": "databricks.history",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.profile",
+        "permission": "databricks.profile",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.jobs",
+        "permission": "databricks.jobs",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.workspace",
+        "permission": "databricks.workspace",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.plan",
+        "permission": "databricks.plan",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.events_list",
+        "permission": "databricks.events_list",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.saved_read",
+        "permission": "databricks.saved_read",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "databricks.save",
+        "permission": "databricks.save",
+        "effect": "allow",
+        "readOnly": false,
+        "note": "Writes query results to a file on this machine"
+      },
+      {
+        "name": "databricks.write",
+        "permission": "databricks.write",
+        "effect": "allow",
+        "readOnly": false,
+        "note": "At Allowed, the agent can change or delete anything your Databricks identity can, after a plan it makes itself. For a hard limit, sign in with a read-only role."
+      },
+      {
+        "name": "databricks.delete",
+        "permission": "databricks.delete",
+        "effect": "allow",
+        "readOnly": false,
+        "note": "Deletes, drops, overwrites and vacuums. Runs without asking at Allowed; asks every time at Ask before changes"
+      },
+      {
+        "name": "databricks.share",
+        "permission": "databricks.share",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "databricks.export",
+        "permission": "databricks.export",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "databricks.run",
+        "permission": "databricks.run",
+        "effect": "allow",
+        "readOnly": false,
+        "note": "Runs jobs, notebooks and SQL scripts. Runs without asking at Allowed; asks every time at Ask before changes"
+      },
+      {
+        "name": "databricks.admin",
+        "permission": "databricks.admin",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "databricks.cancel",
+        "permission": "databricks.cancel",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "databricks.stop",
+        "permission": "databricks.stop",
+        "effect": "allow",
+        "readOnly": false,
+        "note": "Stops a SQL warehouse the agent finds idle; never ends other people's queries"
+      },
+      {
+        "name": "databricks.start",
+        "permission": "databricks.start",
+        "effect": "ask",
+        "readOnly": true,
+        "note": "Starts a stopped SQL warehouse, which bills until it auto-stops"
+      },
+      {
+        "name": "databricks.probe",
+        "permission": "databricks.probe",
+        "effect": "allow",
+        "readOnly": true
+      }
+    ],
     "skills": [
       "opencode-databricks",
       "opencode-databricks-sql"
@@ -188,5 +349,150 @@
         }
       ]
     }
+  },
+  "sources": {
+    "contractVersion": 1,
+    "rpc": "databricks.databricks.tools",
+    "probe": {
+      "action": "databricks.probe"
+    },
+    "items": [
+      {
+        "id": "databricks.queries",
+        "kind": "events",
+        "reads": "x-databricks/query",
+        "tool": "events_list",
+        "input": {
+          "source": "queries"
+        },
+        "accounts": {
+          "named": true
+        },
+        "scope": {
+          "keys": [
+            "warehouses"
+          ],
+          "describe": "Which SQL warehouses' statements to read: only statements you ran"
+        },
+        "permission": {
+          "events": "databricks.events_list",
+          "operations": [
+            "sql.history.queries.list",
+            "scim.me.get"
+          ],
+          "identity": [
+            "scim.me.get"
+          ],
+          "readsIdentity": true
+        },
+        "private": true,
+        "cost": {
+          "class": "free"
+        },
+        "maxBytes": 262144,
+        "retentionDays": 30,
+        "urlHosts": [
+          "*.cloud.databricks.com",
+          "*.azuredatabricks.net",
+          "*.gcp.databricks.com"
+        ]
+      },
+      {
+        "id": "databricks.runs",
+        "kind": "events",
+        "reads": "x-databricks/run",
+        "tool": "events_list",
+        "input": {
+          "source": "runs"
+        },
+        "accounts": {
+          "named": true
+        },
+        "scope": {
+          "keys": [
+            "jobs"
+          ],
+          "describe": "Which jobs' finished runs to read; empty means every job you can see"
+        },
+        "permission": {
+          "events": "databricks.events_list",
+          "operations": [
+            "jobs.runs.list",
+            "jobs.runs.get",
+            "scim.me.get"
+          ],
+          "identity": [
+            "scim.me.get"
+          ]
+        },
+        "private": true,
+        "cost": {
+          "class": "free"
+        },
+        "maxBytes": 262144,
+        "retentionDays": 60,
+        "urlHosts": [
+          "*.cloud.databricks.com",
+          "*.azuredatabricks.net",
+          "*.gcp.databricks.com"
+        ]
+      },
+      {
+        "id": "databricks.saved",
+        "kind": "snapshot",
+        "tool": "saved_read",
+        "output": "table",
+        "params": {
+          "query": {},
+          "sha": {}
+        },
+        "accounts": {
+          "named": true
+        },
+        "scope": {
+          "keys": [
+            "queries"
+          ],
+          "describe": "Which of your saved SQL queries to read, shown with their SQL",
+          "suggest": {
+            "tool": "saved_list",
+            "operations": [
+              "sql.queries.list"
+            ]
+          }
+        },
+        "permission": {
+          "tool": "databricks.saved_read",
+          "operations": [
+            "sql.queries.get",
+            "sql.warehouses.get",
+            "sql.statements.query",
+            "sql.statements.get",
+            "scim.me.get"
+          ],
+          "identity": [
+            "scim.me.get"
+          ]
+        },
+        "private": true,
+        "maxAgeSec": 3600,
+        "maxBytes": 262144,
+        "cost": {
+          "class": "billed",
+          "units": [
+            {
+              "per": "dbu",
+              "usd": 0.7,
+              "min": 0.22,
+              "conditions": "Runs only on a warehouse that is already running, which then stays up until it auto-stops"
+            }
+          ],
+          "probe": {
+            "per": "call",
+            "usd": 0
+          }
+        }
+      }
+    ]
   }
 }

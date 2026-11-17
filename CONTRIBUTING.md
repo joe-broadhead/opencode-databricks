@@ -34,9 +34,10 @@ One command, `scripts/check.mjs`, runs every stage in order and stops at the fir
 
 | Stage | What it does |
 | --- | --- |
+| `parser` | Regenerates the SQL parser and the built-in list into a temporary folder and fails on any difference. |
 | `typecheck` | `tsc` over `src/` and the tests. |
 | `unit` | Vitest over `test/unit/`. |
-| `conformance` | The source contract's conformance kit, under Bun. A placeholder until the plugin declares a source. |
+| `conformance` | The `sources` declaration against the source contract v0.2.0, under Bun; the kit's run over the sources lands with them. |
 | `kit` | The release kit's own tests. |
 | `build` | esbuild bundles `dist/index.js` and `dist/tui.js`, and checks `NOTICE`. |
 | `icons` | The family icon contract. |
@@ -46,6 +47,13 @@ One command, `scripts/check.mjs`, runs every stage in order and stops at the fir
 | `copies` | The shared kit files against their pinned hashes. |
 | `whitelist` | `package.json` and `dist/` against the approved package shape. |
 | `actionlint` | The workflows, when `actionlint` is on PATH. |
+
+## The parser
+
+`src/sql/generated/` is generated: never edit it. To move the grammar pin, copy the two grammar files of the new
+Apache Spark tag into `grammar/spark/`, update `grammar/spark/PIN.json`, port any changed action in `grammar/port.mjs`,
+run `node scripts/generate-parser.mjs`, and run the fuzz (`npm run fuzz`, which needs Java 17). See
+[The parser](docs/parser.md).
 
 ## Releases
 

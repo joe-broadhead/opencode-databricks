@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/apache/spark",
+  "tag": "v4.3.0",
+  "commit": "98bc0212c94705434471627068f41e374ccab143",
+  "path": "sql/api/src/main/antlr4/org/apache/spark/sql/catalyst/parser",
+  "files": {
+    "SqlBaseLexer.g4": "956e2562bcded7e3e72e3e301d2c7b00d27273f92d9b760b55abd3b8c5fdfa0c",
+    "SqlBaseParser.g4": "e1af253a0788065063d47f8ba1f2606822898e3239fb4760203d846819e5485d"
+  },
+  "jvm": {
+    "note": "The differential fuzz runs the same tag's own parser: spark-sql-api from Maven Central, with the ANTLR runtime Spark's pom pins.",
+    "sparkSqlApi": "https://repo1.maven.org/maven2/org/apache/spark/spark-sql-api_2.13/4.3.0/spark-sql-api_2.13-4.3.0.jar",
+    "antlrRuntime": "https://repo1.maven.org/maven2/org/antlr/antlr4-runtime/4.13.1/antlr4-runtime-4.13.1.jar",
+    "sparkSqlApiSha256": "b284356c9ee469f269245a303af9530ca2d12343120385484fb4dd6e3e075b14",
+    "antlrRuntimeSha256": "54665d2838cc66458343468efc539e454fc95b46a8a04b13c6ac43fc9be63505"
+  }
+}

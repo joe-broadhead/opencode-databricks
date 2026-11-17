@@ -3,10 +3,9 @@
 // `tokenEnv` and `clientSecretEnv` name environment variables, and `profile` names a CLI profile.
 import * as z from "zod"
 import { ACCESS_VALUES } from "./constants.js"
+import { SIZES } from "./domain/cost.js"
 import { DatabricksError } from "./domain/errors.js"
 
-/** SQL warehouse sizes, smallest first. */
-const SIZES = ["2X-Small", "X-Small", "Small", "Medium", "Large", "X-Large", "2X-Large", "3X-Large", "4X-Large"]
 const Pattern = z.string().min(1).max(767)
 const ByteSize = z.union([z.number().int().positive(), z.string().regex(/^\d+(?:KiB|MiB|GiB)?$/u, 'a size such as "32KiB" or "256MiB"')])
 

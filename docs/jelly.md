@@ -9,8 +9,13 @@ tile, not Databricks' logo.
 
 ## Tools and permissions
 
-0 tools are declared (0 read-only). Nothing is declared until the tools exist; an action the plugin does not
-declare still follows the access choice, as the block below says.
+25 tools are declared (16 read-only): the 23 tools, each by its dotted action `databricks.<tool>`, and two
+permission-only entries the plugin asserts that are not tools: `databricks.start` (a warehouse start; `effect: "ask"`,
+`readOnly: true`) and `databricks.probe` (a source's identity probe; `readOnly: true`). So a start is allowed at
+Allowed, asks at Ask before changes and runs at Read only; the probe and every read run at every level; the save, the
+six commit tools, cancel and stop follow the access choice as changes. `test/unit/jelly.test.ts` checks the
+declaration equals the registry plus those two entries, runs Jelly's access rules over every action the plugin
+asserts, and checks the plugin's own default rules agree.
 
 The family's shared rules, word for word from Jelly's guide:
 
@@ -48,4 +53,10 @@ None: `jelly.views` and `jelly.rpc` are empty.
 ## Cost
 
 `jelly.cost` says queries run on a warehouse billed by the hour while it runs, that a start bills until auto-stop, and
-that AI functions and jobs bill separately.
+that AI functions and jobs bill separately. See [Costs](costs.md).
+
+## Sources
+
+`package.json` `sources` declares `databricks.queries` (your finished statements, metadata only),
+`databricks.runs` (finished job runs) and `databricks.saved` (a saved query's table, read only on a running
+warehouse), validated with the source contract v0.2.0's `assertDeclaration`.

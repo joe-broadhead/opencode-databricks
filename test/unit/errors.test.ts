@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { CODES, DatabricksError, ERRORS, errorRows, errorText } from "../../src/domain/errors.js"
+import { Outputs } from "../../src/domain/contract.js"
 
 const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8")
 const block = (text: string) => /<!-- errors:start -->\n([\s\S]*?)\n<!-- errors:end -->/.exec(text)?.[1]
@@ -20,6 +21,10 @@ describe("errors", () => {
   it("README's Troubleshooting table and docs/errors.md are generated from the table", () => {
     expect(block(read("README.md"))).toBe(errorRows())
     expect(block(read("docs/errors.md"))).toBe(errorRows())
+  })
+
+  it("every code is a valid result error", () => {
+    for (const code of CODES) expect(Outputs.query.safeParse({ state: ERRORS[code].state, error: code, trust: "untrusted" }).success, code).toBe(true)
   })
 
   it("include the design's codes and the review's additions", () => {

@@ -1,4 +1,4 @@
 {
   "upstream": "none",
-  "own": []
+  "own": ["status", "catalog", "table", "warehouses", "explain", "query", "statement", "history", "profile", "jobs", "workspace", "plan", "events_list", "saved_read", "save", "write", "delete", "share", "export", "run", "admin", "cancel", "stop", "start", "probe"]
 }

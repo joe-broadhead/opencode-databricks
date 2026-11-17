@@ -1,9 +1,10 @@
 // Default permission rules for the plugin's actions, inserted into each agent right after its base `* * allow` rule.
 // OpenCode applies the last matching rule, so the agent's own stricter rules, the user's `permissions` rules and saved
-// approvals all still win. The `access` option generates the block. Until the tools exist it is one rule: every action
-// of the plugin is treated like a change.
+// approvals all still win. The `access` option generates the block from the one tool table (src/domain/actions.ts), and
+// it gives every action the effect Jelly's own rules give it at the same level (test/unit/jelly.test.ts).
 import type { Plugin } from "@opencode/plugin"
 import { type Access, NAMESPACE } from "./constants.js"
+import { actionOf, PERMISSION_ONLY, START_ACTION, TOOLS } from "./domain/actions.js"
 import { errorText } from "./domain/errors.js"
 import { reasonOf } from "./redact.js"
 
@@ -15,11 +16,26 @@ export function changeEffect(access: Access): Effect {
   return access === "all" ? "allow" : access === "ask-changes" ? "ask" : "deny"
 }
 
+/** A warehouse start: allowed at all, asked at ask-changes, allowed at read-only (design §5.5, §6.2, §10.3). */
+export function startEffect(access: Access): Effect {
+  return access === "ask-changes" ? "ask" : "allow"
+}
+
 const rule = (action: string, effect: Effect): Rule => ({ action, resource: "*", effect })
 
-/** `databricks.*` with the change effect: an action the plugin does not classify is treated like a change. */
+/**
+ * Broad first, narrow last. `databricks.*` gives every action the change effect, so an action this table does not
+ * know (a tool added later) is treated like a change; then each read and `databricks.probe` is allowed, `databricks.start`
+ * gets its own effect, and each change gets the change effect.
+ */
 export function defaultRules(access: Access = "all"): Rule[] {
-  return [rule(`${NAMESPACE}.*`, changeEffect(access))]
+  const change = changeEffect(access)
+  return [
+    rule(`${NAMESPACE}.*`, change),
+    ...TOOLS.filter((tool) => tool.readOnly).map((tool) => rule(actionOf(tool.name), "allow")),
+    ...PERMISSION_ONLY.map((entry) => rule(entry.action, entry.action === START_ACTION ? startEffect(access) : "allow")),
+    ...TOOLS.filter((tool) => !tool.readOnly).map((tool) => rule(actionOf(tool.name), change)),
+  ]
 }
 
 const isBaseAllow = (item: Rule) => item.action === "*" && item.resource === "*" && item.effect === "allow"
