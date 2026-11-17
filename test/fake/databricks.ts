@@ -1,7 +1,7 @@
 // The fake Databricks server's interface (design §15.2). Package B implements it in test/fake/databricks-server.ts as
 // a loopback HTTP server that replays the sanitised fixtures of test/fixtures/databricks/, so the host suites run the
 // built plugin against it; every other package uses it through this interface only.
-import type { ExternalLink, FunctionInfo, HistoryQuery, RunInfo, StatementAnswer, TableInfo, Warehouse } from "../../src/ports.js"
+import type { ChunkAnswer, ExternalLink, FunctionInfo, HistoryQuery, RunInfo, StatementAnswer, TableInfo, Warehouse } from "../../src/ports.js"
 
 /** One request the fake received, with the Authorization header reduced to whether it was there. */
 export interface FakeRequest {
@@ -40,6 +40,24 @@ export interface FakeState {
   /** The answer for a statement text, or a function of it; unknown text answers SUCCEEDED with no rows. */
   readonly statements: Map<string, StatementAnswer | ((statement: string) => StatementAnswer)>
   readonly links: Map<string, { readonly link: ExternalLink; readonly bytes: Uint8Array }>
+  /**
+   * Result chunks past the first, by `<statementId>:<chunkIndex>`. The fake's chunk route answers them in the
+   * documented top-level shape (`chunk_index`, `row_count`, `next_chunk_index`, `data_array`, `external_links`), never
+   * a whole statement response (review of #3, H1).
+   */
+  readonly chunks: Map<string, ChunkAnswer>
+  // The maps below are always initialised; `startFake`'s `Partial<FakeState>` seeds them, and the fake keeps its
+  // derived defaults when one is empty (review of #3, request 1).
+  readonly queries: Map<string, { readonly id: string; readonly name: string; readonly owner?: string; readonly warehouseId?: string; readonly queryText: string }>
+  /** Key `<catalog>.<schema>`. */
+  readonly volumes: Map<string, readonly { readonly name: string; readonly volumeType: string }[]>
+  /** Workspace objects by directory path. */
+  readonly workspace: Map<string, readonly { readonly path: string; readonly objectType: string; readonly size?: number; readonly modifiedAt?: number }[]>
+  /** Notebook source by path. */
+  readonly notebooks: Map<string, string>
+  /** Files API listings by directory path. */
+  readonly directories: Map<string, readonly { readonly path: string; readonly isDirectory: boolean; readonly size?: number; readonly modifiedAt?: number }[]>
+  readonly jobs: Map<number, { readonly name: string; readonly creatorUserName?: string }>
 }
 
 export interface FakeDatabricks {

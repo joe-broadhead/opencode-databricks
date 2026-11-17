@@ -44,7 +44,12 @@ export function placeholderDatabricks(): DatabricksPort {
   return new Proxy({} as DatabricksPort, { get: (_target, name) => notBuilt(`The Databricks client (${String(name)})`) })
 }
 
-export function placeholderReads(): ReadGuardPort {
+/**
+ * The read path's factory: the ports it needs come from `base`, which holds everything but `reads`, so there is no
+ * cycle. Package C replaces this placeholder with `createReadGuard` (`src/guards/read.ts`) in the one line below that
+ * calls it, and deletes it.
+ */
+export function placeholderReads(_base: Omit<Deps, "reads">): ReadGuardPort {
   return { prepare: async () => notBuilt("The read path")() }
 }
 
@@ -73,17 +78,17 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
             ...(request.messageID && request.callID ? { source: { type: "tool", messageID: request.messageID, id: request.callID } } : {}),
           } as never),
       }
-      const deps: Deps = {
+      const base = {
         options,
         access: options.access,
         auth: (seam.auth ?? placeholderAuth)(),
         databricks: (seam.databricks ?? placeholderDatabricks)(),
-        reads: placeholderReads(),
         ledger: createLedger(),
         plans: createPlanStore({ ttlSeconds: options.planTtlSeconds }),
         permission,
         clock: { now: Date.now, uuid: () => crypto.randomUUID() },
       }
+      const deps: Deps = { ...base, reads: placeholderReads(base) }
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
         keep(

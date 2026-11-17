@@ -4,12 +4,13 @@ import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
-import { actionOf, DECLARED_ACTIONS, type ToolName, TOOLS } from "../../src/domain/actions.js"
-import { Inputs } from "../../src/domain/contract.js"
+import { actionOf, DECLARED_ACTIONS, OPERATIONS, SCOPE_OF, type ToolName, TOOLS } from "../../src/domain/actions.js"
+import { Enforcement, Inputs, Outputs, ROLE_ENFORCEMENT_TEXT } from "../../src/domain/contract.js"
+import { DatabricksError } from "../../src/domain/errors.js"
 import { HANDLERS, PRIMARY_OPERATION, REGISTERED } from "../../src/registry.js"
-import { runTool } from "../../src/tool-spec.js"
+import { errorResult, runTool } from "../../src/tool-spec.js"
 import { methods } from "../../src/tools-rpc.js"
-import { call, fakeDeps, RecordingPermission } from "../fake/ports.js"
+import { call, fakeDatabricks, fakeDeps, RecordingPermission } from "../fake/ports.js"
 
 const INPUTS: Record<ToolName, unknown> = {
   status: {},
@@ -46,11 +47,18 @@ describe("the registry", () => {
   it("every tool asserts exactly its dotted action on <account>:<operation> first, and calls Databricks before nothing", async () => {
     const seen = new Set<string>()
     for (const tool of REGISTERED) {
-      const fake = fakeDeps()
+      // The Databricks calls made before the tool's first assert: a tool that is built may call afterwards (its own
+      // reads), but no tool may reach Databricks before the person's rules have had their say.
+      let callsBeforeFirstAssert = -1
+      const permission = new RecordingPermission(() => {
+        if (callsBeforeFirstAssert < 0) callsBeforeFirstAssert = fake.databricks.calls.length
+        return "allow"
+      })
+      const fake = fakeDeps({ permission })
       await runTool(tool, INPUTS[tool], call(`call_${tool}`), fake.deps, HANDLERS)
       expect(fake.permission.requests[0], tool).toMatchObject({ action: actionOf(tool), resource: `work:${PRIMARY_OPERATION[tool]}`, sessionID: "ses_test", callID: `call_${tool}` })
       for (const request of fake.permission.requests) seen.add(request.action)
-      expect(fake.databricks.calls, tool).toEqual([])
+      expect(callsBeforeFirstAssert, tool).toBe(0)
     }
     // Asserted equals declared: the tools assert their own actions; the RPC's probe asserts databricks.probe; a start
     // asserts databricks.start (package C), checked by its own test there.
@@ -119,5 +127,58 @@ describe("plan → commit routing (Day 0)", () => {
     const planned = await runTool("plan", { sql: "CALL main.s.p()" }, call(), fake.deps, HANDLERS)
     expect(planned).toMatchObject({ category: "run" })
     expect(planned.planId).toMatch(/^pln_[0-9a-f-]{36}$/)
+  })
+})
+
+describe("the contract's amendments for package C", () => {
+  it("FakeReads prepares a read on the running fake warehouse, with the facts the ledger needs", async () => {
+    const fake = fakeDeps()
+    const prepared = await fake.deps.reads.prepare({ account: "work", sql: "select upper(a) from main.s.t", tool: "query", sessionID: "ses_test" }, new AbortController().signal)
+    expect(prepared.warehouse).toMatchObject({ id: "wh-small", state: "RUNNING", clusterSize: "Small", serverless: true, autoStopMins: 10 })
+    expect(prepared.warehouseId).toBe(prepared.warehouse.id)
+    expect(prepared.sent).toBe("SELECT * FROM (\nselect system.builtin.upper(a) from main.s.t\n) AS oc_q")
+  })
+})
+
+describe("the contract's amendments for package B", () => {
+  it("fakeDatabricks waits for a statement by polling getStatement until it is terminal", async () => {
+    const states = ["PENDING", "RUNNING", "SUCCEEDED"]
+    const { port, calls } = fakeDatabricks({ getStatement: () => ({ statementId: "st-1", state: states.shift() ?? "SUCCEEDED" }) })
+    const answer = await port.waitForStatement("work", "st-1", { untilMs: Number.MAX_SAFE_INTEGER }, new AbortController().signal)
+    expect(answer.state).toBe("SUCCEEDED")
+    expect(calls.map((item) => item.method)).toEqual(["waitForStatement", "getStatement", "getStatement", "getStatement"])
+  })
+
+  it("stops waiting at untilMs and returns the last answer", async () => {
+    let now = 0
+    const { port } = fakeDatabricks({ getStatement: () => ((now += 1000), { statementId: "st-1", state: "RUNNING" }) }, () => now)
+    expect((await port.waitForStatement("work", "st-1", { untilMs: 3000 }, new AbortController().signal)).state).toBe("RUNNING")
+    expect(now).toBe(3000)
+  })
+
+  it("carries retryAfterSec from a DatabricksError into the tool's result", () => {
+    const error = new DatabricksError("RATE_LIMITED", undefined, undefined, undefined, { retryAfterSec: 12 })
+    expect(error.retryAfterSec).toBe(12)
+    expect(error.message).toBe(new DatabricksError("RATE_LIMITED").message)
+    expect(errorResult(error)).toMatchObject({ state: "failed", error: "RATE_LIMITED", retryAfterSec: 12 })
+    expect(Outputs.query.safeParse(errorResult(error)).success).toBe(true)
+    expect(errorResult(new DatabricksError("RATE_LIMITED"))).not.toHaveProperty("retryAfterSec")
+  })
+})
+
+describe("the contract's amendments for package A", () => {
+  it("names the new Unity Catalog reads as unity-catalog operations under the scope the sign-in holds", () => {
+    for (const operation of ["unity-catalog.connections.list", "unity-catalog.current-metastore-assignment.get", "unity-catalog.effective-permissions.get"] as const) {
+      expect(OPERATIONS).toContain(operation)
+      expect(SCOPE_OF[operation]).toBe("unity-catalog")
+    }
+  })
+
+  it("gives every account an enforcement and every token its workspace host", async () => {
+    const fake = fakeDeps()
+    const account = fake.auth.account("work")
+    expect(Enforcement.safeParse(account.enforcement).success).toBe(true)
+    expect((await fake.auth.token("work", ["sql"], new AbortController().signal)).host).toBe(account.host)
+    expect(ROLE_ENFORCEMENT_TEXT).toBe("SQL writes refused on what doctor checked; secret scopes and serving endpoints not checked; job runs use each job's Run as identity")
   })
 })

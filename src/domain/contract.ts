@@ -42,6 +42,8 @@ export const Base = {
   next: z.string().optional(),
   warnings: z.array(Warning).optional(),
   providerError: ProviderErrorSchema.optional(),
+  /** RATE_LIMITED: the seconds to wait before the same call. */
+  retryAfterSec: z.number().min(0).optional(),
 }
 
 /** On every result that carries Databricks data; an error result carries none, so it may leave it out. */
@@ -50,8 +52,21 @@ export const Untrusted = { trust: z.literal("untrusted").optional() }
 /** How a call is billed (design §4): control-plane REST, a running warehouse, or outside the warehouse. */
 export const Billing = z.enum(["free", "warehouse", "separate"])
 
-/** Which guarantee holds for reads (design §5.6). */
+/**
+ * Which guarantee holds for reads (design §3.4, §5.6). `"role"` is earned only by a doctor report from this process,
+ * bound to the credential's host, role group and granted scopes, held in memory only, and cleared by any sign-in or
+ * refresh that changes them; after a restart status says `"role-requested"` until `/databricks-doctor` runs again.
+ *
+ * Under **fine** scopes, `"role"` is earned over the Unity Catalog checks, and its wording names the exclusions: "SQL
+ * writes refused on what doctor checked; secret scopes and serving endpoints not checked; job runs use each job's Run
+ * as identity". Under `all-apis`, secret scopes and serving endpoints stay NOT_CHECKED and block `"role"`. (Decision
+ * (a) on the review of package A, #5, ruling 1.)
+ */
 export const Enforcement = z.enum(["role", "role-requested", "identity", "service-principal"])
+export type EnforcementKind = z.output<typeof Enforcement>
+
+/** The wording of `"role"` under fine scopes (decision (a) on the review of #5). */
+export const ROLE_ENFORCEMENT_TEXT = "SQL writes refused on what doctor checked; secret scopes and serving endpoints not checked; job runs use each job's Run as identity"
 
 export const WarehouseState = z.enum(["STARTING", "RUNNING", "STOPPING", "STOPPED", "DELETING", "DELETED"])
 export const WarehouseType = z.enum(["serverless", "pro", "classic"])
@@ -60,6 +75,7 @@ export const WarehouseSize = z.enum(["2X-Small", "X-Small", "Small", "Medium", "
 /** A named, typed statement parameter (`:name`); positional markers are refused (design §5.1). */
 export const Param = z.object({
   name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/),
+  /** `null` is SQL NULL: sent without `value`, which the Statement Execution API reads as NULL. */
   value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
   type: z.string().max(64).optional(),
 })
