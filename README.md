@@ -7,8 +7,10 @@ Unofficial; not affiliated with Databricks. The icon is the family's own tile, n
 
 Databricks is a trademark of Databricks, Inc.; this unofficial plugin is not endorsed by them.
 
-> **Not yet released.** This is v0.0.1 before its first release: the family scaffold, with the `access` option, the
-> default rules, `/databricks-status` and the skills as outlines. It has no tools yet, and calls nothing.
+> **Not yet released.** This is v0.0.1 before its first release: the contract (23 tools, their schemas, the errors,
+> the permission actions), the SQL parser generated from Spark's grammar, the function allowlist, the statement table,
+> the plan store and the spend ledger are in place. `databricks_plan` classifies SQL; every other tool answers
+> `NOT_IMPLEMENTED` until it is built. Nothing calls Databricks yet.
 
 ## Requirements
 
@@ -32,8 +34,10 @@ Run `opencode reload`, or restart OpenCode. Then run `/databricks-status` in a s
 > At Allowed, the agent can change or delete anything your Databricks identity can, after a plan it makes itself.
 > For a hard limit, sign in with a read-only role.
 
-The plugin's own read checks will be best-effort; the only read-only Databricks enforces is your identity's
-privileges, such as a role with only `SELECT`.
+The plugin narrows reads as far as it can: a read runs as exactly one query wrapped in `SELECT * FROM (…)`, calls only
+an allowlist of built-in functions (each qualified as `system.builtin.<name>`), and never starts a warehouse unless the
+call says `start: true`. Those checks are the plugin's own and best-effort; the only read-only Databricks enforces is
+your identity's privileges, such as a role with only `SELECT`. [Safety](docs/safety.md) says what each layer stops.
 
 The `access` option generates the default rules: `all` (the default) runs every tool without asking; `ask-changes`
 asks before each change and each warehouse start; `read-only` denies changes, and reads may still start a small
@@ -42,14 +46,20 @@ serverless warehouse that bills until it auto-stops.
 ## Cost
 
 Queries run on a SQL warehouse your workspace bills by the hour while it runs. Starting a stopped one bills until it
-auto-stops. Unity Catalog reads are free. AI functions and jobs bill separately.
+auto-stops. Unity Catalog reads are free. AI functions and jobs bill separately. [Costs](docs/costs.md) has the
+numbers and their sources.
 
 ## Known limits
 
 - **Masks and filters run functions you cannot see.**
   Column masks and row filters set by your admins run their own functions on every read; Databricks enforces them, and the plugin cannot see them.
   A mask may wrap a Python function. The plugin shows each column's mask and the table's row filter by name.
-- **No tools yet.** This version is the scaffold.
+- **The parser is Spark's, not Databricks'.** The plugin parses SQL with Apache Spark's grammar at v4.3.0. Databricks'
+  own syntax that Spark lacks (`VACUUM`, `OPTIMIZE`, `COPY INTO`, `GRANT … ON`, `TABLE(f(…))` in `FROM`) is refused in
+  reads and plans as `run`, the strictest category.
+- **Keyword forms follow the path.** `EXTRACT`, `TRIM(… FROM …)`, `POSITION(… IN …)`, `SUBSTRING(… FROM …)` and similar
+  forms cannot be qualified, so a read that uses one needs the workspace's default SQL path (`PATH_NOT_DEFAULT`).
+- **Nothing is built yet** beyond `databricks_plan` for SQL (see the note above).
 
 ## Troubleshooting
 
@@ -70,6 +80,7 @@ Every error has the form `CODE: What happened. Next step: What to do.`
 | `EXTERNAL_LINK_REFUSED` | refused | A result link was not https on the cloud's storage host. | Report it; databricks_save falls back only when links are unavailable. |
 | `FENCED` | refused | A resolved table is outside the fence, or a permission rule denied it. | Query allowed catalogs only, or change the fence option. |
 | `FENCE_UNVERIFIABLE` | refused | A path-based read cannot be checked against the fence. | Read the table by its Unity Catalog name. |
+| `FUNCTION_NAME_PARTIAL` | refused | A read calls a function that is not an allowlisted built-in by a one- or two-part name, which Databricks resolves along the SQL path, not where the plugin checks it. | Write the function's full name, catalog.schema.function. |
 | `FUNCTION_REFUSED` | refused | reflect, java_method, try_reflect, a script transform or a bucket sample on a function is refused. | Do it another way; these run code outside SQL. |
 | `HEADLESS_REFUSED` | refused | A headless mode (pat, m2m or cli) was configured in a hosted engine. | Sign in interactively, or set allowHeadlessInHost. |
 | `HOST_INVALID` | refused | The workspace URL is not https, or not a Databricks host. | Enter the workspace URL from the browser, or set allowCustomHost for a private link. |
@@ -114,11 +125,14 @@ Every error has the form `CODE: What happened. Next step: What to do.`
 ## Docs
 
 - [Configuration](docs/configuration.md): options, sign-in, the default rules.
+- [Safety](docs/safety.md): the read path, the allowlist, plans, and where read-only is enforced.
+- [Costs](docs/costs.md): warehouse billing, starts, the ledger and budgets.
 - [Scripting](docs/scripting.md): the tools RPC.
 - [In Jelly](docs/jelly.md): the declaration.
 - [Errors](docs/errors.md): every code.
-- Contributors: [Architecture](docs/architecture.md).
+- Contributors: [Architecture](docs/architecture.md), [Ownership](docs/ownership.md), [The parser](docs/parser.md).
 
 ## License
 
-MIT. The bundle includes third-party code under its own licences, listed in `NOTICE`.
+MIT. The bundle includes third-party code under its own licences, listed in `NOTICE`, including the SQL parser
+generated from Apache Spark's grammar (Apache License 2.0).

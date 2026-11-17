@@ -1,0 +1,781 @@
+# Databricks SQL built-in functions, from the alphabetical reference (design [37]).
+# Source: https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-functions-builtin-alpha
+# Fetched: 2026-11-17. Page sha256: cf28706f2a49760ddf02e16fcffd77e026618227882c42701e66b2f2a976119f
+# One name per line, then the kinds the reference gives it. Refresh with: node scripts/generate-allowlist.mjs --fetch
+# (a person reviews the diff, then the exclusions in src/domain/functions.ts).
+abs	function
+acos	function
+acosh	function
+add_months	function
+aes_decrypt	function
+aes_encrypt	function
+agg	aggregate function
+aggregate	function
+ai_analyze_sentiment	function
+ai_classify	function
+ai_decide	function
+ai_detect_anomalies	function
+ai_enrich	function
+ai_extract	function
+ai_fix_grammar	function
+ai_forecast	function
+ai_gen	function
+ai_generate_text	function
+ai_mask	function
+ai_parse_document	function
+ai_predict_class	function
+ai_predict_value	function
+ai_prep_search	function
+ai_query	function
+ai_search	function
+ai_similarity	function
+ai_summarize	function
+ai_top_drivers	function
+ai_transcribe	function
+ai_translate	function
+and	predicate
+any	aggregate function
+any_value	aggregate function
+approx_count_distinct	aggregate function
+approx_percentile	aggregate function
+approx_top_k	aggregate function
+approx_top_k_accumulate	aggregate function
+approx_top_k_combine	aggregate function
+approx_top_k_estimate	function
+array	function
+array_agg	aggregate function
+array_append	function
+array_compact	function
+array_contains	function
+array_distinct	function
+array_except	function
+array_insert	function
+array_intersect	function
+array_join	function
+array_max	function
+array_min	function
+array_position	function
+array_prepend	function
+array_remove	function
+array_repeat	function
+array_size	function
+array_sort	function
+array_union	function
+arrays_overlap	function
+arrays_zip	function
+ascii	function
+asin	function
+asinh	function
+assert_true	function
+atan	function
+atan2	function
+atanh	function
+avg	aggregate function
+base64	function
+between	predicate
+bigint	function
+bin	function
+binary	function
+bit_and	aggregate function
+bit_count	function
+bit_get	function
+bit_length	function
+bit_or	aggregate function
+bit_reverse	function
+bit_xor	aggregate function
+bitmap_and_agg	aggregate function
+bitmap_bit_position	function
+bitmap_bucket_number	function
+bitmap_construct_agg	aggregate function
+bitmap_count	function
+bitmap_or_agg	aggregate function
+bool_and	aggregate function
+bool_or	aggregate function
+boolean	function
+bround	function
+btrim	function
+cardinality	function
+case	expression
+cast	function
+cbrt	function
+ceil	function
+ceiling	function
+char	function
+char_length	function
+character_length	function
+charindex	function
+chr	function
+classifier	function
+cloud_files_state	table-valued function
+coalesce	function
+collate	expression
+collation	function
+collations	table function
+collect_list	aggregate function
+collect_set	aggregate function
+concat	function
+concat_ws	function
+contains	function
+conv	function
+convert_timezone	function
+copy_file	function
+corr	aggregate function
+cos	function
+cosh	function
+cot	function
+count	aggregate function
+count_if	aggregate function
+count_min_sketch	aggregate function
+counter_diff	analytic window function
+covar_pop	aggregate function
+covar_samp	aggregate function
+crc32	function
+create_file	function
+csc	function
+cube	function
+cume_dist	analytic window function
+curdate	function
+current_catalog	function
+current_database	function
+current_date	function
+current_metastore	function
+current_oauth_custom_identity_claim	function
+current_path	function
+current_recipient	function
+current_schema	function
+current_snapshot_version	function
+current_time	function
+current_timestamp	function
+current_timezone	function
+current_user	function
+current_version	function
+data_skipping_summary	table-valued function
+date	function
+date_add	(days) function; function
+date_diff	function
+date_format	function
+date_from_unix_date	function
+date_part	function
+date_sub	function
+date_trunc	function
+dateadd	(timestamp) function; function
+datediff	(timestamp) function; function
+day	function
+dayname	function
+dayofmonth	function
+dayofweek	function
+dayofyear	function
+decimal	function
+decode	(character set) function; (key) function
+degrees	function
+dense_rank	ranking window function
+div	operator
+double	function
+e	function
+element_at	function
+elt	function
+encode	function
+endswith	function
+equal_null	function
+event_log	table-valued function
+every	aggregate function
+exists	function
+exp	function
+explode	table-valued generator function
+explode_outer	table-valued generator function
+expm1	function
+extract	function
+factorial	function
+filter	function
+find_in_set	function
+first	aggregate function; function for MATCH_RECOGNIZE
+first_value	aggregate function
+flatten	function
+float	function
+floor	function
+forall	function
+format_number	function
+format_string	function
+from_avro	function
+from_csv	function
+from_json	function
+from_protobuf	function
+from_unixtime	function
+from_utc_timestamp	function
+from_xml	function
+get	function
+get_json_object	function
+getbit	function
+getdate	function
+greatest	function
+grouping	function
+grouping_id	function
+h3_boundaryasgeojson	function
+h3_boundaryaswkb	function
+h3_boundaryaswkt	function
+h3_centerasgeojson	function
+h3_centeraswkb	function
+h3_centeraswkt	function
+h3_compact	function
+h3_coverash3	function
+h3_coverash3string	function
+h3_distance	function
+h3_h3tostring	function
+h3_hexring	function
+h3_ischildof	function
+h3_ispentagon	function
+h3_isvalid	function
+h3_kring	function
+h3_kringdistances	function
+h3_longlatash3	function
+h3_longlatash3string	function
+h3_maxchild	function
+h3_minchild	function
+h3_pointash3	function
+h3_pointash3string	function
+h3_polyfillash3	function
+h3_polyfillash3string	function
+h3_resolution	function
+h3_stringtoh3	function
+h3_tessellateaswkb	function
+h3_tochildren	function
+h3_toparent	function
+h3_try_coverash3	function
+h3_try_coverash3string	function
+h3_try_distance	function
+h3_try_polyfillash3	function
+h3_try_polyfillash3string	function
+h3_try_tessellateaswkb	function
+h3_try_validate	function
+h3_uncompact	function
+h3_validate	function
+hash	function
+hex	function
+histogram_numeric	aggregate function
+hll_sketch_agg	aggregate function
+hll_sketch_estimate	function
+hll_union	function
+hll_union_agg	function
+hmac	function
+hour	function
+http_request	function
+hypot	function
+if	function
+iff	function
+ifnull	function
+ilike	operator
+in	predicate
+initcap	function
+inline	table-valued generator function
+inline_outer	table-valued generator function
+input_file_block_length	function
+input_file_block_start	function
+input_file_name	function
+instr	function
+int	function
+ip_as_binary	function
+ip_as_string	function
+ip_cidr	function
+ip_cidr_contains	function
+ip_host	function
+ip_network	function
+ip_network_first	function
+ip_network_last	function
+ip_prefix_length	function
+ip_version	function
+is	distinct operator; false operator; null operator; true operator
+is_account_group_member	function
+is_member	function
+is_valid_utf8	function
+is_variant_null	function
+isearch	function
+isnan	function
+isnotnull	function
+isnull	function
+jaro_winkler_similarity	function
+java_method	function
+json_array_length	function
+json_object_keys	function
+json_tuple	table-valued generator function
+kll_merge_agg_bigint	aggregate function
+kll_merge_agg_double	aggregate function
+kll_merge_agg_float	aggregate function
+kll_sketch_agg_bigint	aggregate function
+kll_sketch_agg_double	aggregate function
+kll_sketch_agg_float	aggregate function
+kll_sketch_get_n_bigint	function
+kll_sketch_get_n_double	function
+kll_sketch_get_n_float	function
+kll_sketch_get_quantile_bigint	function
+kll_sketch_get_quantile_double	function
+kll_sketch_get_quantile_float	function
+kll_sketch_get_rank_bigint	function
+kll_sketch_get_rank_double	function
+kll_sketch_get_rank_float	function
+kll_sketch_merge_bigint	function
+kll_sketch_merge_double	function
+kll_sketch_merge_float	function
+kll_sketch_to_string_bigint	function
+kll_sketch_to_string_double	function
+kll_sketch_to_string_float	function
+kurtosis	aggregate function
+lag	analytic window function
+last	aggregate function; function for MATCH_RECOGNIZE
+last_day	function
+last_snapshot_version	function
+last_value	aggregate function
+lcase	function
+lead	analytic window function
+least	function
+left	function
+len	function
+length	function
+levenshtein	function
+like	operator
+list_files	table-valued function
+list_secrets	table function
+listagg	aggregate function
+ln	function
+localtime	function
+localtimestamp	function
+locate	function
+log	function
+log10	function
+log1p	function
+log2	function
+lower	function
+lpad	function
+ltrim	function
+luhn_check	function
+make_date	function
+make_dt_interval	function
+make_interval	function
+make_time	function
+make_timestamp	function
+make_timestamp_ltz	function
+make_timestamp_ntz	function
+make_valid_utf8	function
+make_ym_interval	function
+map	function
+map_concat	function
+map_contains_key	function
+map_entries	function
+map_filter	function
+map_from_arrays	function
+map_from_entries	function
+map_keys	function
+map_values	function
+map_zip_with	function
+mask	function
+match_number	function
+max	aggregate function
+max_by	aggregate function
+md5	function
+mean	aggregate function
+measure	aggregate function
+median	aggregate function
+min	aggregate function
+min_by	aggregate function
+minute	function
+mod	function
+mode	aggregate function
+monotonically_increasing_id	function
+month	function
+monthname	function
+months_between	function
+named_struct	function
+nanvl	function
+negative	function
+next	function for MATCH_RECOGNIZE
+next_day	function
+not	operator
+now	function
+nth_value	analytic window function
+ntile	ranking window function
+nullif	function
+nullifzero	function
+nvl	function
+nvl2	function
+octet_length	function
+or	operator
+overlay	function
+parse_json	function
+parse_timestamp	function
+parse_url	function
+percent_rank	ranking window function
+percentile	aggregate function
+percentile_approx	aggregate function
+percentile_cont	aggregate function
+percentile_disc	aggregate function
+pi	function
+pmod	function
+posexplode	table-valued generator function
+posexplode_outer	table-valued generator function
+position	function
+positive	function
+pow	function
+power	function
+prev	function for MATCH_RECOGNIZE
+printf	function
+quarter	function
+radians	function
+raise_error	function
+rand	function
+randn	function
+random	function
+randstr	function
+range	table-valued function
+rank	ranking window function
+read_files	table-valued function
+read_kafka	table-valued function
+read_kinesis	streaming table-valued function
+read_pubsub	streaming table-valued function
+read_pulsar	streaming table-valued function
+read_state_metadata	table-valued function
+read_statestore	table-valued function
+reduce	function
+reflect	function
+regexp	operator
+regexp_count	function
+regexp_extract	function
+regexp_extract_all	function
+regexp_instr	function
+regexp_like	function
+regexp_replace	function
+regexp_substr	function
+regr_avgx	aggregate function
+regr_avgy	aggregate function
+regr_count	aggregate function
+regr_intercept	aggregate function
+regr_r2	aggregate function
+regr_slope	aggregate function
+regr_sxx	aggregate function
+regr_sxy	aggregate function
+regr_syy	aggregate function
+remote_query	table-valued function
+repeat	function
+replace	function
+reverse	function
+right	function
+rint	function
+rlike	operator
+round	function
+row_number	ranking window function
+rpad	function
+rtrim	function
+schema_of_avro	function
+schema_of_csv	function
+schema_of_json	function
+schema_of_json_agg	aggregate function
+schema_of_variant	function
+schema_of_variant_agg	aggregate function
+schema_of_xml	function
+search	function
+sec	function
+second	function
+secret	function
+sentences	function
+sequence	function
+session_user	function
+session_window	grouping expression
+sha	function
+sha1	function
+sha2	function
+shiftleft	function
+shiftright	function
+shiftrightunsigned	function
+shuffle	function
+sign	function
+signum	function
+sin	function
+sinh	function
+size	function
+skewness	aggregate function
+slice	function
+smallint	function
+some	aggregate function
+sort_array	function
+soundex	function
+space	function
+spark_partition_id	function
+split	function
+split_part	function
+sql_keywords	function
+sqrt	function
+st_addpoint	function
+st_area	function
+st_asbinary	function
+st_asewkb	function
+st_asewkt	function
+st_asgeojson	function
+st_astext	function
+st_aswkb	function
+st_aswkt	function
+st_azimuth	function
+st_boundary	function
+st_buffer	function
+st_centroid	function
+st_closestpoint	function
+st_collect	function
+st_concavehull	function
+st_contains	function
+st_convexhull	function
+st_covers	function
+st_difference	function
+st_dimension	function
+st_disjoint	function
+st_distance	function
+st_distancesphere	function
+st_distancespheroid	function
+st_dump	function
+st_dwithin	function
+st_endpoint	function
+st_envelope	function
+st_envelope_agg	function
+st_equals	function
+st_estimatesrid	function
+st_exteriorring	function
+st_flipcoordinates	function
+st_force2d	function
+st_geogfromewkt	function
+st_geogfromgeojson	function
+st_geogfromtext	function
+st_geogfromwkb	function
+st_geogfromwkt	function
+st_geohash	function
+st_geometryn	function
+st_geometrytype	function
+st_geomfromewkb	function
+st_geomfromewkt	function
+st_geomfromgeohash	function
+st_geomfromgeojson	function
+st_geomfromtext	function
+st_geomfromwkb	function
+st_geomfromwkt	function
+st_interiorringn	function
+st_intersection	function
+st_intersects	function
+st_isempty	function
+st_isvalid	function
+st_length	function
+st_m	function
+st_makeenvelope	function
+st_makeline	function
+st_makepoint	function
+st_makepolygon	function
+st_multi	function
+st_ndims	function
+st_npoints	function
+st_nrings	function
+st_numgeometries	function
+st_numinteriorrings	function
+st_numpoints	function
+st_perimeter	function
+st_point	function
+st_pointfromgeohash	function
+st_pointn	function
+st_pointonsurface	function
+st_removepoint	function
+st_reverse	function
+st_rotate	function
+st_scale	function
+st_setpoint	function
+st_setsrid	function
+st_simplify	function
+st_srid	function
+st_startpoint	function
+st_touches	function
+st_transform	function
+st_translate	function
+st_union	function
+st_union_agg	function
+st_within	function
+st_x	function
+st_xmax	function
+st_xmin	function
+st_y	function
+st_ymax	function
+st_ymin	function
+st_z	function
+st_zmax	function
+st_zmin	function
+stack	table-valued generator function
+startswith	function
+std	aggregate function
+stddev	aggregate function
+stddev_pop	aggregate function
+stddev_samp	aggregate function
+str_to_map	function
+string	function
+string_agg	aggregate function
+struct	function
+substr	function
+substring	function
+substring_index	function
+sum	aggregate function
+table_changes	table-valued function
+tan	function
+tanh	function
+theta_difference	function
+theta_intersection	function
+theta_intersection_agg	aggregate function
+theta_sketch_agg	aggregate function
+theta_sketch_estimate	function
+theta_union	function
+theta_union_agg	aggregate function
+time	function
+time_bucket	function
+time_diff	function
+time_from_micros	function
+time_from_millis	function
+time_from_seconds	function
+time_to_micros	function
+time_to_millis	function
+time_to_seconds	function
+time_trunc	function
+timediff	function
+timestamp	function
+timestamp_micros	function
+timestamp_millis	function
+timestamp_nanos	function
+timestamp_seconds	function
+timestampadd	function
+timestampdiff	function
+tinyint	function
+to_avro	function
+to_binary	function
+to_char	function
+to_csv	function
+to_date	function
+to_file	function
+to_geography	function
+to_geometry	function
+to_json	function
+to_number	function
+to_protobuf	function
+to_time	function
+to_timestamp	function
+to_timestamp_ltz	function
+to_timestamp_ntz	function
+to_unix_timestamp	function
+to_utc_timestamp	function
+to_varchar	function
+to_variant_object	function
+to_xml	function
+transform	function
+transform_keys	function
+transform_values	function
+translate	function
+trim	function
+trunc	function
+try_add	function
+try_aes_decrypt	function
+try_avg	aggregate function
+try_cast	function
+try_copy_file	function
+try_divide	function
+try_element_at	function
+try_ip_as_binary	function
+try_ip_as_string	function
+try_ip_cidr	function
+try_ip_host	function
+try_make_interval	function
+try_make_timestamp	function
+try_make_timestamp_ltz	function
+try_make_timestamp_ntz	function
+try_mod	function
+try_multiply	function
+try_parse_json	function
+try_parse_timestamp	function
+try_reflect	function
+try_secret	function
+try_subtract	function
+try_sum	aggregate function
+try_to_binary	function
+try_to_date	function
+try_to_file	function
+try_to_geography	function
+try_to_geometry	function
+try_to_number	function
+try_to_time	function
+try_to_timestamp	function
+try_url_decode	function
+try_validate_utf8	function
+try_variant_get	function
+try_zstd_decompress	function
+tuple_difference_double	function
+tuple_difference_integer	function
+tuple_difference_theta_double	function
+tuple_difference_theta_integer	function
+tuple_intersection_agg_double	aggregate function
+tuple_intersection_agg_integer	aggregate function
+tuple_intersection_double	function
+tuple_intersection_integer	function
+tuple_intersection_theta_double	function
+tuple_intersection_theta_integer	function
+tuple_sketch_agg_double	aggregate function
+tuple_sketch_agg_integer	aggregate function
+tuple_sketch_estimate_double	function
+tuple_sketch_estimate_integer	function
+tuple_sketch_summary_double	function
+tuple_sketch_summary_integer	function
+tuple_sketch_theta_double	function
+tuple_sketch_theta_integer	function
+tuple_union_agg_double	aggregate function
+tuple_union_agg_integer	aggregate function
+tuple_union_double	function
+tuple_union_integer	function
+tuple_union_theta_double	function
+tuple_union_theta_integer	function
+typeof	function
+ucase	function
+unbase64	function
+unhex	function
+uniform	function
+unix_date	function
+unix_micros	function
+unix_millis	function
+unix_nanos	function
+unix_seconds	function
+unix_timestamp	function
+upper	function
+url_decode	function
+url_encode	function
+user	function
+uuid	function
+validate_utf8	function
+var_pop	aggregate function
+var_samp	aggregate function
+variance	aggregate function
+variant_explode	table-valued function
+variant_explode_outer	table-valued function
+variant_get	function
+vector_avg	aggregate function
+vector_cosine_similarity	function
+vector_inner_product	function
+vector_l2_distance	function
+vector_norm	function
+vector_normalize	function
+vector_search	function
+vector_sum	aggregate function
+version	function
+weekday	function
+weekofyear	function
+width_bucket	function
+window	grouping expression
+window_time	function
+xpath	function
+xpath_boolean	function
+xpath_double	function
+xpath_float	function
+xpath_int	function
+xpath_long	function
+xpath_number	function
+xpath_short	function
+xpath_string	function
+xxhash64	function
+year	function
+zeroifnull	function
+zip_with	function
+zstd_compress	function
+zstd_decompress	function

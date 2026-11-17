@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
+import { engineName, TOOL_NAMES } from "../../src/domain/actions.js"
+import { POLICY_DISCLOSURE, WRITE_DISCLOSURE } from "../../src/domain/contract.js"
 import { parseSkill, SKILL_IDS } from "../../src/skills.js"
-import { WRITE_DISCLOSURE } from "../../src/disclosures.js"
 
 const text = (id: string) => readFileSync(new URL(`../../skills/${id}/SKILL.md`, import.meta.url), "utf8")
 
@@ -18,13 +19,17 @@ describe("skills", () => {
       expect(skill.content.split("\n")[0]).toMatch(/^If Databricks' tools are absent, run `\/connect` .*, or on Jelly call jelly_connection_request\.$/)
     })
 
-    it(`${id} names no tool yet`, () => {
-      expect(parseSkill(id, text(id)).content.match(/\bdatabricks_[a-z][a-z0-9_]*/g) ?? []).toEqual([])
+    it(`${id} names only tools that exist`, () => {
+      const named = parseSkill(id, text(id)).content.match(/\bdatabricks_[a-z][a-z0-9_]*/g) ?? []
+      const real = new Set(TOOL_NAMES.map(engineName))
+      expect(named.filter((name) => !real.has(name))).toEqual([])
     })
   }
 
-  it("the working skill carries the write disclosure verbatim", () => {
-    expect(parseSkill("opencode-databricks", text("opencode-databricks")).content.replace(/\n> /g, " ").replace(/\n/g, " ")).toContain(WRITE_DISCLOSURE)
+  it("the working skill carries both disclosures verbatim", () => {
+    const body = parseSkill("opencode-databricks", text("opencode-databricks")).content.replace(/\n> /g, " ").replace(/\n/g, " ")
+    expect(body).toContain(WRITE_DISCLOSURE)
+    expect(body).toContain(POLICY_DISCLOSURE)
   })
 
   it("refuses a skill with an unknown frontmatter key", () => {

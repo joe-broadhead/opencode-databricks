@@ -1,11 +1,22 @@
 // The built plugin in an embedded OpenCode host. Nothing leaves the machine: close() fails the test if the host tried.
 import { afterAll, describe, expect, test } from "bun:test"
+import { Rpc } from "@opencode/plugin/rpc"
+import { RPC_METHODS } from "../../src/domain/actions.js"
+import { WRITE_DISCLOSURE } from "../../src/domain/contract.js"
 import { defaultRules } from "../../src/permissions.js"
 import { isStatus } from "../../src/rpc.js"
-import { WRITE_DISCLOSURE } from "../../src/disclosures.js"
+import { TOOLS_RPC_ID } from "../../src/tools-rpc.js"
 import { agentRules, cleanup, pluginState, startHost, status } from "./harness.js"
 
 afterAll(cleanup)
+
+/** The client side only names the methods: the plugin checks each input against the tool's own contract. */
+const open = {}
+const Tools = Rpc.define({
+  id: TOOLS_RPC_ID,
+  methods: Object.fromEntries(["describe", ...RPC_METHODS].map((name) => [name, { input: open, output: open, errors: { failed: open } }])),
+  events: {},
+})
 
 describe("the plugin in a host", () => {
   test("loads, inserts the default rules and answers status with no request off the machine", async () => {
@@ -17,7 +28,7 @@ describe("the plugin in a host", () => {
       expect(rules.slice(base + 1, base + 1 + defaultRules("all").length)).toEqual(defaultRules("all"))
       const answer = await status(host)
       expect(isStatus(answer)).toBe(true)
-      expect(answer).toMatchObject({ access: "all", writes: "without asking", disclosure: WRITE_DISCLOSURE, accounts: [{ alias: "work", mode: "interactive" }], tools: { declared: 0, built: 0 } })
+      expect(answer).toMatchObject({ access: "all", writes: "without asking", disclosure: WRITE_DISCLOSURE, accounts: [{ alias: "work", mode: "interactive" }], tools: { declared: 23, built: 1 } })
     } finally {
       await host.close()
     }
@@ -30,6 +41,22 @@ describe("the plugin in a host", () => {
       const base = rules.findIndex((rule) => rule.action === "*" && rule.resource === "*" && rule.effect === "allow")
       expect(rules.slice(base + 1, base + 1 + defaultRules("ask-changes").length)).toEqual(defaultRules("ask-changes"))
       expect(await status(host)).toMatchObject({ access: "ask-changes", writes: "ask", state: "not_configured" })
+    } finally {
+      await host.close()
+    }
+  }, 120_000)
+
+  test("serves the tools RPC: describe lists the reads, probe and saved_list; plan classifies SQL and sends nothing", async () => {
+    const host = await startHost({ options: { accounts: { work: { warehouse: "wh-small" } } } })
+    try {
+      const sessionID = (await (host.client.sessions as unknown as { create(input: unknown): Promise<{ id: string }> }).create({ location: host.location, agent: "build" })).id
+      const tools = host.probe().rpc(Tools) as unknown as Record<string, (input: unknown, options?: unknown) => Promise<unknown>>
+      const described = (await tools.describe!({ sessionID })) as { methods: { name: string }[] }
+      expect(described.methods.map((method) => method.name).sort()).toEqual([...RPC_METHODS].sort())
+      const planned = (await tools.plan!({ sessionID, input: { sql: "DROP TABLE main.sales.orders" } })) as Record<string, unknown>
+      expect(planned).toMatchObject({ state: "planned", category: "delete", commitWith: "databricks_delete" })
+      const read = (await tools.query!({ sessionID, input: { sql: "select 1" } })) as Record<string, unknown>
+      expect(read).toMatchObject({ error: "NOT_IMPLEMENTED" })
     } finally {
       await host.close()
     }

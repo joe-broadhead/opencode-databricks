@@ -21,6 +21,7 @@ describe("the source contract", () => {
     expect(lock.packages[`node_modules/${NAME}`]?.version).toBe(TAG.slice(1))
     expect(read("NOTICE")).toContain(`## ${NAME} ${TAG.slice(1)} (MIT)`)
     expect(read("src/tools-rpc.ts")).toContain(`tag ${TAG}`)
+    expect(read("docs/parser.md")).toContain("antlr4ng")
   })
 
   it("still exports the tools RPC entry points the plugin imports", () => {

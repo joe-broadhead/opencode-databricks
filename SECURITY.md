@@ -32,8 +32,9 @@ makes no request yet: the tools that call Databricks are not built.
 > At Allowed, the agent can change or delete anything your Databricks identity can, after a plan it makes itself.
 > For a hard limit, sign in with a read-only role.
 
-The plugin's read checks, when they arrive, are best-effort. Column masks and row filters set by your admins run their own functions
-on every read; Databricks enforces them, and the plugin cannot see them.
+The plugin's read checks (one wrapped query, the function allowlist, `system.builtin` qualification) are best-effort,
+over its own parse of Apache Spark's grammar. Column masks and row filters set by your admins run their own functions
+on every read; Databricks enforces them, and the plugin cannot see them. See [Safety](docs/safety.md).
 
 ### Untrusted content
 

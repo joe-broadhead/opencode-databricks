@@ -2,8 +2,8 @@
 
 This repository builds `@joe-broadhead/opencode-databricks`, an unofficial OpenCode plugin for Databricks: Unity
 Catalog, SQL warehouses, queries, jobs and saved results, over Databricks' REST APIs, with every change planned
-first. User docs: `README.md`, `docs/configuration.md`; contributor docs: `docs/architecture.md`,
-`CONTRIBUTING.md`.
+first. User docs: `README.md`, `docs/configuration.md`, `docs/safety.md`; contributor docs: `docs/architecture.md`,
+`docs/ownership.md`, `docs/parser.md`, `CONTRIBUTING.md`.
 
 ## Platform
 
@@ -27,8 +27,9 @@ contract's tools RPC).
 
 - **No silent warehouse start.** Every statement checks the warehouse first; starting needs `start: true`, the start
   policy and the `databricks.start` action.
-- **Read means read.** A read sends exactly one query in a fixed wrapper, through an allowlist of built-in functions.
-  The plugin's checks are best-effort; the identity's privileges are the only server-enforced read-only.
+- **Read means read.** A read sends exactly `SELECT * FROM (\n<sql>\n) AS oc_q`, with no `;`, through the function
+  allowlist (`src/domain/functions.ts`), with allowlisted calls qualified as `system.builtin.<name>`. The plugin's
+  checks are best-effort; the identity's privileges are the only server-enforced read-only, and the docs say so.
 - **Changes go plan, then commit.** `databricks_plan` sends no statement, never `EXPLAIN`. The parser's category is
   final; token rules only raise it.
 - **Every assert uses the dotted action** `databricks.<tool>`, the name Jelly declares. Asserted equals declared.
@@ -38,6 +39,10 @@ contract's tools RPC).
 
 ## Design
 
+- The tool table is `src/domain/actions.ts`; the schemas are `src/domain/contract.ts`; the errors are
+  `src/domain/errors.ts`. Change them only with a review of the contract (`docs/ownership.md`).
+- The SQL parser is generated from Spark's pinned grammar (`grammar/spark/PIN.json`) by `scripts/generate-parser.mjs`.
+  Never edit `src/sql/generated/`; `npm run check` regenerates and diffs it.
 - Permission defaults go through `ctx.agent.transform`, right after each agent's base `* * allow`. No permission hook
   decides them. User rules and saved approvals keep winning.
 - Transforms are synchronous and never throw.
@@ -45,8 +50,8 @@ contract's tools RPC).
 
 ## Package
 
-- No peer and no runtime dependencies: esbuild bundles zod and the source contract into `dist/index.js`. `NOTICE`
-  carries their licences.
+- No peer and no runtime dependencies: esbuild bundles zod, the antlr4ng runtime, the generated parser and the source
+  contract into `dist/index.js`. `NOTICE` carries their licences and Spark's.
 - Ship prebuilt `dist/` and no `.d.ts` files. No install, `prepare` or `prepack` scripts.
 - The shared kit files are byte-for-byte copies, pinned in `scripts/check-copies.mjs`. Change them in every plugin at
   once.

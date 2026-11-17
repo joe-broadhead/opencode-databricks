@@ -26,7 +26,7 @@ databricks account custom-app-integration create --json '{
 
 Add `jobs`, `workspace` or `files` to the scopes to allow those features. An app made in the account console with
 **All APIs** works with `scopes: "all-apis"`. App changes can take 30 minutes to apply. Signing in with a read-only
-role (`role`) is the only hard limit on what the agent can do.
+role (`role`) is the only hard limit on what the agent can do; see [Safety](safety.md).
 
 ## Options
 
@@ -60,8 +60,11 @@ An option that does not exist is refused with `OPTIONS_INVALID`.
 
 ## The default rules
 
-After each agent's base `* * allow`, the plugin inserts `databricks.*` with the change effect (allowed, asked,
-denied), so every action it does not classify is treated like a change. Your own rules after the block still win.
+After each agent's base `* * allow`, the plugin inserts: `databricks.*` with the change effect (so an action it does
+not know is treated like a change); then each read tool and `databricks.probe` allowed; `databricks.start` allowed at
+`all` and `read-only` and asked at `ask-changes`; then each change tool with the change effect (allowed, asked,
+denied). These are the effects Jelly gives the same actions. Your own rules after the block still win, such as
+`{ "action": "databricks.query", "resource": "work:table:*.hr.*", "effect": "deny" }`.
 
 ## Errors
 

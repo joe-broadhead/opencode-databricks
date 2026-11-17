@@ -1,8 +1,10 @@
 // One status, computed fresh on every call, behind the /databricks-status command and the RPC method the TUI view uses.
-// It makes no Databricks call: it reads the options and OpenCode's agents and skills.
+// Day 0 makes no Databricks call: it reads the options, OpenCode's agents and skills, and the registry. Package F
+// replaces `computeStatus` with the full status of design §14, keeping this file's registration.
 import type { Plugin } from "@opencode/plugin"
 import { type Access, DISPLAY_NAME, SUPPORTED_HOST, TESTED_HOSTS } from "./constants.js"
-import { POLICY_DISCLOSURE, WRITE_DISCLOSURE } from "./disclosures.js"
+import { TOOLS } from "./domain/actions.js"
+import { POLICY_DISCLOSURE, WRITE_DISCLOSURE } from "./domain/contract.js"
 import { DatabricksError } from "./domain/errors.js"
 import { isTestedHost } from "./host-version.js"
 import type { Options } from "./options.js"
@@ -48,7 +50,7 @@ export async function computeStatus(ctx: StatusContext, deps: StatusDeps): Promi
     disclosure: WRITE_DISCLOSURE,
     policies: POLICY_DISCLOSURE,
     accounts,
-    tools: { declared: 0, built: deps.built() },
+    tools: { declared: TOOLS.length, built: deps.built() },
     unguardedAgents: unguarded,
     ...(unguarded.length > 0 ? { permissionsBlock: defaultRules(access) } : {}),
     ...(shadowed.length > 0 ? { shadowedSkills: shadowed } : {}),

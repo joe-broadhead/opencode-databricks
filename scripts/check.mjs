@@ -31,11 +31,13 @@ const ABSENT_FIELDS = ["dependencies", "optionalDependencies", "bundleDependenci
 const LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall", "preprepare", "prepare", "postprepare", "prepublish", "prepublishOnly", "prepack", "postpack", "publish", "postpublish"]
 
 const stages = {
+  // The generated SQL parser and the built-in function list, regenerated into a temporary folder and compared byte for
+  // byte with the committed files (docs/parser.md).
+  parser: () => run("node", ["scripts/generate-parser.mjs", "--check"]) || run("node", ["scripts/generate-allowlist.mjs", "--check"]),
   typecheck: () => run("tsc", ["--noEmit", "-p", "tsconfig.json"]),
   // Vitest, as opencode-github runs its unit tests (vitest.config.ts defines __PLUGIN_VERSION__ as the build does).
   unit: () => run("vitest", ["run"]),
-  // The source contract's conformance kit over the declared sources. None is declared yet: test/conformance holds a
-  // placeholder until the contract declares them.
+  // The source contract over the declared sources: the declaration now; the kit's run over the sources with package E.
   conformance: () => run("bun", ["test", "./test/conformance"]),
   kit: () => run("node", ["--test", "scripts/release-kit.test.mjs"]),
   build: () => run("node", ["scripts/build.mjs"]),

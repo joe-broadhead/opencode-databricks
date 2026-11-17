@@ -6,8 +6,19 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
-- The repository scaffold, in the family's layout from opencode-specter on kit r4.1: the `jelly` declaration's header
-  lines, the build to two self-contained bundles, the shared kit and `scripts/check.mjs` as the one check gate, the
-  six-host test harness and the pack test, an original icon (not Databricks' mark), the `access` option and its
-  default rules, `/databricks-status` and the status RPC, the tools RPC transport, the error table, and the two skills
-  as outlines. No tools yet.
+- The repository scaffold, in the family's layout: the `jelly` declaration, the build to two self-contained bundles,
+  the shared kit (r4.1) and `scripts/check.mjs` as the one check gate.
+- The contract: 23 tools under the `databricks` namespace with their input and output schemas, each asserting its
+  dotted action `databricks.<tool>`, and the permission-only actions `databricks.start` and `databricks.probe`.
+- The error table, in the family form, with the README and docs rows generated from it.
+- A SQL parser generated from Apache Spark v4.3.0's grammar with antlr-ng, its Java actions ported by a checked table,
+  regenerated and compared on every check, and a differential fuzz against Spark's own parser.
+- The read path's local rules: one query in a fixed wrapper, no `;`, no nested comments or line-continued comments,
+  no `IDENTIFIER(…)`, no session statements, and every invocation through the built-in allowlist, with allowlisted
+  calls qualified as `system.builtin.<name>` and keyword forms held to the default SQL path.
+- A user function in a read must be named in full (`catalog.schema.function`): a shorter name resolves along the SQL
+  path (`FUNCTION_NAME_PARTIAL`). `LATERAL VIEW` generators stay unqualified, as Spark requires, and need the default
+  path.
+- The statement table that gives every change its plan category, `databricks_plan` for SQL, and single-use plans that
+  commit only through their category's tool.
+- The local spend ledger, the `access` option's default rules, the `sources` declaration, and the status skeleton.
