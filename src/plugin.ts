@@ -12,7 +12,7 @@ import { checkHost } from "./host-version.js"
 import { createLedger } from "./ledger.js"
 import { loadOptions } from "./options.js"
 import { registerPermissionDefaults } from "./permissions.js"
-import type { AuthPort, DatabricksPort, PermissionPort } from "./ports.js"
+import type { AuthPort, DatabricksPort, PermissionPort, ReadGuardPort } from "./ports.js"
 import { reasonOf } from "./redact.js"
 import { type Deps, HANDLERS } from "./registry.js"
 import { registerSkills, SKILL_IDS, skillPath } from "./skills.js"
@@ -42,6 +42,10 @@ export function placeholderAuth(): AuthPort {
 
 export function placeholderDatabricks(): DatabricksPort {
   return new Proxy({} as DatabricksPort, { get: (_target, name) => notBuilt(`The Databricks client (${String(name)})`) })
+}
+
+export function placeholderReads(): ReadGuardPort {
+  return { prepare: async () => notBuilt("The read path")() }
 }
 
 export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; readonly databricks?: () => DatabricksPort } = {}) {
@@ -74,6 +78,7 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
         access: options.access,
         auth: (seam.auth ?? placeholderAuth)(),
         databricks: (seam.databricks ?? placeholderDatabricks)(),
+        reads: placeholderReads(),
         ledger: createLedger(),
         plans: createPlanStore({ ttlSeconds: options.planTtlSeconds }),
         permission,

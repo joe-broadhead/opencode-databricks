@@ -4,7 +4,8 @@ import type { Options } from "../../src/options.js"
 import { loadOptions } from "../../src/options.js"
 import { createPlanStore } from "../../src/domain/plans.js"
 import { DatabricksError } from "../../src/domain/errors.js"
-import type { AccountInfo, AuthPort, Charge, Clock, DatabricksPort, LedgerPort, PermissionPort, PermissionRequest, SpendTotals, Token } from "../../src/ports.js"
+import type { AccountInfo, AuthPort, Charge, Clock, DatabricksPort, LedgerPort, PermissionPort, PermissionRequest, PreparedRead, ReadGuardPort, ReadRequest, SpendTotals, Token } from "../../src/ports.js"
+import { analyzeRead } from "../../src/sql/analyze.js"
 import type { Deps } from "../../src/registry.js"
 
 export const FAKE_HOST = "https://fake-workspace.cloud.databricks.com"
@@ -56,6 +57,20 @@ export class RecordingPermission implements PermissionPort {
   }
 }
 
+/**
+ * The read path's fake: `analyzeRead` for real, then a running warehouse and no Unity Catalog checks. Records each
+ * request. Package E builds `saved_read` and `save` against it while package C builds the real one.
+ */
+export class FakeReads implements ReadGuardPort {
+  readonly requests: ReadRequest[] = []
+  async prepare(request: ReadRequest): Promise<PreparedRead> {
+    this.requests.push(request)
+    const analysis = analyzeRead(request.sql)
+    if (!analysis.ok) throw new DatabricksError(analysis.refusal.code, analysis.refusal.detail, analysis.refusal.next)
+    return { sent: analysis.sent, warehouseId: request.warehouse ?? "wh-small", started: false, tables: analysis.tables.map((table) => table.parts.join(".")), enforcement: "identity", warnings: [] }
+  }
+}
+
 export class MemoryLedger implements LedgerPort {
   readonly charges: Charge[] = []
   async totals(account: string, sessionId?: string): Promise<SpendTotals> {
@@ -82,6 +97,7 @@ export interface FakeDeps {
   readonly databricks: ReturnType<typeof fakeDatabricks>
   readonly auth: FakeAuth
   readonly ledger: MemoryLedger
+  readonly reads: FakeReads
   readonly clock: ReturnType<typeof fakeClock>
 }
 
@@ -91,9 +107,10 @@ export function fakeDeps(input: { options?: Partial<Options> | Record<string, un
   const databricks = fakeDatabricks()
   const auth = new FakeAuth()
   const ledger = new MemoryLedger()
+  const reads = new FakeReads()
   const clock = fakeClock()
-  const deps: Deps = { options, access: options.access, auth, databricks: databricks.port, ledger, plans: createPlanStore({ ttlSeconds: options.planTtlSeconds, now: clock.now }), permission, clock }
-  return { deps, permission, databricks, auth, ledger, clock }
+  const deps: Deps = { options, access: options.access, auth, databricks: databricks.port, reads, ledger, plans: createPlanStore({ ttlSeconds: options.planTtlSeconds, now: clock.now }), permission, clock }
+  return { deps, permission, databricks, auth, ledger, reads, clock }
 }
 
 export const call = (id = "call_1", sessionID = "ses_test", agent = "build") => ({ sessionID, agent, messageID: "msg_test", id, signal: new AbortController().signal })

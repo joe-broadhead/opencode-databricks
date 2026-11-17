@@ -16,7 +16,7 @@ import { DatabricksError } from "./domain/errors.js"
 import type { PlanStorePort } from "./domain/plans.js"
 import { classifyPlan } from "./domain/statements.js"
 import type { Options } from "./options.js"
-import type { AuthPort, Clock, DatabricksPort, LedgerPort, PermissionPort } from "./ports.js"
+import type { AuthPort, Clock, DatabricksPort, LedgerPort, PermissionPort, ReadGuardPort } from "./ports.js"
 import type { Call, Handler, Handlers } from "./tool-spec.js"
 
 export interface Deps {
@@ -24,6 +24,8 @@ export interface Deps {
   readonly access: Access
   readonly auth: AuthPort
   readonly databricks: DatabricksPort
+  /** The shared read path (package C). */
+  readonly reads: ReadGuardPort
   readonly ledger: LedgerPort
   readonly plans: PlanStorePort
   readonly permission: PermissionPort

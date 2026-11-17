@@ -250,7 +250,8 @@ export function classifyPlan(sql: string): PlanResult {
     const read = analyzeRead(statement)
     if (read.ok && read.userFunctions.length === 0) return { ok: false, code: decided.refuse, detail: decided.why }
     // IDENTIFIER is allowed in a plan (it sits in the preview, unresolved) and raises it to run below.
-    if (!read.ok && read.refusal.code !== "NEEDS_PLAN" && read.refusal.code !== "IDENTIFIER_REFUSED") return { ok: false, code: read.refusal.code, detail: read.refusal.detail }
+    // A function named by one or two parts is a plan's to run: its target is not known until Databricks resolves it.
+    if (!read.ok && read.refusal.code !== "NEEDS_PLAN" && read.refusal.code !== "IDENTIFIER_REFUSED" && read.refusal.code !== "FUNCTION_NAME_PARTIAL") return { ok: false, code: read.refusal.code, detail: read.refusal.detail }
     const category = read.ok ? "run" : (read.refusal.category ?? "run")
     return finish({ category, kind, tables, functions, raisedBy, notes: ["A query that calls a function with effects outside the read path."] })
   }

@@ -59,3 +59,17 @@ The `fuzz` job in `.github/workflows/ci.yml` runs it with Java 17; `npm run fuzz
 
 The fuzz proves the port equals **open-source Spark** at the pin. It cannot prove equality with Databricks' own parser,
 which is closed: one more reason the checks past the wrapper are best-effort (see [Safety](safety.md)).
+
+## What the fuzz does not cover, and the live checks
+
+- **AstBuilder.** The fuzz compares ANTLR's output only. Spark's `AstBuilder` rejects some texts the grammar
+  accepts, such as a `LATERAL VIEW` generator with three name parts. Running Spark's `AstBuilder` (the
+  spark-catalyst jar and its Scala dependencies) in `test/fuzz/Harness.java` is a follow-up; until then such rules
+  are encoded by hand and tested (`test/unit/functions.test.ts`).
+- **Live checks this contract depends on** (on a real workspace, design §15.4):
+  - `system.builtin.<name>` is accepted for every allowlisted name: scalar, aggregate, window, and table functions
+    and generators in `FROM`;
+  - `LATERAL VIEW` with a built-in, written unqualified, under the default path;
+  - the format of `current_path()`, and the path a statement sent alone through the Statement Execution API runs
+    under.
+

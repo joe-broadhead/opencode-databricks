@@ -30,12 +30,16 @@ anything is sent:
    `IDENTIFIER(…)`; no positional `?`; no `TRANSFORM … USING`; no session statement (`SET`, `SET PATH`, `USE`,
    `DECLARE`, temporary objects).
 2. **Functions.** Every call — in `SELECT`, in `FROM`, in `LATERAL VIEW` — is an allowlisted built-in, or a Unity
-   Catalog SQL function whose body passes the same checks. Everything else needs a plan. `secret`, `try_secret` and
+   Catalog SQL function named in full (`catalog.schema.function`) whose body passes the same checks. A function that
+   is not a built-in, named by one or two parts, is refused (`FUNCTION_NAME_PARTIAL`): Databricks would look it up
+   along the SQL path, where `system.builtin` and `system.ai` come first, not where the plugin checked it. Everything
+   else needs a plan. `secret`, `try_secret` and
    `list_secrets` are refused everywhere; `reflect` and `java_method` too.
-3. **Qualified built-ins.** Each allowlisted call is sent as `system.builtin.<name>`. Databricks resolves a
+3. **Qualified built-ins.** Each allowlisted call is sent as `system.builtin.<name>`, except a `LATERAL VIEW`
+   generator, which Spark accepts with at most two name parts: it is sent as written and needs the default path. Databricks resolves a
    three-part name exactly, so a function of the same name in your schema, or a changed SQL path, cannot stand in for
    it. Keyword forms (`EXTRACT`, `TRIM(BOTH … FROM …)`, `POSITION(… IN …)`, `SUBSTRING(… FROM …)`, `BETWEEN`,
-   `FIRST(… IGNORE NULLS)`) cannot be qualified, so a read using one runs only while the workspace's SQL path keeps
+   `FIRST(… IGNORE NULLS)`) and `LATERAL VIEW` generators cannot be qualified, so a read using one runs only while the workspace's SQL path keeps
    `system.builtin` before every user schema (`PATH_NOT_DEFAULT` otherwise). `current_date`, `current_timestamp`
    and `current_user` resolve before the path, as Databricks documents.
 4. **The wrapper.** The statement sent is exactly `SELECT * FROM (\n<sql>\n) AS oc_q`. With `wait` at most 50

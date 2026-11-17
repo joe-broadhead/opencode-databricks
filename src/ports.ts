@@ -5,6 +5,8 @@
  * - `DatabricksPort` (package B builds it over `fetch`): Databricks' REST calls, typed. Every call names its operation
  *   (src/domain/actions.ts), so the scope check (`AUTH_SCOPE_MISSING`) and the operation assert run before it.
  * - `AuthPort` (package A): an access token for an account and the scopes it needs.
+ * - `ReadGuardPort` (package C, `src/guards/read.ts`): design §5.1 steps 3–7 after `analyzeRead`, shared by every read
+ *   tool and by package E's `saved_read` and `save`, which build against its fake (review #1, LOW 6).
  * - `LedgerPort` (Day 0, src/ledger.ts): the spend ledger.
  * - `PlanStorePort` (Day 0, src/domain/plans.ts): single-use plans.
  * - `PermissionPort`: OpenCode's `ctx.permission.assert`, so a tool asserts its dotted action before any call.
@@ -245,6 +247,44 @@ export interface DatabricksPort {
   listDirectory(account: string, path: string, signal: AbortSignal): Promise<readonly { readonly path: string; readonly isDirectory: boolean; readonly size?: number; readonly modifiedAt?: number }[]>
   /** An external link's bytes, fetched without an Authorization header, from an allowed storage host only. */
   fetchLink(link: ExternalLink, signal: AbortSignal): Promise<ReadableStream<Uint8Array>>
+}
+
+// ── the read path, shared (package C) ────────────────────────────────────
+
+export interface ReadRequest {
+  readonly account: string
+  readonly sql: string
+  readonly params?: readonly StatementParameter[]
+  readonly warehouse?: string
+  readonly catalog?: string
+  readonly schema?: string
+  /** `start: true` from the call; never set by a source. */
+  readonly start?: boolean
+  /** The saved source: refuse unless the warehouse is already RUNNING (design §11.3). */
+  readonly runningOnly?: boolean
+  /** The calling tool, for its table asserts (`databricks.<tool>` on `<account>:table:…`). */
+  readonly tool: string
+  readonly sessionID: string
+  readonly messageID?: string
+  readonly callID?: string
+}
+
+/** A read that passed §5.1 steps 1–5: the exact text to send and where. Step 6 (the submit) is the caller's. */
+export interface PreparedRead {
+  /** `analyzeRead(sql).sent`, unchanged. */
+  readonly sent: string
+  readonly warehouseId: string
+  /** This call started the warehouse (STARTED_WAREHOUSE). */
+  readonly started: boolean
+  /** Resolved tables, `catalog.schema.table`. */
+  readonly tables: readonly string[]
+  readonly enforcement: "role" | "role-requested" | "identity" | "service-principal"
+  readonly warnings: readonly { readonly code: string; readonly message: string }[]
+}
+
+export interface ReadGuardPort {
+  /** Refuses with the read path's codes (NEEDS_PLAN, PATH_NOT_DEFAULT, FENCED, WAREHOUSE_STOPPED, …), or prepares. */
+  prepare(request: ReadRequest, signal: AbortSignal): Promise<PreparedRead>
 }
 
 // ── the spend ledger (Day 0) ─────────────────────────────────────────────

@@ -37,6 +37,8 @@ export interface Refusal {
   readonly detail: string
   /** For NEEDS_PLAN: the category the plan would take. */
   readonly category?: Category
+  /** A next step more exact than the code's own, in the plugin's words. */
+  readonly next?: string
 }
 
 export type InvocationNode = "functionCall" | "tableFunctionCall" | "lateralView"
@@ -62,7 +64,11 @@ export interface TableReference {
   readonly maybeCte: boolean
 }
 
-/** Something the SQL path decides by name: a keyword form that becomes a named call, `count(*)`, or an unqualified table. */
+/**
+ * Something the SQL path decides by name: a keyword form that becomes a named call, or a `LATERAL VIEW` generator
+ * (sent unqualified, because Spark's AstBuilder takes at most two parts there; reported as a keyword form), `count(*)`,
+ * or an unqualified table.
+ */
 export interface PathSensitive {
   readonly kind: "keyword-form" | "count-star" | "table"
   readonly name: string
@@ -77,7 +83,11 @@ export interface ReadAnalysis {
   /** The exact statement text to send: `wrap(rewritten)`. */
   readonly sent: string
   readonly invocations: readonly Invocation[]
-  /** Scalar calls the allowlist does not hold: Unity Catalog functions for §5.4, or NEEDS_PLAN if unresolvable. */
+  /**
+   * Scalar calls the allowlist does not hold, each written with its full three-part name (review #1, M2: a one- or
+   * two-part name is refused, because Databricks resolves it along PATH, not where package C would check it). Sent as
+   * written; package C checks each under §5.4, or answers NEEDS_PLAN.
+   */
   readonly userFunctions: readonly Invocation[]
   readonly tables: readonly TableReference[]
   /** The keyword forms used, by context name (KEYWORD_FORMS). */
@@ -123,6 +133,10 @@ export function textRules(sql: string, options: { allowSemicolons?: boolean; all
     }
     // A backslash before a line break inside the comment (Spark already continued it), before the comment's own line
     // break, or at the very end of the text (the wrapper's line break would continue it).
+    // U+0085, U+000B and U+000C end a line for some readers; Spark keeps them in the comment (review #1, LOW 3).
+    if (token.type === SqlBaseLexer.SIMPLE_COMMENT && /[\u0085\u000b\u000c]/u.test(text)) {
+      return { code: "STATEMENT_NOT_READ", detail: "A -- comment holds U+0085, a vertical tab or a form feed, which some readers treat as a line break." }
+    }
     if (token.type === SqlBaseLexer.SIMPLE_COMMENT && /\\(?:\r|\n|$)/u.test(text)) {
       return { code: "STATEMENT_NOT_READ", detail: "A -- comment has a backslash before a line break, which continues it onto the next line in Spark." }
     }
@@ -182,6 +196,9 @@ function functionNameParts(ctx: FunctionNameContext): string[] | undefined {
   return qualified ? nameParts(qualified) : undefined
 }
 
+/** `<format>.\`<path>\`` reads files directly (review #1, LOW 4): the formats Spark and Databricks read by path. */
+export const PATH_FORMATS: ReadonlySet<string> = new Set(["delta", "parquet", "json", "csv", "text", "orc", "avro", "binaryfile", "xml"])
+
 export interface Walk {
   readonly invocations: Invocation[]
   readonly tables: TableReference[]
@@ -231,7 +248,8 @@ export function walk(tree: ParserRuleContext): Walk {
       const ref = descendants(ctx, (child) => ruleName(child) === "multipartIdentifier")[0]
       if (ref) {
         const parts = nameParts(ref)
-        result.tables.push({ parts, node: tableNode, pathRead: parts.some((part) => /[/:\\]/u.test(part)), maybeCte: parts.length === 1 && ctes.has(parts[0]!) })
+        const pathRead = (parts.length === 2 && PATH_FORMATS.has(parts[0]!)) || parts.some((part) => /[/:\\]/u.test(part))
+        result.tables.push({ parts, node: tableNode, pathRead, maybeCte: parts.length === 1 && ctes.has(parts[0]!) })
       }
     }
     for (const child of ctx.children) visit(child)
@@ -272,17 +290,22 @@ export const SESSION_STATEMENTS: ReadonlySet<string> = new Set([
   "ManageResourceContext",
 ])
 
-const SEVERITY: Readonly<Record<string, number>> = { SECRET_FUNCTION_REFUSED: 0, FUNCTION_REFUSED: 1, IDENTIFIER_REFUSED: 2, SQL_INVALID: 3, NEEDS_PLAN: 4 }
+const SEVERITY: Readonly<Record<string, number>> = { SECRET_FUNCTION_REFUSED: 0, FUNCTION_REFUSED: 1, IDENTIFIER_REFUSED: 2, SQL_INVALID: 3, NEEDS_PLAN: 4, SQL_UNSUPPORTED: 5, FUNCTION_NAME_PARTIAL: 6 }
 
 /** The first refusal by severity: a secret before a refused function before anything that only needs a plan. */
 function worst(refusals: readonly Refusal[]): Refusal | undefined {
   return [...refusals].sort((a, b) => (SEVERITY[a.code] ?? 9) - (SEVERITY[b.code] ?? 9))[0]
 }
 
-/** Every allowlisted, unqualified, explicit built-in call, qualified as `system.builtin.<name>` (LOW 3). */
+/**
+ * Every allowlisted, unqualified, explicit built-in call, qualified as `system.builtin.<name>` (LOW 3). Not a
+ * `LATERAL VIEW` generator: Spark v4.3.0's AstBuilder (`withGenerate` → `visitFunctionName`) takes only one or two
+ * parts there, so it stays as written and is path-sensitive instead (review #1, M1). Not `count(*)`, which AstBuilder
+ * rewrites by its bare name.
+ */
 export function qualifyBuiltins(sql: string, invocations: readonly Invocation[]): string {
   const edits = invocations
-    .filter((call) => call.decision.kind === "builtin" && call.parts.length === 1 && !call.countStar)
+    .filter((call) => call.decision.kind === "builtin" && call.parts.length === 1 && !call.countStar && call.node !== "lateralView")
     .map((call) => {
       const name = call.decision.name
       return { start: call.start, stop: call.stop, text: `${PATH_RULE.qualifier}.${isKeyword(name) ? `\`${name}\`` : name}` }
@@ -300,7 +323,10 @@ export function analyzeRead(input: string): ReadResult {
   if (textRefusal) return { ok: false, refusal: textRefusal }
   const sql = stripTrailingSemicolon(input)
   const parsed = parseStatement(sql)
-  if (!parsed.ok || !parsed.tree) return refuse("SQL_UNSUPPORTED", "The pinned Spark grammar cannot parse this text.")
+  if (!parsed.ok || !parsed.tree) {
+    if (/\bfrom\s+table\s*\(/iu.test(sql)) return { ok: false, refusal: { code: "SQL_UNSUPPORTED", detail: "TABLE(f(…)) in FROM is not in the pinned Spark grammar.", next: "Write FROM f(…) instead." } }
+    return refuse("SQL_UNSUPPORTED", "The pinned Spark grammar cannot parse this text.")
+  }
   const kind = statementKind(parsed)
   if (SESSION_STATEMENTS.has(kind)) return refuse("SESSION_STATEMENT_REFUSED", "Session statements such as SET, SET PATH and USE are refused.")
   if (kind !== "StatementDefaultContext") return refuse("STATEMENT_NOT_READ", "The text is a statement, not a query.")
@@ -310,6 +336,10 @@ export function analyzeRead(input: string): ReadResult {
     const decision = call.decision
     if (decision.kind === "refused") refusals.push({ code: decision.code, detail: `${decision.name} is not allowed in a read: ${decision.why}`, ...(decision.category ? { category: decision.category } : {}) })
     else if (decision.kind === "unknown" && call.position === "table") refusals.push({ code: "NEEDS_PLAN", detail: `${decision.name} in a table position is a user-defined table function or not on the allowlist.`, category: "run" })
+    else if (decision.kind === "unknown" && call.parts.length < 3) {
+      refusals.push({ code: "FUNCTION_NAME_PARTIAL", detail: `${decision.name} is not an allowlisted built-in, and a one- or two-part name resolves along the SQL path, not where the plugin checks it.`, next: "Write the function's full name, catalog.schema.function." })
+    }
+    if (call.node === "lateralView" && call.parts.length > 2) refusals.push({ code: "SQL_UNSUPPORTED", detail: "A LATERAL VIEW generator takes a one- or two-part name in Spark.", next: "Write the generator unqualified, such as LATERAL VIEW explode(arr)." })
   }
   const first = worst(refusals)
   if (first) return { ok: false, refusal: first }
@@ -333,6 +363,7 @@ export function analyzeRead(input: string): ReadResult {
     if (!NILADIC_FIXED.has(name)) pathSensitive.push({ kind: "keyword-form", name })
   }
   for (const call of found.invocations) if (call.countStar) pathSensitive.push({ kind: "count-star", name: "count" })
+  for (const call of found.invocations) if (call.node === "lateralView" && call.decision.kind === "builtin" && call.parts.length === 1) pathSensitive.push({ kind: "keyword-form", name: call.decision.name })
   for (const table of found.tables) if (table.parts.length < 3 && !table.maybeCte && !table.pathRead) pathSensitive.push({ kind: "table", name: table.parts.join(".") })
   return {
     ok: true,

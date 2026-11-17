@@ -35,6 +35,9 @@ describe("refused constructs", () => {
     ["a line-continued -- comment (the review's bypass)", "select 1 -- x\\\n, secret('scope', 'key')", "STATEMENT_NOT_READ"],
     ["a -- comment ending in a backslash at the end", "select 1 -- x\\", "STATEMENT_NOT_READ"],
     ["a backslash before CRLF", "select 1 -- x\\\r\n", "STATEMENT_NOT_READ"],
+    ["U+0085 in a -- comment (LOW 3)", "select 1 -- a\u0085, 2", "STATEMENT_NOT_READ"],
+    ["a vertical tab in a -- comment", "select 1 -- a\u000b, 2", "STATEMENT_NOT_READ"],
+    ["a form feed in a -- comment", "select 1 -- a\u000c, 2", "STATEMENT_NOT_READ"],
     ["U+2028", "select 1 ", "STATEMENT_NOT_READ"],
     ["U+2029", "select ' '", "STATEMENT_NOT_READ"],
     ["IDENTIFIER(", "select * from identifier(:t)", "IDENTIFIER_REFUSED"],
@@ -61,6 +64,20 @@ describe("refused constructs", () => {
     ["text Spark cannot parse", "selec 1", "SQL_UNSUPPORTED"],
   ])("%s → %s", (_what, sql, expected) => {
     expect(code(sql)).toBe(expected)
+  })
+
+  it("TABLE(f(…)) in FROM names the form to write instead", () => {
+    const result = analyzeRead("SELECT * FROM TABLE(range(3))")
+    expect(!result.ok && result.refusal).toMatchObject({ code: "SQL_UNSUPPORTED", next: "Write FROM f(…) instead." })
+  })
+
+  it("marks <format>.`path` reads as path reads, relative paths included (LOW 4)", () => {
+    for (const sql of ["select * from json.`file.json`", "select * from delta.`/tmp/x`", "select * from binaryFile.`dir`"]) {
+      const result = analyzeRead(sql)
+      expect(result.ok && result.tables.map((table) => table.pathRead), sql).toEqual([true])
+    }
+    const named = analyzeRead("select * from main.json.t")
+    expect(named.ok && named.tables.map((table) => table.pathRead)).toEqual([false])
   })
 
   it("over 1 MiB is refused", () => {

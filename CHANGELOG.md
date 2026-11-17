@@ -16,6 +16,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - The read path's local rules: one query in a fixed wrapper, no `;`, no nested comments or line-continued comments,
   no `IDENTIFIER(…)`, no session statements, and every invocation through the built-in allowlist, with allowlisted
   calls qualified as `system.builtin.<name>` and keyword forms held to the default SQL path.
+- A user function in a read must be named in full (`catalog.schema.function`): a shorter name resolves along the SQL
+  path (`FUNCTION_NAME_PARTIAL`). `LATERAL VIEW` generators stay unqualified, as Spark requires, and need the default
+  path.
 - The statement table that gives every change its plan category, `databricks_plan` for SQL, and single-use plans that
   commit only through their category's tool.
 - The local spend ledger, the `access` option's default rules, the `sources` declaration, and the status skeleton.

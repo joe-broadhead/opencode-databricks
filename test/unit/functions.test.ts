@@ -40,10 +40,17 @@ describe("the allowlist", () => {
     expect(decideFunction(["system", "ai", "python_exec"], "scalar")).toMatchObject({ code: "NEEDS_PLAN", category: "run" })
   })
 
-  it("treats builtin.x as a user function (two parts take the current catalog), and system.builtin.x as the built-in", () => {
+  it("treats builtin.x as a user function but applies the exclusions to it, system.builtin.x as the built-in, and refuses session.* (LOW 1)", () => {
     expect(decideFunction(["builtin", "upper"], "scalar").kind).toBe("unknown")
+    expect(decideFunction(["builtin", "secret"], "scalar")).toMatchObject({ code: "SECRET_FUNCTION_REFUSED" })
+    expect(decideFunction(["builtin", "read_kafka"], "table")).toMatchObject({ code: "NEEDS_PLAN", category: "write" })
+    expect(decideFunction(["builtin", "ai_query"], "scalar")).toMatchObject({ code: "NEEDS_PLAN" })
     expect(decideFunction(["system", "builtin", "upper"], "scalar")).toEqual({ kind: "builtin", name: "upper" })
     expect(decideFunction(["system", "builtin", "secret"], "scalar")).toMatchObject({ code: "SECRET_FUNCTION_REFUSED" })
+    expect(decideFunction(["session", "f"], "scalar")).toMatchObject({ code: "FUNCTION_REFUSED" })
+    expect(decideFunction(["system", "session", "f"], "scalar")).toMatchObject({ code: "FUNCTION_REFUSED" })
+    expect(code("select session.f(a) from main.s.t")).toBe("FUNCTION_REFUSED")
+    expect(code("select builtin.secret('s', 'k')")).toBe("SECRET_FUNCTION_REFUSED")
   })
 
   it("allows only table and generator built-ins in a table position", () => {
@@ -66,6 +73,7 @@ describe("every invocation position (R2-M1)", () => {
     ["SELECT explode(arr) FROM main.s.t", "OK"],
     ["SELECT * FROM main.s.t PIVOT (sum(a) FOR b IN (1, 2))", "OK"],
     ["SELECT * FROM main.s.t PIVOT (cat.sch.agg(a) FOR b IN (1, 2))", "OK"],
+    ["SELECT * FROM main.s.t PIVOT (myagg(a) FOR b IN (1, 2))", "FUNCTION_NAME_PARTIAL"],
     ["SELECT row_number() OVER (ORDER BY a) FROM main.s.t", "OK"],
     ["SELECT transform(arr, x -> secret('s', 'k')) FROM main.s.t", "SECRET_FUNCTION_REFUSED"],
     ["SELECT /*+ REPARTITION(secret('s','k')) */ a FROM main.s.t", "SECRET_FUNCTION_REFUSED"],
@@ -83,9 +91,31 @@ describe("every invocation position (R2-M1)", () => {
     }
   })
 
-  it("reports a scalar user function for package C to resolve, without refusing it here", () => {
+  it("reports a scalar user function named in full for package C to check, sent as written", () => {
     const result = read("select cat.sch.myfn(a) from main.s.t")
     expect(result.ok && result.userFunctions.map((call) => call.parts.join("."))).toEqual(["cat.sch.myfn"])
+    expect(result.ok && result.rewritten).toBe("select cat.sch.myfn(a) from main.s.t")
+  })
+
+  it("refuses a user function named by one or two parts, which Databricks resolves along PATH (review #1, M2)", () => {
+    // The decoy: workspace.default.python_exec is a harmless SQL function anyone can create, but a one-part
+    // python_exec(…) resolves to system.ai.python_exec first on the default path. It must never be sent one-part.
+    const decoy = read("select python_exec('print(1)')")
+    expect(decoy.ok).toBe(false)
+    expect(!decoy.ok && decoy.refusal).toMatchObject({ code: "FUNCTION_NAME_PARTIAL", next: "Write the function's full name, catalog.schema.function." })
+    expect(code("select default.python_exec('print(1)')")).toBe("FUNCTION_NAME_PARTIAL")
+    expect(code("select myfn(a) from main.s.t")).toBe("FUNCTION_NAME_PARTIAL")
+    expect(code("select sch.myfn(a) from main.s.t")).toBe("FUNCTION_NAME_PARTIAL")
+    // Named in full, the decoy is a user function package C checks; system.ai's is refused outright.
+    const full = read("select workspace.default.python_exec('print(1)')")
+    expect(full.ok && full.userFunctions.map((call) => call.parts)).toEqual([["workspace", "default", "python_exec"]])
+    expect(code("select system.ai.python_exec('print(1)')")).toBe("NEEDS_PLAN")
+    // No call the analysis passes is sent with fewer than three parts unless it is an allowlisted built-in.
+    for (const sql of ["select upper(a), cat.sch.f(b) from main.s.t", "select count(*) from main.s.t lateral view explode(arr) v as c"]) {
+      const result = read(sql)
+      if (!result.ok) throw new Error(sql)
+      for (const call of result.invocations) expect(call.decision.kind === "builtin" || call.parts.length === 3, call.parts.join(".")).toBe(true)
+    }
   })
 })
 
@@ -154,9 +184,28 @@ describe("system.builtin qualification (LOW 3)", () => {
     expect(sent("select upper(a), lower(b) from main.s.t")).toBe("select system.builtin.upper(a), system.builtin.lower(b) from main.s.t")
     expect(sent("select left(s, 2), filter(arr, x -> x > 1) from main.s.t")).toBe("select system.builtin.`left`(s, 2), system.builtin.`filter`(arr, x -> x > 1) from main.s.t")
     expect(sent("select * from range(3)")).toBe("select * from system.builtin.`range`(3)")
-    expect(sent("select * from main.s.t lateral view explode(arr) v as c")).toBe("select * from main.s.t lateral view system.builtin.explode(arr) v as c")
+    expect(sent("select * from main.s.t lateral view explode(arr) v as c")).toBe("select * from main.s.t lateral view explode(arr) v as c")
     expect(sent("select UPPER(a) from main.s.t")).toBe("select system.builtin.upper(a) from main.s.t")
     expect(sent("select `upper`(a) from main.s.t")).toBe("select system.builtin.upper(a) from main.s.t")
+  })
+
+  it("never sends a LATERAL VIEW generator with more than two parts, and treats it as path-sensitive (review #1, M1)", () => {
+    for (const sql of [
+      "select * from main.s.t lateral view explode(arr) v as c",
+      "select * from main.s.t lateral view outer posexplode(arr) v as p, c",
+      "select * from main.s.t lateral view inline(structs) v lateral view explode(arr) w as c",
+      "select * from main.s.t lateral view stack(2, a, b) v as x",
+    ]) {
+      const result = read(sql)
+      if (!result.ok) throw new Error(`${sql}: ${result.refusal.code}`)
+      const sentCalls = analyzeRead(result.rewritten)
+      if (!sentCalls.ok) throw new Error(sql)
+      for (const call of sentCalls.invocations.filter((item) => item.node === "lateralView")) expect(call.parts.length, sql).toBeLessThanOrEqual(2)
+      expect(result.pathSensitive.filter((item) => item.kind === "keyword-form").length, sql).toBeGreaterThan(0)
+    }
+    expect(pathNames("select * from main.s.t lateral view explode(arr) v as c")).toEqual(["explode"])
+    expect(code("select * from main.s.t lateral view system.builtin.explode(arr) v as c")).toBe("SQL_UNSUPPORTED")
+    expect(code("select * from main.s.t lateral view default.explode(arr) v as c")).toBe("NEEDS_PLAN")
   })
 
   it("leaves calls already qualified, user functions and count(*) as written; count(*) is path-sensitive", () => {

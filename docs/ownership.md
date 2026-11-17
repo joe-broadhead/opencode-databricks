@@ -41,7 +41,13 @@ edits only its own files, adds new files only under its own folders, and wires a
   `test/unit/registry.test.ts` checks asserted equals declared.
 - A read sends only `analyzeRead(sql).sent` (`src/sql/analyze.ts`). A read whose `pathSensitive` is not empty runs
   `SELECT system.builtin.current_path()` once per account and warehouse (cached 5 minutes) and refuses
-  `PATH_NOT_DEFAULT` unless `pathIsSafe` (`src/domain/functions.ts`). Unqualified table names follow the path too.
+  `PATH_NOT_DEFAULT` unless `pathIsSafe` (`src/domain/functions.ts`). Keyword forms, `LATERAL VIEW` generators,
+  `count(*)` and unqualified table names are path-sensitive.
+- `userFunctions` holds only three-part names: a non-built-in function named by one or two parts is refused by
+  `analyzeRead` (`FUNCTION_NAME_PARTIAL`). Package C checks each under design §5.4 and sends it as written.
+- The read path is one entry point, `ReadGuardPort.prepare` (`src/ports.ts`), which package C implements in
+  `src/guards/read.ts`. Every read tool, and package E's `saved_read` and `save`, call it; E builds against
+  `FakeReads` (`test/fake/ports.ts`) until C lands.
 - A plan's category comes only from `classifyPlan` (`src/domain/statements.ts`); nothing lowers it.
 - Errors are `DatabricksError(code)` from the one table; Databricks' text goes only in `providerError`.
 - No package adds a runtime dependency. A new devDependency is pinned exactly and, if bundled, appears in `NOTICE`.

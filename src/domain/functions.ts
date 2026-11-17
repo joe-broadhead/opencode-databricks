@@ -5,9 +5,11 @@
  *
  * Every invocation in a read is one of:
  * - an explicit call (`functionCall`, `tableFunctionCall`, `lateralView`): its name must be an allowlisted built-in,
- *   unqualified or written `system.builtin.<name>`, or a Unity Catalog SQL scalar function that passes §5.4. The read
- *   path then **rewrites every allowlisted unqualified call to `system.builtin.<name>`**, so the SQL path cannot
- *   redirect it to a same-named function in a user schema (LOW 3; see PATH_RULE below);
+ *   unqualified or written `system.builtin.<name>`, or a Unity Catalog SQL scalar function named in full
+ *   (`catalog.schema.function`, review #1 M2) that passes §5.4. The read path then **rewrites every allowlisted
+ *   unqualified call to `system.builtin.<name>`**, so the SQL path cannot redirect it to a same-named function in a
+ *   user schema (LOW 3; see PATH_RULE below). A `LATERAL VIEW` generator is the exception: Spark's AstBuilder takes at
+ *   most two parts there, so it is sent unqualified and is path-sensitive, like a keyword form (review #1, M1);
  * - a keyword form (`CAST`, `EXTRACT`, `TRIM(BOTH … FROM …)`, `POSITION(… IN …)`, …): a fixed grammar node that names
  *   no function. Each one is listed in KEYWORD_FORMS with what Spark's AstBuilder makes of it. Forms that become a
  *   named function call cannot be qualified in SQL, so they are allowed only when the path is the default
@@ -59,17 +61,25 @@ export type FunctionDecision =
 
 /**
  * The decision for one call's name parts, lower-cased and unquoted. A built-in is unqualified or exactly
- * `system.builtin.<name>`; `builtin.<name>` is a two-part name in the current catalog (Databricks qualifies it with
- * current_catalog()), so it is a user function. `system.ai.*` is NEEDS_PLAN (run). Anything else is `unknown`.
+ * `system.builtin.<name>`. `system.ai.*` is NEEDS_PLAN (run), and `session.*` / `system.session.*` are refused: a
+ * statement sent alone has no temporary functions. `builtin.<name>` is a two-part name Databricks qualifies with
+ * current_catalog(), but open-source Spark also tries `system.builtin.<name>` for it, so the exclusions apply to it
+ * exactly as to `system.builtin.<name>` (review #1, LOW 1); otherwise it is `unknown`. Anything else is `unknown`.
  */
 export function decideFunction(parts: readonly string[], position: "scalar" | "table"): FunctionDecision {
   const name = parts.join(".")
   const builtin = parts.length === 1 ? parts[0]! : parts.length === 3 && parts[0] === "system" && parts[1] === "builtin" ? parts[2]! : undefined
   if (parts.length === 3 && parts[0] === "system" && parts[1] === "ai") return { kind: "refused", name, code: "NEEDS_PLAN", category: "run", why: "system.ai routines run code." }
+  if ((parts.length === 2 && parts[0] === "session") || (parts.length === 3 && parts[0] === "system" && parts[1] === "session")) {
+    return { kind: "refused", name, code: "FUNCTION_REFUSED", why: "A statement sent alone has no temporary functions." }
+  }
+  const excludable = builtin ?? (parts.length === 2 && parts[0] === "builtin" ? parts[1]! : undefined)
+  if (excludable !== undefined) {
+    const exclusion = excluded.get(excludable)
+    if (exclusion) return { kind: "refused", name, code: exclusion.code, ...(exclusion.category ? { category: exclusion.category } : {}), why: exclusion.why }
+    if (excludable.startsWith(AI_PREFIX)) return { kind: "refused", name, code: "NEEDS_PLAN", category: "write", why: "AI functions are billed outside the warehouse." }
+  }
   if (builtin === undefined) return { kind: "unknown", name }
-  const exclusion = excluded.get(builtin)
-  if (exclusion) return { kind: "refused", name, code: exclusion.code, ...(exclusion.category ? { category: exclusion.category } : {}), why: exclusion.why }
-  if (builtin.startsWith(AI_PREFIX)) return { kind: "refused", name, code: "NEEDS_PLAN", category: "write", why: "AI functions are billed outside the warehouse." }
   if (position === "table" ? TABLE_ALLOWLIST.has(builtin) : ALLOWLIST.has(builtin)) return { kind: "builtin", name: builtin }
   return { kind: "unknown", name }
 }
@@ -110,29 +120,30 @@ export function pathIsSafe(currentPath: string): boolean {
 
 /**
  * The keyword forms: grammar nodes that look like or become function calls without a `functionName`. For each, what
- * Spark's AstBuilder (v4.3.0) makes of it:
+ * Spark's AstBuilder (v4.3.0) makes of it (`builds`), and how the read path treats it (`kind`):
  * - `expression`: a fixed expression class, no name lookup at all;
- * - `named`: an unresolved function with a fixed built-in name, resolved by name (so along PATH): allowed only with
- *   the default path (PATH_NOT_DEFAULT otherwise), and the name must be on the allowlist;
+ * - `named`: path-sensitive, allowed only with the default path (PATH_NOT_DEFAULT otherwise). In v4.3.0 only
+ *   `EXTRACT` and `BETWEEN` resolve by name; the rest build a fixed class in open-source Spark and are `named` here
+ *   **conservatively**, because Databricks' builder is closed (review #1, LOW 2);
  * - `refused`: refused locally, with the code.
- * Keys are the parser's context class names (labelled alternatives). test/unit/walker.test.ts checks that every
- * `primaryExpression`, `predicate`, `relationPrimary` and `sampleMethod` alternative of the generated parser is either
- * here or known to invoke nothing, and has a test case.
+ * Keys are the parser's context class names (labelled alternatives); `Between` is the walker's name for a `predicate`
+ * whose kind is BETWEEN. test/unit/functions.test.ts checks that every `primaryExpression`, `relationPrimary` and
+ * `sampleMethod` alternative of the generated parser is either here or known to invoke nothing, with a test per form.
  */
 export const KEYWORD_FORMS = {
   CastContext: { kind: "expression", example: "CAST(x AS INT)", builds: "Cast / TryCast" },
   CastByColonContext: { kind: "expression", example: "x::INT", builds: "Cast" },
-  CurrentLikeContext: { kind: "named", names: ["current_date", "current_timestamp", "current_user", "user", "session_user", "current_time", "current_path", "localtime"], example: "current_date", builds: "the niladic built-in of that name" },
-  TimestampaddContext: { kind: "named", names: ["timestampadd", "dateadd", "date_add"], example: "TIMESTAMPADD(HOUR, 1, ts)", builds: "TimestampAdd" },
-  TimestampdiffContext: { kind: "named", names: ["timestampdiff", "datediff", "date_diff", "timediff"], example: "TIMESTAMPDIFF(HOUR, a, b)", builds: "TimestampDiff" },
+  CurrentLikeContext: { kind: "named", names: ["current_date", "current_timestamp", "current_user", "user", "session_user", "current_time", "current_path", "localtime"], example: "current_date", builds: "CurrentDate, CurrentTimestamp, CurrentUser and the like (fixed classes; named here conservatively)" },
+  TimestampaddContext: { kind: "named", names: ["timestampadd", "dateadd", "date_add"], example: "TIMESTAMPADD(HOUR, 1, ts)", builds: "TimestampAdd (a fixed class; named here conservatively)" },
+  TimestampdiffContext: { kind: "named", names: ["timestampdiff", "datediff", "date_diff", "timediff"], example: "TIMESTAMPDIFF(HOUR, a, b)", builds: "TimestampDiff (a fixed class; named here conservatively)" },
   ExtractContext: { kind: "named", names: ["extract"], example: "EXTRACT(YEAR FROM d)", builds: "UnresolvedFunction(extract)" },
-  SubstringContext: { kind: "named", names: ["substring", "substr"], example: "SUBSTRING(s FROM 2 FOR 3)", builds: "UnresolvedFunction(substring)" },
-  TrimContext: { kind: "named", names: ["trim", "btrim", "ltrim", "rtrim"], example: "TRIM(BOTH 'x' FROM s)", builds: "UnresolvedFunction(trim / ltrim / rtrim)" },
-  PositionContext: { kind: "named", names: ["position", "locate"], example: "POSITION('a' IN s)", builds: "UnresolvedFunction(locate)" },
-  OverlayContext: { kind: "named", names: ["overlay"], example: "OVERLAY(s PLACING 'x' FROM 2)", builds: "Overlay" },
-  FirstContext: { kind: "named", names: ["first"], example: "FIRST(x IGNORE NULLS)", builds: "UnresolvedFunction(first)" },
-  LastContext: { kind: "named", names: ["last"], example: "LAST(x IGNORE NULLS)", builds: "UnresolvedFunction(last)" },
-  Any_valueContext: { kind: "named", names: ["any_value"], example: "ANY_VALUE(x IGNORE NULLS)", builds: "UnresolvedFunction(any_value)" },
+  SubstringContext: { kind: "named", names: ["substring", "substr"], example: "SUBSTRING(s FROM 2 FOR 3)", builds: "Substring (a fixed class; named here conservatively)" },
+  TrimContext: { kind: "named", names: ["trim", "btrim", "ltrim", "rtrim"], example: "TRIM(BOTH 'x' FROM s)", builds: "StringTrim, StringTrimLeft, StringTrimRight (fixed classes; named here conservatively)" },
+  PositionContext: { kind: "named", names: ["position", "locate"], example: "POSITION('a' IN s)", builds: "StringLocate (a fixed class; named here conservatively)" },
+  OverlayContext: { kind: "named", names: ["overlay"], example: "OVERLAY(s PLACING 'x' FROM 2)", builds: "Overlay (a fixed class; named here conservatively)" },
+  FirstContext: { kind: "named", names: ["first"], example: "FIRST(x IGNORE NULLS)", builds: "First (a fixed class; named here conservatively)" },
+  LastContext: { kind: "named", names: ["last"], example: "LAST(x IGNORE NULLS)", builds: "Last (a fixed class; named here conservatively)" },
+  Any_valueContext: { kind: "named", names: ["any_value"], example: "ANY_VALUE(x IGNORE NULLS)", builds: "AnyValue (a fixed class; named here conservatively)" },
   StructContext: { kind: "expression", example: "STRUCT(a, b)", builds: "CreateStruct" },
   SearchedCaseContext: { kind: "expression", example: "CASE WHEN a THEN b END", builds: "CaseWhen" },
   SimpleCaseContext: { kind: "expression", example: "CASE a WHEN 1 THEN b END", builds: "CaseWhen" },

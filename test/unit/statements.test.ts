@@ -65,6 +65,7 @@ describe("the statement table", () => {
     ["SELECT http_request(conn => 'c', method => 'POST', path => '/')", "write"],
     ["SELECT * FROM read_files('s3://b/x')", "write"],
     ["SELECT cat.sch.f(1)", "run"],
+    ["SELECT f(1)", "run"],
     ["CREATE VIEW main.s.v AS SELECT * FROM IDENTIFIER('main.s.t')", "run"],
     ["SELECT 1", "CATEGORY_MISMATCH"],
     ["SHOW TABLES", "CATEGORY_MISMATCH"],
