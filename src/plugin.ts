@@ -9,10 +9,11 @@ import { type ToolName, TOOLS } from "./domain/actions.js"
 import { DatabricksError, errorText } from "./domain/errors.js"
 import { createPlanStore } from "./domain/plans.js"
 import { checkHost } from "./host-version.js"
+import { createReadGuard } from "./guards/read.js"
 import { createLedger } from "./ledger.js"
 import { loadOptions } from "./options.js"
 import { registerPermissionDefaults } from "./permissions.js"
-import type { AuthPort, DatabricksPort, PermissionPort, ReadGuardPort } from "./ports.js"
+import type { AuthPort, DatabricksPort, PermissionPort } from "./ports.js"
 import { reasonOf } from "./redact.js"
 import { type Deps, HANDLERS } from "./registry.js"
 import { registerSkills, SKILL_IDS, skillPath } from "./skills.js"
@@ -42,15 +43,6 @@ export function placeholderAuth(): AuthPort {
 
 export function placeholderDatabricks(): DatabricksPort {
   return new Proxy({} as DatabricksPort, { get: (_target, name) => notBuilt(`The Databricks client (${String(name)})`) })
-}
-
-/**
- * The read path's factory: the ports it needs come from `base`, which holds everything but `reads`, so there is no
- * cycle. Package C replaces this placeholder with `createReadGuard` (`src/guards/read.ts`) in the one line below that
- * calls it, and deletes it.
- */
-export function placeholderReads(_base: Omit<Deps, "reads">): ReadGuardPort {
-  return { prepare: async () => notBuilt("The read path")() }
 }
 
 export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; readonly databricks?: () => DatabricksPort } = {}) {
@@ -88,7 +80,7 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
         permission,
         clock: { now: Date.now, uuid: () => crypto.randomUUID() },
       }
-      const deps: Deps = { ...base, reads: placeholderReads(base) }
+      const deps: Deps = { ...base, reads: createReadGuard(base) }
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
         keep(
