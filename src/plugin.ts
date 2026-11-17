@@ -1,9 +1,10 @@
 // The server part: the default permission rules, the 23 tools under the `databricks` namespace, status, the tools RPC
 // for scripts and the skills, in the family's setup order. Everything goes through public OpenCode plugin APIs. Every
-// transform is synchronous and never throws: a failure is kept and shown by status. Day 0: the auth and Databricks
-// ports are placeholders that answer AUTH_REQUIRED / NOT_IMPLEMENTED until packages A and B land.
+// transform is synchronous and never throws: a failure is kept and shown by status. Package A owns the auth default
+// (the seam below); package B still answers NOT_IMPLEMENTED until it lands.
 import { Plugin } from "@opencode/plugin"
 import { registerToolsRpc } from "@we-the-rebel-alliance/source-contract/tools-rpc"
+import { createAuth } from "./auth/index.js"
 import { DISPLAY_NAME, NAMESPACE, PLUGIN_ID } from "./constants.js"
 import { type ToolName, TOOLS } from "./domain/actions.js"
 import { DatabricksError, errorText } from "./domain/errors.js"
@@ -27,18 +28,6 @@ export const NAMESPACE_DESCRIPTION = `${DISPLAY_NAME}: Unity Catalog, SQL wareho
 /** Placeholder ports until packages A and B land: every call refuses, nothing reaches the network. */
 const notBuilt = (what: string) => () => {
   throw new DatabricksError("NOT_IMPLEMENTED", `${what} is not built yet.`)
-}
-
-export function placeholderAuth(): AuthPort {
-  return {
-    accounts: () => [],
-    account: () => {
-      throw new DatabricksError("AUTH_REQUIRED")
-    },
-    token: async () => {
-      throw new DatabricksError("AUTH_REQUIRED")
-    },
-  }
 }
 
 export function placeholderDatabricks(): DatabricksPort {
@@ -73,7 +62,7 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
       const base = {
         options,
         access: options.access,
-        auth: (seam.auth ?? placeholderAuth)(),
+        auth: seam.auth ? seam.auth() : await createAuth({ ctx, options, keep, databricks: () => deps.databricks }),
         databricks: (seam.databricks ?? placeholderDatabricks)(),
         ledger: createLedger(),
         plans: createPlanStore({ ttlSeconds: options.planTtlSeconds }),
