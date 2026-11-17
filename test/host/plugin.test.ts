@@ -55,12 +55,12 @@ describe("the plugin in a host", () => {
       expect(described.methods.map((method) => method.name).sort()).toEqual([...RPC_METHODS].sort())
       const planned = (await tools.plan!({ sessionID, input: { sql: "DROP TABLE main.sales.orders" } })) as Record<string, unknown>
       expect(planned).toMatchObject({ state: "planned", category: "delete", commitWith: "databricks_delete" })
-      // A read with no usable credential refuses before anything is sent, whichever package has built it: an unbuilt
-      // tool says NOT_IMPLEMENTED, a built one AUTH_REQUIRED (the auth seam is package A's). close() fails the test if
-      // the host tried to leave the machine.
       const read = (await tools.query!({ sessionID, input: { sql: "select 1" } })) as Record<string, unknown>
-      expect(read).toMatchObject({ state: "refused" })
-      expect(["NOT_IMPLEMENTED", "AUTH_REQUIRED"]).toContain(String(read.error))
+      // A read with no usable credential refuses before anything is sent: package C's tools are real, and the auth seam
+      // is package A's; a tool no package has built yet still says NOT_IMPLEMENTED.
+      expect(read).toMatchObject({ state: "refused", error: "AUTH_REQUIRED" })
+      const unbuilt = (await tools.jobs!({ sessionID, input: {} })) as Record<string, unknown>
+      expect(unbuilt).toMatchObject({ state: "refused", error: "NOT_IMPLEMENTED" })
     } finally {
       await host.close()
     }
