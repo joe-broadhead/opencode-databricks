@@ -25,6 +25,7 @@ Every error has the form `CODE: What happened. Next step: What to do.` Databrick
 | `HOST_INVALID` | refused | The workspace URL is not https, or not a Databricks host. | Enter the workspace URL from the browser, or set allowCustomHost for a private link. |
 | `HOST_UNTESTED` | refused | This OpenCode version is outside the tested range. | Use a tested OpenCode release, or set the option allowUntestedHost. |
 | `IDENTIFIER_REFUSED` | refused | A read used IDENTIFIER(…), a name chosen at run time. | Write the table or function name literally, and pass values in params. |
+| `INLINE_WITHHELD` | refused | This account's inline rules keep these rows out of the conversation. | Run it with databricks_save({ sql }) to write them to a file. |
 | `INPUT_INVALID` | refused | The input does not fit the tool's schema. | Check the input against the tool's schema, then call it again. |
 | `NEEDS_PLAN` | refused | A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read. | Plan it with databricks_plan({ sql }). |
 | `NOT_FOUND` | refused | The catalog, schema, table, function, statement, job or run was not found or is not visible. | Call databricks_catalog with filter to find the name. |
@@ -40,6 +41,7 @@ Every error has the form `CODE: What happened. Next step: What to do.` Databrick
 | `RATE_LIMITED` | failed | Databricks answered 429 or REQUEST_LIMIT_EXCEEDED after retries. | Make the same call after retryAfterSec. |
 | `RESULTS_EXPIRED` | refused | The statement's results are gone (kept 12 hours) or its links expired beyond re-reading. | Run it again; the result cache may serve it. |
 | `RULES_NOT_ADDED` | failed | The default permission rules could not be added to the agents. | Restart OpenCode. |
+| `RUN_SIZE_REFUSED` | refused | The warehouse is larger than maxRunSize, so an agent may not run on it. | Use a smaller warehouse, or raise maxRunSize. |
 | `RUN_TIMEOUT` | failed | Databricks cancelled the read at its wait, or the plugin did at maxRunSeconds. | Narrow the query, or pass a longer wait (above 50 seconds the limit is the plugin's). |
 | `SAVE_EXISTS` | refused | A file already exists at the save path. | Pass overwrite: true, or choose another path. |
 | `SAVE_LIMIT` | refused | The result is larger than maxSaveRows or maxSaveBytes; the partial file was removed. | Filter or aggregate the query, or raise the limit. |
@@ -63,4 +65,4 @@ Every error has the form `CODE: What happened. Next step: What to do.` Databrick
 
 ## Warnings
 
-Warnings come in a result's `warnings` and never refuse: `ESTIMATE_ONLY`, `SAVE_INLINE_FALLBACK`, `PII_SOURCE`, `MASKED_COLUMNS`, `ROW_FILTERED`, `DEPENDENCIES_UNKNOWN`, `AUTO_STOP_OFF`, `AUTO_STOP_LONG`, `SCOPE_WIDER_THAN_FEATURES`, `HEADLESS_IDENTITY`, `ROLE_CAN_WRITE`, `VIEW_BODY_UNREAD`, `STARTED_WAREHOUSE`, `CLASSIFICATION_DRIFT`.
+Warnings come in a result's `warnings` and never refuse: `ESTIMATE_ONLY`, `SAVE_INLINE_FALLBACK`, `PII_SOURCE`, `MASKED_COLUMNS`, `ROW_FILTERED`, `DEPENDENCIES_UNKNOWN`, `AUTO_STOP_OFF`, `AUTO_STOP_LONG`, `SCOPE_WIDER_THAN_FEATURES`, `HEADLESS_IDENTITY`, `ROLE_CAN_WRITE`, `VIEW_BODY_UNREAD`, `STARTED_WAREHOUSE`, `CLASSIFICATION_DRIFT`, `BUDGET_OVER`, `PATH_READ`.

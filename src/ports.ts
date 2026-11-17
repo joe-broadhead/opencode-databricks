@@ -15,6 +15,7 @@
  * Every call takes the call's `signal`; a stopped call aborts its request. Databricks' text in an answer is untrusted.
  */
 import type { Feature, Operation } from "./domain/actions.js"
+import type { EnforcementKind } from "./domain/contract.js"
 import type { ProviderError } from "./domain/errors.js"
 
 export type { PlanStorePort } from "./domain/plans.js"
@@ -35,6 +36,12 @@ export interface AccountInfo {
   readonly warehouse?: string
   readonly catalog?: string
   readonly schema?: string
+  /**
+   * Which guarantee holds (`enforcementOf(account)`, package A). Raised to `"role"` only by a doctor report from this
+   * process, bound to the credential's (host, role group, granted scopes), in memory only, cleared when they change.
+   * Status and `PreparedRead.enforcement` read this field. See `Enforcement` in src/domain/contract.ts.
+   */
+  readonly enforcement: EnforcementKind
 }
 
 export interface Token {
@@ -42,6 +49,8 @@ export interface Token {
   readonly expiresAt: number
   /** The scopes the token carries, as granted. `all-apis` counts as every scope. */
   readonly scopes: readonly string[]
+  /** `https://<workspace host>` the token was minted for. Package B sends to `token.host`, never to `account().host`. */
+  readonly host: string
 }
 
 export interface AuthPort {
@@ -73,6 +82,7 @@ export interface Warehouse {
 
 export interface StatementParameter {
   readonly name: string
+  /** `null` is SQL NULL: the client sends the parameter without `value`, which the Statement Execution API reads as NULL. */
   readonly value: string | null
   readonly type?: string
 }
@@ -134,6 +144,22 @@ export interface StatementAnswer {
   readonly ambiguous?: boolean
 }
 
+/**
+ * One chunk of a statement's result: `GET /api/2.0/sql/statements/{id}/result/chunks/{n}`. Databricks documents its
+ * body as "identical to the nested `result` element" of getStatement, with `chunk_index`, `row_count`,
+ * `next_chunk_index`, `data_array` and `external_links` **at the top level**, and no `statement_id` or `status`
+ * (review of #3, H1). So a chunk has no state of its own: a chunk with no rows and no links, while the manifest says
+ * more chunks exist, is UNAVAILABLE, never PENDING.
+ */
+export interface ChunkAnswer {
+  readonly chunkIndex: number
+  readonly rowCount?: number
+  /** INLINE + JSON_ARRAY: strings or null, in column order. */
+  readonly rows?: readonly (readonly (string | null)[])[]
+  readonly links?: readonly ExternalLink[]
+  readonly nextChunkIndex?: number
+}
+
 export interface HistoryQuery {
   readonly queryId: string
   readonly status: "QUEUED" | "RUNNING" | "FINISHED" | "FAILED" | "CANCELED"
@@ -150,7 +176,10 @@ export interface HistoryQuery {
   /** Untrusted; cut to 200 characters for listings. */
   readonly queryText?: string
   readonly isFinal?: boolean
+  /** From `metrics`, which Query History returns only when the request sets `include_metrics`. */
   readonly resultFromCache?: boolean
+  /** `cache_query_id`: the query whose cached result was returned (outside `metrics`). */
+  readonly cacheQueryId?: string
 }
 
 export interface TableInfo {
@@ -164,6 +193,8 @@ export interface TableInfo {
   readonly viewDefinition?: string
   /** Absent when Unity Catalog does not provide it ("the dependency is not provided"). */
   readonly viewDependencies?: readonly Dependency[]
+  /** The partition columns, in order: package B derives them from the columns' `partition_index` (UC `ColumnInfo`). */
+  readonly partitionColumns?: readonly string[]
   readonly updatedAt?: number
 }
 
@@ -180,6 +211,11 @@ export interface FunctionInfo {
   readonly externalLanguage?: string
   readonly routineDefinition?: string
   readonly routineDependencies?: readonly Dependency[]
+  /**
+   * UC `sql_path`, the PATH captured at CREATE FUNCTION, along which the body's unqualified names resolve. Absent when
+   * Unity Catalog does not return it. Package C requires `pathIsSafe(sqlPath)` for a body with anything path-sensitive.
+   */
+  readonly sqlPath?: string
   /** A table function (UDTF): `data_type` TABLE_TYPE. */
   readonly isTableFunction: boolean
 }
@@ -205,6 +241,8 @@ export interface Identity {
   readonly id: string
   readonly userName: string
   readonly displayName?: string
+  /** SCIM `Me`'s groups (no further scope needed). The doctor resolves the role's name for `principal` from them. */
+  readonly groups?: readonly { readonly id: string; readonly displayName?: string }[]
 }
 
 export interface DatabricksPort {
@@ -217,10 +255,18 @@ export interface DatabricksPort {
   // Statements (warehouse). `submit` is never retried after it may have reached the server (design §9).
   submit(request: StatementRequest, signal: AbortSignal): Promise<StatementAnswer>
   getStatement(account: string, statementId: string, signal: AbortSignal): Promise<StatementAnswer>
-  getChunk(account: string, statementId: string, chunkIndex: number, signal: AbortSignal): Promise<StatementAnswer>
+  /** One result chunk, read in the top-level shape the API returns (`ChunkAnswer`). */
+  getChunk(account: string, statementId: string, chunkIndex: number, signal: AbortSignal): Promise<ChunkAnswer>
+  /** Polls a statement at most once a second until it is terminal or `untilMs` (epoch ms, from the Clock port) passes; returns the last answer. A stopped call cancels the statement, then throws CANCELLED. */
+  waitForStatement(account: string, statementId: string, options: { readonly untilMs: number }, signal: AbortSignal): Promise<StatementAnswer>
   cancelStatement(account: string, statementId: string, signal: AbortSignal): Promise<void>
   // Query History (free).
-  history(account: string, filter: { readonly userIds?: readonly number[]; readonly warehouseIds?: readonly string[]; readonly startMs?: number; readonly endMs?: number; readonly pageToken?: string; readonly maxResults?: number }, signal: AbortSignal): Promise<Page<HistoryQuery>>
+  /**
+   * Query History. `statementIds` sends `filter_by.statement_ids`; `includeMetrics` sends `include_metrics=true`,
+   * without which `metrics` (`resultFromCache`, `readBytes`) is absent. A read that wants "served from the cache"
+   * looks its own statement up here.
+   */
+  history(account: string, filter: { readonly userIds?: readonly number[]; readonly warehouseIds?: readonly string[]; readonly statementIds?: readonly string[]; readonly startMs?: number; readonly endMs?: number; readonly pageToken?: string; readonly maxResults?: number; readonly includeMetrics?: boolean }, signal: AbortSignal): Promise<Page<HistoryQuery>>
   // Unity Catalog (free).
   listCatalogs(account: string, page: { readonly pageToken?: string; readonly maxResults?: number }, signal: AbortSignal): Promise<Page<{ readonly name: string; readonly comment?: string; readonly owner?: string }>>
   listSchemas(account: string, catalog: string, page: { readonly pageToken?: string; readonly maxResults?: number }, signal: AbortSignal): Promise<Page<{ readonly name: string; readonly comment?: string; readonly owner?: string }>>
@@ -229,7 +275,17 @@ export interface DatabricksPort {
   listFunctions(account: string, catalog: string, schema: string, page: { readonly pageToken?: string }, signal: AbortSignal): Promise<Page<{ readonly name: string; readonly routineBody: string }>>
   getFunction(account: string, fullName: string, signal: AbortSignal): Promise<FunctionInfo>
   listVolumes(account: string, catalog: string, schema: string, page: { readonly pageToken?: string }, signal: AbortSignal): Promise<Page<{ readonly name: string; readonly volumeType: string }>>
-  effectivePermissions(account: string, securable: { readonly type: string; readonly fullName: string }, signal: AbortSignal): Promise<readonly { readonly principal: string; readonly privileges: readonly string[] }[]>
+  /** UC effective permissions on a securable, for one `principal` when given; package B pages to the end. `USE_CONNECTION` is read with `{ type: "connection" }`. */
+  effectivePermissions(account: string, securable: { readonly type: string; readonly fullName: string }, signal: AbortSignal, principal?: string): Promise<readonly { readonly principal: string; readonly privileges: readonly string[] }[]>
+  /** UC connections (`unity-catalog.connections.list`). */
+  listConnections(account: string, page: { readonly pageToken?: string }, signal: AbortSignal): Promise<Page<{ readonly name: string; readonly connectionType?: string }>>
+  /** The workspace's current metastore assignment (`unity-catalog.current-metastore-assignment.get`): its default catalog. */
+  currentMetastoreAssignment(account: string, signal: AbortSignal): Promise<{ readonly defaultCatalogName?: string }>
+  /**
+   * Unity Catalog tag assignments of a table, or of a table's columns (`unity-catalog.tag-assignments.list`). Package C
+   * matches `inline.piiTags` against them; until package B implements this, C keeps refusing with DEPENDENCIES_UNKNOWN.
+   */
+  listTagAssignments(account: string, entity: { readonly type: "tables" | "columns"; readonly fullName: string }, signal: AbortSignal): Promise<readonly { readonly key: string; readonly value?: string; readonly column?: string }[]>
   // Saved queries (free; serialised: "10 or more" concurrent calls may be throttled).
   listQueries(account: string, page: { readonly pageToken?: string }, signal: AbortSignal): Promise<Page<{ readonly id: string; readonly name: string; readonly owner?: string; readonly warehouseId?: string; readonly queryText: string }>>
   getQuery(account: string, id: string, signal: AbortSignal): Promise<{ readonly id: string; readonly name: string; readonly warehouseId?: string; readonly queryText: string }>
@@ -246,7 +302,8 @@ export interface DatabricksPort {
   exportNotebook(account: string, path: string, signal: AbortSignal): Promise<{ readonly source: string }>
   listDirectory(account: string, path: string, signal: AbortSignal): Promise<readonly { readonly path: string; readonly isDirectory: boolean; readonly size?: number; readonly modifiedAt?: number }[]>
   /** An external link's bytes, fetched without an Authorization header, from an allowed storage host only. */
-  fetchLink(link: ExternalLink, signal: AbortSignal): Promise<ReadableStream<Uint8Array>>
+  /** The link's storage host is checked against the account's cloud (`AccountInfo.cloud`); `custom` allows every cloud's. */
+  fetchLink(account: string, link: ExternalLink, signal: AbortSignal): Promise<ReadableStream<Uint8Array>>
 }
 
 // ── the read path, shared (package C) ────────────────────────────────────
@@ -262,6 +319,8 @@ export interface ReadRequest {
   readonly start?: boolean
   /** The saved source: refuse unless the warehouse is already RUNNING (design §11.3). */
   readonly runningOnly?: boolean
+  /** The call's own `wait`, in seconds: how long to wait for a STARTING warehouse. Defaults to the `wait` option. */
+  readonly wait?: number
   /** The calling tool, for its table asserts (`databricks.<tool>` on `<account>:table:…`). */
   readonly tool: string
   readonly sessionID: string
@@ -274,16 +333,19 @@ export interface PreparedRead {
   /** `analyzeRead(sql).sent`, unchanged. */
   readonly sent: string
   readonly warehouseId: string
+  /** The warehouse as the guard last read it (RUNNING): its size, type and clusters, for cost text and the ledger. */
+  readonly warehouse: Warehouse
   /** This call started the warehouse (STARTED_WAREHOUSE). */
   readonly started: boolean
   /** Resolved tables, `catalog.schema.table`. */
   readonly tables: readonly string[]
-  readonly enforcement: "role" | "role-requested" | "identity" | "service-principal"
+  /** `AccountInfo.enforcement`, read when the read was prepared. */
+  readonly enforcement: EnforcementKind
   readonly warnings: readonly { readonly code: string; readonly message: string }[]
 }
 
 export interface ReadGuardPort {
-  /** Refuses with the read path's codes (NEEDS_PLAN, PATH_NOT_DEFAULT, FENCED, WAREHOUSE_STOPPED, …), or prepares. */
+  /** Refuses with the read path's codes (NEEDS_PLAN, PATH_NOT_DEFAULT, FENCED, INLINE_WITHHELD, WAREHOUSE_STOPPED, RUN_SIZE_REFUSED, …), or prepares. */
   prepare(request: ReadRequest, signal: AbortSignal): Promise<PreparedRead>
 }
 

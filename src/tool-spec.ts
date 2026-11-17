@@ -36,6 +36,7 @@ export function errorResult(error: DatabricksError): Record<string, unknown> {
     message: error.detail,
     next: error.nextStep,
     ...(error.providerError ? { providerError: error.providerError } : {}),
+    ...(error.retryAfterSec !== undefined ? { retryAfterSec: error.retryAfterSec } : {}),
   }
 }
 

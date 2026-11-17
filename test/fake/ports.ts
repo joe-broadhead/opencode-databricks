@@ -4,18 +4,20 @@ import type { Options } from "../../src/options.js"
 import { loadOptions } from "../../src/options.js"
 import { createPlanStore } from "../../src/domain/plans.js"
 import { DatabricksError } from "../../src/domain/errors.js"
-import type { AccountInfo, AuthPort, Charge, Clock, DatabricksPort, LedgerPort, PermissionPort, PermissionRequest, PreparedRead, ReadGuardPort, ReadRequest, SpendTotals, Token } from "../../src/ports.js"
+import type { AccountInfo, AuthPort, Charge, Clock, DatabricksPort, LedgerPort, PermissionPort, PermissionRequest, PreparedRead, ReadGuardPort, ReadRequest, SpendTotals, Token, Warehouse } from "../../src/ports.js"
 import { analyzeRead } from "../../src/sql/analyze.js"
 import type { Deps } from "../../src/registry.js"
 
 export const FAKE_HOST = "https://fake-workspace.cloud.databricks.com"
+/** A running Small serverless warehouse with a 10-minute auto-stop: the fakes' default. */
+export const FAKE_WAREHOUSE: Warehouse = { id: "wh-small", name: "small", state: "RUNNING", warehouseType: "PRO", serverless: true, clusterSize: "Small", autoStopMins: 10, minNumClusters: 1, maxNumClusters: 1, numClusters: 1 }
 /** A token-shaped value that must never appear in an error, a status, a log line or a result. */
 export const DUMMY_TOKEN = "dapi00000000000000000000000000000000-not-real"
 
 export class FakeAuth implements AuthPort {
   readonly requests: { account: string; scopes: readonly string[] }[] = []
   constructor(
-    readonly list: AccountInfo[] = [{ alias: "work", mode: "interactive", host: FAKE_HOST, cloud: "aws", features: [], warehouse: "wh-small" }],
+    readonly list: AccountInfo[] = [{ alias: "work", mode: "interactive", host: FAKE_HOST, cloud: "aws", features: [], warehouse: "wh-small", enforcement: "identity" }],
     readonly granted: readonly string[] = ["sql", "unity-catalog", "query-history", "openid", "email", "profile", "offline_access"],
   ) {}
   accounts() {
@@ -26,23 +28,36 @@ export class FakeAuth implements AuthPort {
     if (!found) throw new DatabricksError("AUTH_REQUIRED")
     return found
   }
-  async token(account: string, scopes: readonly string[]): Promise<Token> {
+  async token(account: string, scopes: readonly string[], _signal?: AbortSignal): Promise<Token> {
     this.requests.push({ account, scopes })
     const missing = scopes.filter((scope) => scope !== "any" && !this.granted.includes(scope) && !this.granted.includes("all-apis"))
     if (missing.length) throw new DatabricksError("AUTH_SCOPE_MISSING", `The sign-in lacks the ${missing.join(", ")} scope.`)
-    return { accessToken: DUMMY_TOKEN, expiresAt: Date.now() + 3_600_000, scopes: this.granted }
+    return { accessToken: DUMMY_TOKEN, expiresAt: Date.now() + 3_600_000, scopes: this.granted, host: this.account(account).host }
   }
 }
 
-/** Records every call by name. A method a test has not given an answer refuses with UNAVAILABLE. */
-export function fakeDatabricks(answers: Partial<Record<keyof DatabricksPort, (...args: unknown[]) => unknown>> = {}): { port: DatabricksPort; calls: { method: string; args: unknown[] }[] } {
+const TERMINAL: ReadonlySet<string> = new Set(["SUCCEEDED", "FAILED", "CANCELED", "CLOSED"])
+
+/**
+ * Records every call by name. A method a test has not given an answer refuses with UNAVAILABLE, except
+ * `waitForStatement`, which by default polls the test's `getStatement` answer (through the port, so each poll is
+ * recorded) until it is terminal or `untilMs` passes on `now` (review of #3, request 2).
+ */
+export function fakeDatabricks(answers: Partial<Record<keyof DatabricksPort, (...args: unknown[]) => unknown>> = {}, now: () => number = Date.now): { port: DatabricksPort; calls: { method: string; args: unknown[] }[] } {
   const calls: { method: string; args: unknown[] }[] = []
-  const port = new Proxy({} as DatabricksPort, {
+  const port: DatabricksPort = new Proxy({} as DatabricksPort, {
     get: (_target, name) => async (...args: unknown[]) => {
       calls.push({ method: String(name), args })
       const answer = answers[name as keyof DatabricksPort]
-      if (!answer) throw new DatabricksError("UNAVAILABLE", `The fake has no answer for ${String(name)}.`)
-      return answer(...args)
+      if (answer) return answer(...args)
+      if (name === "waitForStatement" && answers.getStatement) {
+        const [account, statementId, options, signal] = args as [string, string, { untilMs: number }, AbortSignal]
+        for (;;) {
+          const current = await port.getStatement(account, statementId, signal)
+          if (TERMINAL.has(current.state) || now() >= options.untilMs) return current
+        }
+      }
+      throw new DatabricksError("UNAVAILABLE", `The fake has no answer for ${String(name)}.`)
     },
   })
   return { port, calls }
@@ -67,7 +82,7 @@ export class FakeReads implements ReadGuardPort {
     this.requests.push(request)
     const analysis = analyzeRead(request.sql)
     if (!analysis.ok) throw new DatabricksError(analysis.refusal.code, analysis.refusal.detail, analysis.refusal.next)
-    return { sent: analysis.sent, warehouseId: request.warehouse ?? "wh-small", started: false, tables: analysis.tables.map((table) => table.parts.join(".")), enforcement: "identity", warnings: [] }
+    return { sent: analysis.sent, warehouseId: request.warehouse ?? FAKE_WAREHOUSE.id, warehouse: { ...FAKE_WAREHOUSE, id: request.warehouse ?? FAKE_WAREHOUSE.id }, started: false, tables: analysis.tables.map((table) => table.parts.join(".")), enforcement: "identity", warnings: [] }
   }
 }
 

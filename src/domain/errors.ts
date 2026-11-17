@@ -36,6 +36,7 @@ export const ERRORS = {
   WAREHOUSE_REQUIRED: { state: "refused", what: "No SQL warehouse was given or configured.", next: "Call databricks_warehouses({}), then pass warehouse." },
   WAREHOUSE_STOPPED: { state: "refused", what: "The warehouse is stopped and the call did not ask to start it.", next: "Use a running warehouse, or pass start: true." },
   START_REFUSED: { state: "refused", what: "The start policy refuses this warehouse: not serverless, too large, or its auto-stop is too long or off.", next: "Use another warehouse; maxStartSize and maxStartAutoStopMinutes are your options to raise." },
+  RUN_SIZE_REFUSED: { state: "refused", what: "The warehouse is larger than maxRunSize, so an agent may not run on it.", next: "Use a smaller warehouse, or raise maxRunSize." },
   WAREHOUSE_FORBIDDEN: { state: "refused", what: "The identity has no Can use permission on the warehouse.", next: "Ask the warehouse's owner for Can use." },
   BUDGET_REACHED: { state: "refused", what: "An opt-in budget with action refuse is spent.", next: "Wait for the reset, or raise the budget option." },
   STOP_NOT_PERMITTED: { state: "refused", what: "Stopping needs Can manage, or other users' statements are not visible without Can monitor.", next: "Ask the warehouse's owner to stop it." },
@@ -55,6 +56,7 @@ export const ERRORS = {
   SECRET_FUNCTION_REFUSED: { state: "refused", what: "secret, try_secret and list_secrets are refused.", next: "Do not read secrets through the agent." },
   DEPENDENCIES_UNKNOWN: { state: "refused", what: "A view's dependencies cannot be resolved while a fence, an inline rule or strictDependencies applies.", next: "Name tables fully and avoid views without recorded dependencies." },
   FENCE_UNVERIFIABLE: { state: "refused", what: "A path-based read cannot be checked against the fence.", next: "Read the table by its Unity Catalog name." },
+  INLINE_WITHHELD: { state: "refused", what: "This account's inline rules keep these rows out of the conversation.", next: "Run it with databricks_save({ sql }) to write them to a file." },
   FENCED: { state: "refused", what: "A resolved table is outside the fence, or a permission rule denied it.", next: "Query allowed catalogs only, or change the fence option." },
   // Plans (design §5.5).
   STATEMENT_UNKNOWN: { state: "refused", what: "This version does not classify that statement form.", next: "Run it in the Databricks SQL editor, or update the plugin." },
@@ -97,6 +99,8 @@ export const WARNINGS = {
   VIEW_BODY_UNREAD: "A view's definition was not returned to this identity.",
   STARTED_WAREHOUSE: "This call started a stopped warehouse, which bills until it auto-stops.",
   CLASSIFICATION_DRIFT: "Query History reported a different statement type, and it was recorded.",
+  BUDGET_OVER: "An opt-in budget with action warn is exceeded; the estimate is in status.",
+  PATH_READ: "A path read (format.`path`) cannot be checked against a fence or Unity Catalog.",
 } as const
 
 export type WarningCode = keyof typeof WARNINGS
@@ -118,8 +122,10 @@ export class DatabricksError extends Error {
   readonly detail: string
   readonly nextStep: string
   readonly providerError?: ProviderError
+  /** For RATE_LIMITED: the seconds to wait before the same call, when Databricks or the client's cap names them. */
+  readonly retryAfterSec?: number
 
-  constructor(code: Code, message?: string, next?: string, providerError?: ProviderError) {
+  constructor(code: Code, message?: string, next?: string, providerError?: ProviderError, extra?: { readonly retryAfterSec?: number }) {
     const entry: ErrorEntry = ERRORS[code]
     const what = message ?? entry.what
     const step = next ?? entry.next
@@ -129,6 +135,7 @@ export class DatabricksError extends Error {
     this.detail = what
     this.nextStep = step
     if (providerError) this.providerError = providerError
+    if (extra?.retryAfterSec !== undefined) this.retryAfterSec = extra.retryAfterSec
   }
 
   get state(): ErrorState {

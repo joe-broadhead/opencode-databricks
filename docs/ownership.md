@@ -55,3 +55,27 @@ edits only its own files, adds new files only under its own folders, and wires a
 - A plan's category comes only from `classifyPlan` (`src/domain/statements.ts`); nothing lowers it.
 - Errors are `DatabricksError(code)` from the one table; Databricks' text goes only in `providerError`.
 - No package adds a runtime dependency. A new devDependency is pinned exactly and, if bundled, appears in `NOTICE`.
+
+## Contract amendments
+
+Accepted requests from the packages' reviews, landed here by the contract keeper.
+
+| From | Change | Who uses it |
+|---|---|---|
+| Review of C (#4), request 1 | `plugin.ts` builds `base` (every port but `reads`), then `reads: placeholderReads(base)`. C replaces that one call with `createReadGuard(base)` and deletes `placeholderReads`. | C |
+| Review of C, request 2 | `DatabricksPort.listTagAssignments` (`unity-catalog.tag-assignments.list`). | B builds it; C matches `inline.piiTags`, refusing with `DEPENDENCIES_UNKNOWN` until both land |
+| Review of C, request 3 | `TableInfo.partitionColumns`, from the columns' `partition_index`. | B maps it; C shows it |
+| Review of C, request 4 | `PreparedRead.warehouse` (the running warehouse); `FakeReads` returns `FAKE_WAREHOUSE`. | C returns it; E charges statements from it |
+| Review of C, request 5 | Codes `INLINE_WITHHELD` (not `FENCED`) and `RUN_SIZE_REFUSED` (not `START_REFUSED`); warnings `BUDGET_OVER` and `PATH_READ`; a `null` parameter is sent without `value`. | C; B for parameters |
+| Review of C, request 6 | `test/unit/registry.test.ts` counts Databricks calls before a tool's first assert (zero); `test/host/plugin.test.ts` accepts `NOT_IMPLEMENTED` or `AUTH_REQUIRED` for a read. | every package |
+| Review of C, M1 (Day 0 part) | `FunctionInfo.sqlPath` (UC `sql_path`). | B maps it; C gates function bodies on `pathIsSafe(sqlPath)` |
+| Review of C, LOW 3 | `ReadRequest.wait`, the call's own wait for a STARTING warehouse. | C |
+| Review of B (#3), request 1 | `FakeState` gains `queries`, `volumes`, `workspace`, `notebooks`, `directories` and `jobs` maps (and `chunks`, for H1). | B's fake; D, E and F's tests |
+| Review of B, request 2 | `DatabricksPort.waitForStatement(account, statementId, { untilMs }, signal)`. | B builds it; C and D wait through the port |
+| Review of B, request 3 (rejected as asked) | No `fromCache` on `StatementAnswer`. Instead `HistoryQuery.cacheQueryId`, and `history`'s filter takes `statementIds` and `includeMetrics`. | B; E for L5 |
+| Review of B, request 4 | `fetchLink(account, link, signal)`: the link host is checked against that account's cloud. | B; E |
+| Review of B, request 5 | `DatabricksError.retryAfterSec` (a fifth constructor argument), carried into the result as `retryAfterSec`. | B sets it on RATE_LIMITED |
+| Review of B, H1 | `getChunk` answers `ChunkAnswer`, the documented top-level chunk shape, with no state or statement id. | B; E |
+| Review of A (#5), ruling 1 (in part) | `DatabricksPort.listConnections`, `currentMetastoreAssignment`, and `effectivePermissions(…, principal?)` (B pages to the end), with their `unity-catalog.*` operations; `Identity.groups`. Not taken: REST reads of secret scopes, serving endpoints and job permissions (their scopes also carry writes). Without the `jobs` scope the jobs family is OK; with it, and secrets and serving always, NOT_CHECKED. | B builds them; A's doctor |
+| Review of A, ruling 2 | `AccountInfo.enforcement` (the `Enforcement` type), raised to `"role"` only by an in-memory doctor report bound to (host, role group, granted scopes); `Token.host`. Decision (a): under fine scopes `"role"` is earned over the Unity Catalog checks, worded `ROLE_ENFORCEMENT_TEXT` ("SQL writes refused on what doctor checked; secret scopes and serving endpoints not checked; job runs use each job's Run as identity"); under `all-apis` secret scopes and serving endpoints stay NOT_CHECKED and block it. | A computes it; B sends to `token.host`; C and F read it |
+
