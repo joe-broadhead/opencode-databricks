@@ -1,9 +1,8 @@
 /**
  * The read path (design §5.1): the one entry point every read goes through, as `ReadGuardPort` (`src/ports.ts`).
  *
- * `wait` is the calling tool's own wait in seconds: a `STARTING` warehouse is awaited for at most that long, so a call
- * that asked for 10 seconds does not block 50 (review `databricks-4.md`, LOW 3). The port's `prepare` has no wait and
- * uses the `wait` option.
+ * The call's own `wait` (`ReadRequest.wait`) bounds the wait for a `STARTING` warehouse, so a call that asked for 10
+ * seconds does not block 50 (review `databricks-4.md`, LOW 3); it defaults to the `wait` option.
  *
  * `analyzeRead` decides steps 1 and 2 on the plugin's own parse (`src/sql/analyze.ts`), then this module does the rest:
  *
@@ -35,10 +34,9 @@ import { actionOf, START_ACTION, tableResource, warehouseResource } from "../dom
 import { DatabricksError, WARNINGS } from "../domain/errors.js"
 import { startDbuHours, sizeRank } from "../domain/cost.js"
 import type { Options } from "../options.js"
-import type { AccountInfo, AuthPort, Clock, DatabricksPort, LedgerPort, PermissionPort, PreparedRead, ReadGuardPort, ReadRequest, Warehouse } from "../ports.js"
+import type { AuthPort, Clock, DatabricksPort, LedgerPort, PermissionPort, PreparedRead, ReadGuardPort, ReadRequest, Warehouse } from "../ports.js"
 import { analyzeRead } from "../sql/analyze.js"
 import { assertBudgetRoom, chargeStart } from "./budget.js"
-import { addedCode } from "./codes.js"
 import { resolveRead, type Warning } from "./dependencies.js"
 import { fenceRefusal } from "./fence.js"
 import { inlineRefusal } from "./inline.js"
@@ -90,7 +88,7 @@ function checkRunSize(deps: GuardDeps, warehouse: Warehouse): void {
   if (!limit) return
   const size = sizeOf(warehouse)
   if (size && sizeRank(size) > sizeRank(limit)) {
-    throw new DatabricksError(addedCode("RUN_SIZE_REFUSED", "START_REFUSED"), `${describe(warehouse, deps.options)} is above maxRunSize ${limit}, so an agent may not run on it.`, "Use a smaller warehouse, or raise maxRunSize.")
+    throw new DatabricksError("RUN_SIZE_REFUSED", `${describe(warehouse, deps.options)} is above maxRunSize ${limit}, so an agent may not run on it.`, "Use a smaller warehouse, or raise maxRunSize.")
   }
 }
 
@@ -158,11 +156,6 @@ async function ensureWarehouse(
   return { warehouse: running, started: true, warnings: [] }
 }
 
-function enforcementOf(account: AccountInfo): PreparedRead["enforcement"] {
-  if (account.mode === "m2m") return "service-principal"
-  return account.role ? "role-requested" : "identity"
-}
-
 const dedupe = (warnings: readonly Warning[]): readonly Warning[] => {
   const seen = new Set<string>()
   return warnings.filter((warning) => {
@@ -177,7 +170,7 @@ const dedupe = (warnings: readonly Warning[]): readonly Warning[] => {
  * Steps 1–7 for one read. Answers the exact text to send and where; the caller submits it. Throws the read path's
  * codes; nothing is sent here except the `current_path()` probe, after the warehouse policy.
  */
-export async function prepareRead(deps: GuardDeps, request: ReadRequest, signal: AbortSignal, wait = deps.options.wait): Promise<PreparedReadEx> {
+export async function prepareRead(deps: GuardDeps, request: ReadRequest, signal: AbortSignal): Promise<PreparedReadEx> {
   const account = deps.auth.account(request.account)
   const analysis = analyzeRead(request.sql)
   if (!analysis.ok) throwRefusal(analysis.refusal)
@@ -215,13 +208,14 @@ export async function prepareRead(deps: GuardDeps, request: ReadRequest, signal:
     )
   }
   const warehouseWarnings: Warning[] = []
+  const wait = request.wait ?? deps.options.wait
   const ensured = await ensureWarehouse(deps, { account: account.alias, warehouseId, request, wait, signal, warnings: warehouseWarnings })
   await assertBudgetRoom(deps.ledger, deps.options, account.alias, request.sessionID)
   if (analysis.pathSensitive.length > 0 || resolved.pathSensitive.length > 0) {
     await assertPathSafe({ databricks: deps.databricks, now: deps.clock.now }, { account: account.alias, warehouseId: ensured.warehouse.id, sessionID: request.sessionID }, signal)
   }
   const warnings = dedupe([...resolved.warnings, ...warehouseWarnings, ...(ensured.started ? [{ code: "STARTED_WAREHOUSE" as const, message: WARNINGS.STARTED_WAREHOUSE }] : [])])
-  return { sent: analysis.sent, warehouseId: ensured.warehouse.id, started: ensured.started, tables: resolved.tables, enforcement: enforcementOf(account), warnings, warehouse: ensured.warehouse }
+  return { sent: analysis.sent, warehouseId: ensured.warehouse.id, warehouse: ensured.warehouse, started: ensured.started, tables: resolved.tables, enforcement: account.enforcement, warnings }
 }
 
 /** The `ReadGuardPort` implementation (design §16; package E's `saved_read` and `save` call it through the port). */

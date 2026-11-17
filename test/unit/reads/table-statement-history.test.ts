@@ -39,6 +39,7 @@ describe("databricks_table", () => {
             { name: "email", typeText: "STRING", mask: { functionName: "main.masks.email" } },
           ],
           rowFilter: { functionName: "main.filters.region" },
+          partitionColumns: ["region", "day"],
           viewDefinition,
           viewDependencies: [
             { kind: "table", name: "main.sales.orders" },
@@ -62,6 +63,7 @@ describe("databricks_table", () => {
       { kind: "table", name: "main.sales.orders" },
       { kind: "function", name: "main.functions.year_of" },
     ])
+    expect(result.partitionColumns).toEqual(["region", "day"])
     expect(result.updatedAt).toBe(new Date(1_700_000_000_000).toISOString())
     expect((result.warnings as { code: string }[]).map((warning) => warning.code)).toEqual(["MASKED_COLUMNS", "ROW_FILTERED"])
     // Its operation, then the table itself: a person's `deny databricks.table on work:table:*.hr.*` stops a view
@@ -88,14 +90,14 @@ describe("databricks_table", () => {
     const result = await runTool("table", { name: "main.sales.orders_v", sample: 5 }, h.call(), h.deps, HANDLERS)
     expect(readRequests(h.databricks)[0]?.statement).toBe("SELECT * FROM (\nSELECT * FROM `main`.`sales`.`orders_v` LIMIT 5\n) AS oc_q")
     expect(result.sample).toEqual({ columns: ["id"], rows: [[1]] })
-    // The tool's own metadata read asserts the table (LOW 4), and so does the read path for the sample; then the table
-    // the view's recorded dependencies name — not the table its body happens to spell (`main.s.t`), because a body's
-    // names are never resolved in the caller's context (review M2).
+    // The tool's own metadata read asserts the table (LOW 4), then the read path asserts the sample's table and both
+    // sources of the view's dependencies: the recorded one and the one its body names (the union, review delta check).
     expect(asserted(h.permission)).toEqual([
       "databricks.table on work:unity-catalog.tables.get",
       "databricks.table on work:table:main.sales.orders_v",
       "databricks.table on work:table:main.sales.orders_v",
       "databricks.table on work:table:main.sales.orders",
+      "databricks.table on work:table:main.s.t",
     ])
   })
 

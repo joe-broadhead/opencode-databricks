@@ -175,7 +175,7 @@ describe("the call's own wait (review LOW 3)", () => {
   it("governs how long a STARTING warehouse is awaited, not the wait option", async () => {
     const h = harness({ options: { accounts: { work: { warehouse: "wh-small" } }, wait: 50 }, answers: answersFor(warehouse({ state: "STARTING" })) as never })
     // With the call's wait of 0, nothing is polled: the call fails at once instead of blocking for 50 seconds.
-    await expect(prepareRead(h.deps, request(), SIGNAL, 0)).rejects.toThrow(/did not reach RUNNING within 0 seconds/)
+    await expect(prepareRead(h.deps, request({ wait: 0 }), SIGNAL)).rejects.toThrow(/did not reach RUNNING within 0 seconds/)
     expect(h.databricks.calls.filter((entry) => entry.method === "getWarehouse")).toHaveLength(1)
   })
 })

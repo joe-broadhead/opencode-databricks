@@ -10,19 +10,20 @@
  *   a CTE, which is not a Unity Catalog object at all.
  * - A view (`VIEW`, `MATERIALIZED_VIEW`, `STREAMING_TABLE`, `METRIC_VIEW`) is read twice: its `view_dependencies` (the
  *   tables, functions, connections and credentials Unity Catalog recorded) and its `view_definition`, parsed with the
- *   same read-path rules and recursed. A view that depends on a connection or a credential needs a plan. A view whose
- *   dependencies are not provided, or whose body is not returned: `DEPENDENCIES_UNKNOWN` as a warning by default — a
- *   view is data its owner published — and a refusal when a fence or an inline rule applies, or under
- *   `strictDependencies`.
+ *   same read-path rules. A view that depends on a connection or a credential needs a plan, and a view whose definition
+ *   Unity Catalog did not return, or that does not parse, is `NEEDS_PLAN` — the recorded list alone never allows a
+ *   read (review `databricks-4.md`, delta check). `strictDependencies` has nothing left to tighten here.
  * - A path read (`delta.\`/path\``) cannot be resolved before the run: refused with `FENCE_UNVERIFIABLE` when a fence is
- *   set (design §5.4), allowed otherwise with the `PATH_READ` warning where the contract declares one.
- * - **A body's own names are never resolved from the caller's context.** A view captures the session PATH at create
- *   time, and a later query of the view "resolve[s] unqualified names against that captured path, not the invoker's
- *   session path" [Databricks: name resolution, "Captured path"]. So a view's tables and functions are taken from its
- *   `view_dependencies` — Unity Catalog's own record — and its body is used only for the refusals that need no
- *   resolution (an excluded built-in, `IDENTIFIER`, a script transform). Resolving a body's `salaries` against the
- *   caller's schema would name the wrong table, refuse valid views, and check the fence on something the read never
- *   touched (review `databricks-4.md`, M2).
+ *   set (design §5.4), allowed otherwise with the `PATH_READ` warning.
+ * - **What a view reads is the union of Unity Catalog's record and its own body**, never one of them alone. A view
+ *   captures the session PATH at create time, and a later query "resolve[s] unqualified names against that captured
+ *   path, not the invoker's session path" [Databricks: name resolution, "Captured path"], so a name in the body is read
+ *   in the view's own context: as the recorded dependency with that last part when exactly one has it (the name the
+ *   view meant when it was created), otherwise completed from the view's own catalog and schema. Every element of the
+ *   union — the recorded table, the recorded function, the table the body names, the function it calls — passes the same
+ *   checks, so a stale or empty `view_dependencies` cannot hide a Python call or a fenced table (review
+ *   `databricks-4.md`, delta check). A body Unity Catalog did not return, or one that does not parse, is `NEEDS_PLAN`:
+ *   the recorded list alone is never enough.
  *
  * **Functions** (`functions.get` [28], strict by default, design §5.4):
  * - A call the allowlist does not hold must be written `catalog.schema.function` (one- and two-part names are refused
@@ -38,22 +39,23 @@
  *   returned, does not parse, or sits deeper than `dependencyDepth` is `NEEDS_PLAN`.
  * - **A SQL function's names resolve along the PATH captured at `CREATE FUNCTION`**, not the caller's [Databricks: name
  *   resolution, "Captured path": "Unqualified names in the body are resolved against the PATH captured at
- *   CREATE FUNCTION, not the invoker's session path"]. Its `routine_dependencies` are authoritative for the functions and
- *   tables it reaches, and a body that holds anything the PATH decides on (an unqualified call, a keyword form,
- *   `count(*)`, an unqualified table) additionally needs the captured path to be safe: `sql_path` [Unity Catalog
- *   function object] present and `pathIsSafe`, or `NEEDS_PLAN` (review `databricks-4.md`, M1).
+ *   CREATE FUNCTION, not the invoker's session path"]. What it reaches is again the union of `routine_dependencies` and
+ *   its body: an unqualified call in the body is allowed only when exactly one recorded function dependency has that
+ *   name, and a body that holds anything the PATH decides on (an unqualified call, a keyword form, `count(*)`, an
+ *   unqualified table) additionally needs the captured path to be safe: `sql_path` [Unity Catalog function object]
+ *   present and `pathIsSafe`, or `NEEDS_PLAN`. An empty `routine_dependencies` therefore hides nothing (review
+ *   `databricks-4.md`, M1 and its delta check).
  *
  * Resolution is cached per account for 5 minutes and only ever feeds the read path's decision (design §5.4).
  */
-import { analyzeRead, type Invocation, type PathSensitive, type ReadAnalysis } from "../sql/analyze.js"
+import { analyzeRead, type Invocation, type PathSensitive, type ReadAnalysis, type TableReference, walk } from "../sql/analyze.js"
+import { parseStatement } from "../sql/parse.js"
 import { DatabricksError, WARNINGS, type WarningCode } from "../domain/errors.js"
 import type { Options } from "../options.js"
 import type { DatabricksPort, Dependency, FunctionInfo, TableInfo } from "../ports.js"
 import { pathIsSafe } from "../domain/functions.js"
 import { RESOLUTION_TTL_MS, ttlCache, type TtlCache } from "./cache.js"
-import { addedWarning } from "./codes.js"
 import { fenceApplies } from "./fence.js"
-import { inlineApplies } from "./inline.js"
 import { quoted, safeText } from "./pattern.js"
 
 /** A warning in the result's shape, restricted to the codes `src/domain/errors.ts` declares. */
@@ -103,6 +105,26 @@ export function contextOf(fullName: string): ReadContext {
 
 const needsPlan = (detail: string, next = "Plan it with databricks_plan({ sql })."): DatabricksError => new DatabricksError("NEEDS_PLAN", detail, next)
 
+/** What a body says, as the plugin reads it (see `readBody`). */
+interface Body {
+  readonly invocations: readonly Invocation[]
+  readonly tables: readonly TableReference[]
+  /** Anything in it the captured PATH resolves: an unqualified call, a keyword form, `count(*)`, an unqualified table. */
+  readonly pathDecides: boolean
+}
+
+/** Whether anything in an analysed body is a name the captured PATH decides. */
+const pathDecides = (body: ReadAnalysis): boolean =>
+  body.pathSensitive.length > 0 || body.invocations.some((invocation) => invocation.decision.kind === "builtin" && invocation.parts.length === 1 && !invocation.countStar)
+
+/** The same, over a body read by `walk` when `analyzeRead` refuses a one- or two-part call. */
+function pathDecidesOf(walked: ReturnType<typeof walk>): boolean {
+  if (walked.keywordForms.length > 0) return true
+  if (walked.invocations.some((invocation) => invocation.countStar)) return true
+  if (walked.invocations.some((invocation) => invocation.decision.kind === "builtin" && invocation.parts.length === 1)) return true
+  return walked.tables.some((table) => table.parts.length < 3 && !table.maybeCte && !table.pathRead)
+}
+
 /** Refusal codes a body keeps as they are: they mean the body runs code or reads a secret, not that it is unknown. */
 const THROWING: ReadonlySet<string> = new Set(["SECRET_FUNCTION_REFUSED", "FUNCTION_REFUSED", "IDENTIFIER_REFUSED", "NEEDS_PLAN"])
 
@@ -111,9 +133,6 @@ export interface ReadContext {
   readonly catalog?: string
   readonly schema?: string
 }
-
-/** The `sql_path` Unity Catalog records on a function (contract request 2 of review `databricks-4.md`; absent today). */
-export type FunctionWithPath = FunctionInfo & { readonly sqlPath?: string }
 
 interface ResolveInput extends ReadContext {
   readonly ports: ResolverPorts
@@ -167,21 +186,6 @@ class Resolver {
     return fenceApplies(this.ports.options, this.account)
   }
 
-  private unknownView(full: string, table: TableInfo): void {
-    const noBody = !table.viewDefinition
-    const noDependencies = !table.viewDependencies
-    if (noBody) this.warnings.push({ code: "VIEW_BODY_UNREAD", message: `Unity Catalog did not return the definition of the view ${quoted(full)} to this identity, so its calls were not checked.` })
-    if (noDependencies) this.warnings.push({ code: "DEPENDENCIES_UNKNOWN", message: `Unity Catalog records no dependencies for the view ${quoted(full)}, so its tables and functions were not checked.` })
-    if (!noBody && !noDependencies) return
-    const strict = this.fence() || inlineApplies(this.ports.options, this.account) || this.ports.options.strictDependencies
-    if (!strict) return
-    throw new DatabricksError(
-      "DEPENDENCIES_UNKNOWN",
-      `The view ${quoted(full)} does not say what it depends on${noBody ? ", and its definition was not returned" : ""}; with a fence, an inline rule or strictDependencies, the read cannot be checked.`,
-      "Read the table the view selects from, or ask its owner to make its dependencies visible.",
-    )
-  }
-
   private async lookupTable(full: string, signal: AbortSignal): Promise<TableInfo | undefined> {
     const key = `${this.account}|${full}`
     const cached = this.tableCache.get(key)
@@ -223,8 +227,7 @@ class Resolver {
   async table(parts: readonly string[], reference: { readonly pathRead: boolean; readonly maybeCte: boolean }, depth: number, signal: AbortSignal, context: ReadContext = this.input): Promise<void> {
     if (reference.pathRead) {
       if (this.fence()) throw new DatabricksError("FENCE_UNVERIFIABLE", `The path read ${quoted(parts.join("."))} cannot be checked against the fence before it runs.`, "Read the table by its Unity Catalog name.")
-      const warning = addedWarning("PATH_READ", `The path read ${quoted(parts.join("."))} is not a Unity Catalog table, so it cannot be checked against the fence or its dependencies.`)
-      if (warning) this.warnings.push(warning)
+      this.warnings.push({ code: "PATH_READ", message: `The path read ${quoted(parts.join("."))} is not a Unity Catalog table, so it cannot be checked against the fence or its dependencies.` })
       return
     }
     const full = qualify(parts, context.catalog, context.schema)
@@ -250,18 +253,20 @@ class Resolver {
     }
     this.warningsFor(table, full)
     if (depth >= this.input.depth) throw needsPlan(`The view chain from ${quoted(full)} is deeper than dependencyDepth (${this.input.depth}).`)
-    const dependencies = table.viewDependencies
-    if (!dependencies) {
-      // Nothing records what the view reads: a warning by default, a refusal under a fence, an inline rule or
-      // strictDependencies. Its body is not resolved against the caller's names (review `databricks-4.md`, M2).
-      this.unknownView(full, table)
-      return
+    const what = quoted(full)
+    const own = contextOf(full)
+    const recorded = table.viewDependencies ?? []
+    const body = table.viewDefinition === undefined ? undefined : this.readBody(table.viewDefinition, `the view ${full}`, false)
+    if (!body) {
+      throw needsPlan(
+        `Unity Catalog did not return the definition of the view ${what} to this identity, or it does not parse as one query, so the plugin cannot tell what it reads.`,
+        "Plan it with databricks_plan({ sql }), or ask the view's owner to make its definition visible.",
+      )
     }
-    // The recorded list is authoritative: the view's functions and tables come from it alone, and the fence sees the
-    // names it holds rather than a body's names completed from the caller's schema.
-    await this.dependencies(quoted(full), dependencies, depth, signal, contextOf(full))
-    if (table.viewDefinition) this.analyseBody(table.viewDefinition, `the view ${full}`, false)
-    else this.unknownView(full, table)
+    // The union: Unity Catalog's record, and everything the body names, read in the view's own context.
+    await this.dependencies(what, recorded, depth, signal, own)
+    await this.bodyTables(what, body.tables, recorded, depth, signal, own)
+    await this.bodyCalls(what, body.invocations, recorded, depth, signal)
   }
 
   /** One function call from the caller's text, at `depth` hops. */
@@ -289,24 +294,23 @@ class Resolver {
       throw needsPlan(`${quoted(full)} is in the system catalog and is not one of the built-ins the read path allows.`, "Use an allowlisted built-in, or plan the statement with databricks_plan({ sql }).")
     }
     if (this.known.has(full)) return
-    const routine: FunctionWithPath | undefined = await this.lookupFunction(full, signal)
+    const routine = await this.lookupFunction(full, signal)
     if (!routine) throw needsPlan(`Unity Catalog does not return the function ${quoted(full)} to this identity, so the plugin cannot check its body.`)
     if (routine.isTableFunction) throw needsPlan(`The function ${quoted(full)} is a table function; a user-defined table function always needs a plan.`)
     if (routine.routineBody !== "SQL") throw needsPlan(`The function ${quoted(full)} is a Python or Scala function (${quoted(routine.externalLanguage ?? "EXTERNAL", 40)}), whose code the plugin cannot check.`)
     if (!routine.routineDefinition) throw needsPlan(`Unity Catalog did not return the body of the function ${quoted(full)} to this identity.`)
     if (depth >= this.input.depth) throw needsPlan(`The function chain from ${quoted(full)} is deeper than dependencyDepth (${this.input.depth}).`)
     this.known.add(full)
-    await this.dependencies(quoted(full), routine.routineDependencies ?? [], depth, signal, contextOf(full))
-    const body = this.analyseBody(routine.routineDefinition, `the function ${full}`, true)
-    if (body.partial) {
-      // An unqualified call: what it reaches is whatever the captured path names, so the path is the check.
-      this.assertCapturedPath(true, routine, full)
-      return
-    }
-    if (!body.analysis) throw needsPlan(`The body of the function ${quoted(full)} does not parse as one expression the read path allows.`)
-    // Explicit three-part calls in the body are checked as written; nothing in it is ever read in the caller's context.
-    for (const invocation of body.analysis.userFunctions) await this.call(invocation, depth + 1, signal)
-    this.assertCapturedPath(this.pathDecides(body.analysis), routine, full)
+    const what = quoted(full)
+    const context = contextOf(full)
+    const recorded = routine.routineDependencies ?? []
+    const body = this.readBody(routine.routineDefinition, `the function ${full}`, true)
+    if (!body) throw needsPlan(`The body of the function ${what} does not parse as one expression the read path allows, so the plugin cannot tell what it calls.`)
+    // The union: Unity Catalog's record, and everything the body names, resolved the way the body resolved it at creation.
+    await this.dependencies(what, recorded, depth, signal, context)
+    await this.bodyCalls(what, body.invocations, recorded, depth, signal)
+    await this.bodyTables(what, body.tables, recorded, depth, signal, context)
+    this.assertCapturedPath(body.pathDecides, routine, full)
   }
 
   /**
@@ -331,7 +335,7 @@ class Resolver {
    * captured path names first), a keyword form, `count(*)`, an unqualified table — is only allowed when UC returned
    * `sql_path` and `pathIsSafe` holds for it. No `sql_path`, or an unsafe one, is `NEEDS_PLAN`.
    */
-  private assertCapturedPath(pathDecides: boolean, routine: FunctionWithPath, full: string): void {
+  private assertCapturedPath(pathDecides: boolean, routine: FunctionInfo, full: string): void {
     if (!pathDecides) return
     const captured = routine.sqlPath
     if (captured === undefined) {
@@ -348,28 +352,101 @@ class Resolver {
     }
   }
 
-  /** What a body's parse says: its analysis, that it names something only the captured path resolves, or neither. */
-  private analyseBody(text: string, what: string, expression: boolean): { readonly analysis?: ReadAnalysis; readonly partial: boolean } {
+  /**
+   * What a body says, as the plugin reads it: the calls it makes, the tables it names, and whether the PATH decides any
+   * of them. `undefined` when the body is not text one query or one expression — the caller then needs a plan, because
+   * the recorded dependencies alone are never enough.
+   */
+  private readBody(text: string, what: string, expression: boolean): Body | undefined {
     const analysis = analyzeRead(expression ? `SELECT ${text}` : text)
-    if (!analysis.ok) {
-      const refusal = analysis.refusal
-      if (THROWING.has(refusal.code)) throw new DatabricksError(refusal.code, `${what}: ${refusal.detail}`, refusal.next)
-      // A one- or two-part call: Databricks resolves it along the object's captured path, so the object's own record
-      // (`view_dependencies`, `routine_dependencies`) is what speaks for it, and a function body also needs that path.
-      return { partial: refusal.code === "FUNCTION_NAME_PARTIAL" }
+    if (analysis.ok) {
+      return { invocations: analysis.invocations, tables: analysis.tables, pathDecides: pathDecides(analysis) }
     }
-    for (const invocation of analysis.invocations) {
+    const refusal = analysis.refusal
+    // A construct that runs code or reads a secret refuses the read outright, with the code the read path would give it.
+    if (THROWING.has(refusal.code)) throw new DatabricksError(refusal.code, `${what}: ${refusal.detail}`, refusal.next)
+    // A one- or two-part call is not a refusal in a body: Databricks resolves it in the object's own captured path, and
+    // the union below reconciles it with Unity Catalog's record. Parse the text again to see every name it uses.
+    if (refusal.code !== "FUNCTION_NAME_PARTIAL") return undefined
+    const parsed = parseStatement(expression ? `SELECT ${text}` : text)
+    if (!parsed.ok || !parsed.tree) return undefined
+    const walked = walk(parsed.tree)
+    for (const item of walked.refusals) throw new DatabricksError(item.code, `${what}: ${item.detail}`, item.next)
+    for (const invocation of walked.invocations) {
       if (invocation.decision.kind !== "refused") continue
       const decision = invocation.decision
       throw new DatabricksError(decision.code, `${what} calls ${decision.name}: ${decision.why}`, "Plan the statement, or read the table the view selects from.")
     }
-    return { analysis, partial: false }
+    return { invocations: walked.invocations, tables: walked.tables, pathDecides: pathDecidesOf(walked) }
   }
 
-  /** Whether anything in a body is a name the captured PATH decides: an unqualified built-in, a keyword form, `count(*)`. */
-  private pathDecides(body: ReadAnalysis): boolean {
-    if (body.pathSensitive.length > 0) return true
-    return body.invocations.some((invocation) => invocation.decision.kind === "builtin" && invocation.parts.length === 1 && !invocation.countStar)
+  /**
+   * Every table a body names, resolved as the object itself would resolve it: the recorded dependency with that last
+   * part when exactly one has it (what the name meant where the object was created), otherwise completed from the
+   * object's own catalog and schema. A name that neither source can pin, or that Unity Catalog does not return, is
+   * `NEEDS_PLAN`: the two sources cannot be reconciled, so the plugin will not guess.
+   */
+  private async bodyTables(what: string, tables: readonly TableReference[], recorded: readonly Dependency[], depth: number, signal: AbortSignal, context: ReadContext): Promise<void> {
+    const recordedTables = recorded.filter((dependency) => dependency.kind === "table").map((dependency) => dependency.name)
+    for (const table of tables) {
+      if (table.maybeCte) continue
+      const resolved = this.reconcileTable(table.parts, recordedTables, context)
+      if (!resolved) {
+        throw needsPlan(
+          `${what} reads ${quoted(table.parts.join("."))}, and neither its recorded dependencies nor its own catalog and schema say which table that is.`,
+          "Name the table in full in the object's definition, or plan the statement with databricks_plan({ sql }).",
+        )
+      }
+      if (table.pathRead) {
+        await this.table(resolved, table, depth, signal, context)
+        continue
+      }
+      try {
+        await this.table(resolved, { pathRead: false, maybeCte: false }, depth, signal, context)
+      } catch (error) {
+        if (error instanceof DatabricksError && error.code === "NOT_FOUND") {
+          throw needsPlan(
+            `${what} reads ${quoted(table.parts.join("."))}, which Unity Catalog does not return as ${quoted(resolved.join("."))}.`,
+            "Plan it with databricks_plan({ sql }), or ask the object's owner to name the table in full.",
+          )
+        }
+        throw error
+      }
+    }
+  }
+
+  /**
+   * Every call a body makes. A three-part name is checked as written; a one- or two-part name is what the object's
+   * captured path resolved, so it is allowed only when exactly one recorded function dependency has that name — that
+   * dependency is already checked — and `NEEDS_PLAN` otherwise.
+   */
+  private async bodyCalls(what: string, invocations: readonly Invocation[], recorded: readonly Dependency[], depth: number, signal: AbortSignal): Promise<void> {
+    const recordedFunctions = recorded.filter((dependency) => dependency.kind === "function").map((dependency) => dependency.name)
+    for (const invocation of invocations) {
+      if (invocation.decision.kind !== "unknown") continue
+      if (invocation.parts.length === 3) {
+        await this.call(invocation, depth + 1, signal)
+        continue
+      }
+      const last = invocation.parts.at(-1)?.toLowerCase()
+      const matches = recordedFunctions.filter((name) => partsOf(name).at(-1)?.toLowerCase() === last)
+      if (matches.length === 1) continue
+      throw needsPlan(
+        `${what} calls ${quoted(invocation.parts.join("."))}, which only the SQL path captured when it was created resolves, and ${matches.length === 0 ? "no recorded dependency names it" : "more than one recorded dependency could be it"}.`,
+        "Write the function's full name in the object's definition, or plan the statement with databricks_plan({ sql }).",
+      )
+    }
+  }
+
+  /** The recorded dependency a body's name must mean, or undefined when neither source pins it. */
+  private reconcileTable(parts: readonly string[], recorded: readonly string[], context: ReadContext): string[] | undefined {
+    if (parts.length === 3) return [...parts]
+    if (parts.length === 2) return context.catalog ? [context.catalog, ...parts] : undefined
+    const last = parts[0]?.toLowerCase()
+    const matches = recorded.filter((name) => partsOf(name).at(-1)?.toLowerCase() === last)
+    if (matches.length > 1) return undefined
+    if (matches.length === 1) return partsOf(matches[0]!)
+    return context.catalog && context.schema ? [context.catalog, context.schema, parts[0]!] : undefined
   }
 
   /**

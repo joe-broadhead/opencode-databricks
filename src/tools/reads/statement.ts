@@ -3,26 +3,24 @@
  * `providerError`, design §5.8) and its next result chunk under the same caps as `databricks_query`.
  *
  * - Results are kept 12 hours after a terminal state [6]; a statement that is gone answers `RESULTS_EXPIRED`.
- * - `chunk` asks for one chunk by index; without it the statement's own `nextChunkIndex` is used, so a caller can page
- *   with the same call.
- * - `wait` polls `GET /statements/{id}` at most once a second, because the GET may lag up to 5 s behind a submit [6].
- *   The first terminal state ends the poll.
+ * - `chunk` asks for one chunk by index. A chunk has no state of its own [6]: it is `ChunkAnswer`, with `rows` and
+ *   `nextChunkIndex` at the top level, and the statement's columns come from the statement.
+ * - `wait` waits through `DatabricksPort.waitForStatement`, which polls at most once a second because the GET may lag up
+ *   to 5 s behind a submit [6]; the first terminal state ends it.
+ * - A statement this process has seen running for longer than `maxRunSeconds` is cancelled here (design §6.2, advisory:
+ *   a closed laptop leaves the warehouse's `STATEMENT_TIMEOUT` as the backstop).
  * - This tool sends no statement and asserts no table: it reads a statement the identity already owns.
  */
 import { DatabricksError } from "../../domain/errors.js"
+import type { ChunkAnswer } from "../../ports.js"
 import { assertTool } from "../../registry.js"
 import type { Handler } from "../../tool-spec.js"
 import { accountOf, statementRef } from "./context.js"
 import { shapeRows } from "./values.js"
 
-const POLL_MS = 1000
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
 /**
- * When this process first saw each running statement, for `maxRunSeconds` (design §5.1, §6.2). A statement above the
- * wait is `CONTINUE`, so the plugin's own cancel is what stops it while this process runs; without that, the backstop is
- * the warehouse's `STATEMENT_TIMEOUT` (2 days by default [20]). It is advisory, and it is this process's memory only.
+ * When this process first saw each running statement, for `maxRunSeconds`. A statement above the wait is `CONTINUE`, so
+ * the plugin's own cancel is what stops it while this process runs. Module-wide and advisory: this process's memory only.
  */
 const firstSeen = new Map<string, number>()
 
@@ -44,16 +42,13 @@ const statement: Handler<"statement"> = async (input, call, deps) => {
   let answer
   try {
     answer = await deps.databricks.getStatement(account, input.statementId, call.signal)
-    for (let elapsed = 0; elapsed < Math.min(wait, 50) && (answer.state === "PENDING" || answer.state === "RUNNING"); elapsed++) {
-      if (call.signal.aborted) throw new DatabricksError("CANCELLED")
-      await sleep(POLL_MS)
-      answer = await deps.databricks.getStatement(account, input.statementId, call.signal)
+    if (wait > 0 && (answer.state === "PENDING" || answer.state === "RUNNING")) {
+      answer = await deps.databricks.waitForStatement(account, input.statementId, { untilMs: deps.clock.now() + Math.min(wait, 50) * 1000 }, call.signal)
     }
   } catch (error) {
     if (error instanceof DatabricksError && error.code === "NOT_FOUND") throw expired(input.statementId)
     throw error
   }
-  // A chunk is fetched only when the caller asks for one: a first call answers the statement as it is.
   const running = answer.state === "PENDING" || answer.state === "RUNNING"
   if (running && deps.clock.now() - seen > deps.options.maxRunSeconds * 1000) {
     await deps.databricks.cancelStatement(account, input.statementId, call.signal)
@@ -61,10 +56,12 @@ const statement: Handler<"statement"> = async (input, call, deps) => {
     throw new DatabricksError("RUN_TIMEOUT", `The statement ran longer than maxRunSeconds (${deps.options.maxRunSeconds} seconds), so this process cancelled it.`, "Narrow the query, or raise maxRunSeconds; a closed laptop leaves the warehouse's STATEMENT_TIMEOUT as the backstop.")
   }
   if (!running) firstSeen.delete(key)
-  const chunk = input.chunk
-  if (chunk !== undefined && !running) {
+  // A chunk is fetched only when the caller asks for one: a first call answers the statement as it is.
+  const rows = input.chunk === undefined || running ? answer.rows : undefined
+  let chunk: ChunkAnswer | undefined
+  if (input.chunk !== undefined && !running) {
     try {
-      answer = await deps.databricks.getChunk(account, input.statementId, chunk, call.signal)
+      chunk = await deps.databricks.getChunk(account, input.statementId, input.chunk, call.signal)
     } catch (error) {
       if (error instanceof DatabricksError && error.code === "NOT_FOUND") throw expired(input.statementId)
       throw error
@@ -73,7 +70,8 @@ const statement: Handler<"statement"> = async (input, call, deps) => {
   const provider = answer.error ? { ...answer.error, trust: "untrusted" as const } : undefined
   if (answer.state === "FAILED") throw new DatabricksError("STATEMENT_FAILED", "The statement failed.", undefined, provider)
   const columns = (answer.manifest?.columns ?? []).map((column) => ({ name: column.name, type: column.typeText || column.typeName }))
-  const shaped = shapeRows(answer.rows, answer.manifest?.columns)
+  const shaped = shapeRows(chunk?.rows ?? rows, answer.manifest?.columns)
+  const nextChunk = chunk ? chunk.nextChunkIndex : answer.nextChunkIndex
   return {
     state: running ? ("running" as const) : answer.state === "CANCELED" ? ("cancelled" as const) : ("ok" as const),
     trust: "untrusted",
@@ -81,8 +79,8 @@ const statement: Handler<"statement"> = async (input, call, deps) => {
     status: answer.state,
     ...(columns.length ? { columns } : {}),
     ...(shaped.rows.length ? { rows: shaped.rows } : {}),
-    ...(chunk === undefined ? {} : { chunk }),
-    ...(answer.nextChunkIndex === undefined ? {} : { nextChunk: answer.nextChunkIndex }),
+    ...(input.chunk === undefined ? {} : { chunk: input.chunk }),
+    ...(nextChunk === undefined ? {} : { nextChunk }),
     ...(running ? { next: statementRef(input.statementId) } : {}),
   }
 }

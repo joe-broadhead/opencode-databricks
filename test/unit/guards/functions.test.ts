@@ -72,23 +72,23 @@ describe("views", () => {
     expect(result.h.databricks.calls.filter((entry) => entry.method === "submit")).toEqual([])
   })
 
-  it("a view whose dependencies are absent warns DEPENDENCIES_UNKNOWN, and is refused under a fence or strictDependencies", async () => {
-    const noDependencies = { ...managed("main.s.v"), tableType: "VIEW", viewDefinition: "SELECT 1 AS a" }
-    const warned = await code("select * from main.s.v", { ...tables({ "main.s.v": noDependencies }) })
-    expect(warned.code).toBe("OK")
-    expect(warned.prepared?.warnings.map((warning) => warning.code)).toContain("DEPENDENCIES_UNKNOWN")
-
-    const fenced = await code("select * from main.s.v", { ...tables({ "main.s.v": noDependencies }) }, { accounts: { work: { warehouse: "wh-small", fence: { allow: ["main.s.*"] } } } })
-    expect(fenced.code).toBe("DEPENDENCIES_UNKNOWN")
-
-    const strict = await code("select * from main.s.v", { ...tables({ "main.s.v": noDependencies }) }, { strictDependencies: true })
-    expect(strict.code).toBe("DEPENDENCIES_UNKNOWN")
+  it("a view with no recorded dependencies is read from its body alone, and refuses when a body name cannot be reconciled", async () => {
+    // Nothing to record, nothing to hide: the body is the whole union, and `SELECT 1 AS a` reads nothing.
+    const empty = await code("select * from main.s.v", { ...tables({ "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDefinition: "SELECT 1 AS a" } }) })
+    expect(empty.code).toBe("OK")
+    expect(empty.prepared?.warnings).toEqual([])
+    // A body name neither the record nor the view's own schema can pin is a plan, not a warning (review delta check).
+    const unreconciled = await code("select * from main.s.v", { ...tables({ "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDefinition: "SELECT * FROM salaries" } }) })
+    expect(unreconciled.code).toBe("NEEDS_PLAN")
   })
 
-  it("a view whose body is not returned warns VIEW_BODY_UNREAD", async () => {
+  it("refuses a view whose body is not returned: the recorded list alone never allows a read", async () => {
     const result = await code("select * from main.s.v", { ...tables({ "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDependencies: [] } }) })
-    expect(result.code).toBe("OK")
-    expect(result.prepared?.warnings.map((warning) => warning.code)).toContain("VIEW_BODY_UNREAD")
+    expect(result.code).toBe("NEEDS_PLAN")
+    const withDeps = await code("select * from main.s.v", {
+      ...tables({ "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDependencies: [{ kind: "table", name: "main.s.t" }] }, "main.s.t": managed("main.s.t") }),
+    })
+    expect(withDeps.code).toBe("NEEDS_PLAN")
   })
 
   it("a view that depends on a connection or a credential is NEEDS_PLAN", async () => {
@@ -216,8 +216,8 @@ describe("functions", () => {
     const h = harness({
       answers: { ...tables({ "main.s.t": managed("main.s.t") }), getWarehouse: () => running(), submit: () => answerOf() },
       auth: new (await import("../../fake/ports.js")).FakeAuth([
-        { alias: "work", mode: "interactive", host: "https://fake-workspace.cloud.databricks.com", cloud: "aws", features: [], warehouse: "wh-small" },
-        { alias: "home", mode: "interactive", host: "https://fake-workspace.cloud.databricks.com", cloud: "aws", features: [], warehouse: "wh-small" },
+        { alias: "work", mode: "interactive", host: "https://fake-workspace.cloud.databricks.com", cloud: "aws", features: [], warehouse: "wh-small", enforcement: "identity" },
+        { alias: "home", mode: "interactive", host: "https://fake-workspace.cloud.databricks.com", cloud: "aws", features: [], warehouse: "wh-small", enforcement: "identity" },
       ]),
     })
     await prepareRead(h.deps, request("select * from main.s.t", { account: "work" }), SIGNAL)
@@ -260,12 +260,12 @@ describe("M1: a function's names resolve in the function's own context", () => {
     expect((await code("select main.s.wrap(a) from main.s.t", body)).code).toBe("NEEDS_PLAN")
     const safe = await code("select main.s.wrap(a) from main.s.t", {
       ...tables({ "main.s.t": managed("main.s.t") }),
-      ...functions({ "main.s.wrap": sqlFunction("main.s.wrap", "upper(a)", { sqlPath: "system.session,system.builtin,system.ai,main.s" } as never) }),
+      ...functions({ "main.s.wrap": sqlFunction("main.s.wrap", "upper(a)", { sqlPath: "system.session,system.builtin,system.ai,main.s" }) }),
     })
     expect(safe.code).toBe("OK")
     const unsafe = await code("select main.s.wrap(a) from main.s.t", {
       ...tables({ "main.s.t": managed("main.s.t") }),
-      ...functions({ "main.s.wrap": sqlFunction("main.s.wrap", "upper(a)", { sqlPath: "main.s,system.builtin" } as never) }),
+      ...functions({ "main.s.wrap": sqlFunction("main.s.wrap", "upper(a)", { sqlPath: "main.s,system.builtin" }) }),
     })
     expect(unsafe.code).toBe("NEEDS_PLAN")
   })
@@ -298,17 +298,21 @@ describe("M2: a view's tables and functions come from its recorded dependencies"
     expect(result.prepared?.tables).toEqual(["main.hr.v", "main.hr.salaries"])
   })
 
-  it("does not resolve a body's names when its dependencies are absent, so it cannot name the wrong table", async () => {
+  it("reads a body's name in the view's own context when nothing is recorded, not the caller's", async () => {
+    // No recorded dependency: `salaries` means what it meant where the view lives, `main.hr`, never the caller's `public`.
     const result = await code(
       "select * from main.hr.v",
       {
-        ...tables({ "main.hr.v": { ...managed("main.hr.v"), tableType: "VIEW", viewDefinition: "SELECT * FROM salaries" }, "main.public.salaries": managed("main.public.salaries") }),
+        ...tables({
+          "main.hr.v": { ...managed("main.hr.v"), tableType: "VIEW", viewDefinition: "SELECT * FROM salaries" },
+          "main.hr.salaries": managed("main.hr.salaries"),
+          "main.public.salaries": managed("main.public.salaries"),
+        }),
       },
       { accounts: { work: { warehouse: "wh-small", catalog: "main", schema: "public" } } },
     )
     expect(result.code).toBe("OK")
-    expect(result.prepared?.tables).toEqual(["main.hr.v"])
-    expect(result.prepared?.warnings.map((warning) => warning.code)).toContain("DEPENDENCIES_UNKNOWN")
+    expect(result.prepared?.tables).toEqual(["main.hr.v", "main.hr.salaries"])
   })
 
   it("accepts a view that calls an unqualified Unity Catalog function its dependencies name in full", async () => {
@@ -317,7 +321,7 @@ describe("M2: a view's tables and functions come from its recorded dependencies"
         "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDefinition: "SELECT year_of(d) AS y FROM main.s.t", viewDependencies: [{ kind: "table", name: "main.s.t" }, { kind: "function", name: "main.s.year_of" }] },
         "main.s.t": managed("main.s.t"),
       }),
-      ...functions({ "main.s.year_of": sqlFunction("main.s.year_of", "year(d)", { sqlPath: "system.session,system.builtin,system.ai,main.s" } as never) }),
+      ...functions({ "main.s.year_of": sqlFunction("main.s.year_of", "year(d)", { sqlPath: "system.session,system.builtin,system.ai,main.s" }) }),
     })
     expect(result.code).toBe("OK")
     expect(result.prepared?.tables).toEqual(["main.s.v", "main.s.t"])
@@ -330,5 +334,68 @@ describe("M2: a view's tables and functions come from its recorded dependencies"
       }),
     })
     expect(result.code).toBe("NEEDS_PLAN")
+  })
+})
+
+describe("the delta check: the dependency set is the union, never the recorded list alone", () => {
+  it("refuses a function with empty routine_dependencies whose body calls python_exec", async () => {
+    // The review's probe: an empty recorded list must not hide the body's Python call.
+    const result = await code("select main.s.sneaky(a) from main.s.t", {
+      ...tables({ "main.s.t": managed("main.s.t") }),
+      ...functions({ "main.s.sneaky": sqlFunction("main.s.sneaky", "python_exec(a)", { sqlPath: "system.session,system.builtin,system.ai,main.s" }) }),
+    })
+    expect(result.code).toBe("NEEDS_PLAN")
+    expect(result.error?.detail).toContain("python_exec")
+  })
+
+  it("refuses a function whose recorded list omits a Python function its body calls in full", async () => {
+    const result = await code("select main.s.sneaky(a) from main.s.t", {
+      ...tables({ "main.s.t": managed("main.s.t") }),
+      ...functions({
+        "main.s.sneaky": sqlFunction("main.s.sneaky", "main.s.py_udf(a)", { sqlPath: "system.session,system.builtin,system.ai,main.s" }),
+        "main.s.py_udf": { fullName: "main.s.py_udf", routineBody: "EXTERNAL", externalLanguage: "PYTHON", isTableFunction: false },
+      }),
+    })
+    expect(result.code).toBe("NEEDS_PLAN")
+  })
+
+  it.each([
+    ["in full", "SELECT main.s.py_udf(a) AS r FROM main.s.t"],
+    ["unqualified", "SELECT py_udf(a) AS r FROM main.s.t"],
+  ])("refuses a view hiding a Python call %s with no recorded dependencies", async (_what, definition) => {
+    const result = await code("select * from main.s.v", {
+      ...tables({ "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDefinition: definition }, "main.s.t": managed("main.s.t") }),
+      ...functions({ "main.s.py_udf": { fullName: "main.s.py_udf", routineBody: "EXTERNAL", externalLanguage: "PYTHON", isTableFunction: false } }),
+    })
+    expect(result.code).toBe("NEEDS_PLAN")
+  })
+
+  it("fences a table a view hides from its recorded dependencies", async () => {
+    // The record names `main.s.t`; the body also reads `main.hr.salaries`. The union sees both, and the fence refuses.
+    const result = await code(
+      "select * from main.s.v",
+      {
+        ...tables({
+          "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDefinition: "SELECT a FROM main.s.t UNION ALL SELECT a FROM main.hr.salaries", viewDependencies: [{ kind: "table", name: "main.s.t" }] },
+          "main.s.t": managed("main.s.t"),
+          "main.hr.salaries": managed("main.hr.salaries"),
+        }),
+      },
+      { accounts: { work: { warehouse: "wh-small", fence: { deny: ["*.hr.*"] } } } },
+    )
+    expect(result.code).toBe("FENCED")
+    expect(result.error?.detail).toContain("main.hr.salaries")
+  })
+
+  it("adds the body's tables to the asserted and fenced set, not just the recorded ones", async () => {
+    const result = await code("select * from main.s.v", {
+      ...tables({
+        "main.s.v": { ...managed("main.s.v"), tableType: "VIEW", viewDefinition: "SELECT a FROM main.s.t UNION ALL SELECT a FROM main.s.other", viewDependencies: [{ kind: "table", name: "main.s.t" }] },
+        "main.s.t": managed("main.s.t"),
+        "main.s.other": managed("main.s.other"),
+      }),
+    })
+    expect(result.code).toBe("OK")
+    expect(result.prepared?.tables).toEqual(["main.s.v", "main.s.t", "main.s.other"])
   })
 })

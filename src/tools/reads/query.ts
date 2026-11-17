@@ -32,13 +32,13 @@ const query: Handler<"query"> = async (input, call, deps) => {
       ...(input.catalog ? { catalog: input.catalog } : {}),
       ...(input.schema ? { schema: input.schema } : {}),
       ...(input.start === undefined ? {} : { start: input.start }),
+      wait,
       tool: "query",
       sessionID: call.sessionID,
       messageID: call.messageID,
       callID: call.id,
     },
     call.signal,
-    wait,
   )
   const maxRows = input.maxRows ?? deps.options.maxRows
   const { answer, durationMs } = await submitRead(deps, {

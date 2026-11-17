@@ -87,13 +87,13 @@ const profile: Handler<"profile"> = async (input, call, deps) => {
       sql,
       ...(input.warehouse ? { warehouse: input.warehouse } : {}),
       ...(input.start === undefined ? {} : { start: input.start }),
+      wait: deps.options.wait,
       tool: "profile",
       sessionID: call.sessionID,
       messageID: call.messageID,
       callID: call.id,
     },
     call.signal,
-    deps.options.wait,
   )
   const wait = deps.options.wait
   const { answer } = await submitRead(deps, { account, tool: "profile", call, prepared, rowLimit: 1, wait })

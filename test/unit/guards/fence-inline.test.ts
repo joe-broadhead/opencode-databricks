@@ -6,8 +6,8 @@
  * - a table a **view** selects from is fenced too, because the fence sees every table the read resolved;
  * - a path read (`delta.<path>`) cannot be checked, so a set fence refuses it (`FENCE_UNVERIFIABLE`) and no fence leaves
  *   it alone (design §5.4);
- * - `inline.deny` withholds inline rows by **source table**, and the `databricks_save` route is untouched — it returns a
- *   file, not cells;
+ * - `inline.deny` withholds inline rows by **source table** (`INLINE_WITHHELD`), and the `databricks_save` route is
+ *   untouched — it returns a file, not cells;
  * - `inlinePii: "save-only"` withholds every inline result; `inline.piiTags` cannot be evaluated by this version's port,
  *   so it fails closed (`DEPENDENCIES_UNKNOWN`);
  * - `databricks_explain` returns no cells, so no inline rule applies to it;
@@ -115,7 +115,7 @@ describe("the inline rules", () => {
 
   it("withholds inline rows for a source table that matches inline.deny, and leaves databricks_save alone", async () => {
     const query = await code("select * from main.hr.people", inlineDeny, answersFor(["main.hr.people"]))
-    expect(query.code).toBe("FENCED")
+    expect(query.code).toBe("INLINE_WITHHELD")
     expect(query.error?.detail).toContain("inline.deny")
     expect(query.error?.nextStep).toContain("databricks_save")
     expect(statementsSent(query.h.databricks)).toEqual([])
@@ -126,7 +126,7 @@ describe("the inline rules", () => {
   it("withholds every inline result under inlinePii: save-only, and still allows save and explain", async () => {
     const options = { inlinePii: "save-only", accounts: { work: { warehouse: "wh-small" } } }
     const query = await code("select * from main.s.t", options, answersFor(["main.s.t"]))
-    expect(query.code).toBe("FENCED")
+    expect(query.code).toBe("INLINE_WITHHELD")
     expect(query.error?.detail).toContain("save-only")
     expect((await code("select * from main.s.t", options, answersFor(["main.s.t"]), { tool: "save" })).code).toBe("OK")
     expect((await code("select * from main.s.t", options, answersFor(["main.s.t"]), { tool: "explain" })).code).toBe("OK")

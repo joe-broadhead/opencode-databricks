@@ -55,13 +55,13 @@ const explain: Handler<"explain"> = async (input, call, deps) => {
       ...(input.catalog ? { catalog: input.catalog } : {}),
       ...(input.schema ? { schema: input.schema } : {}),
       ...(input.start === undefined ? {} : { start: input.start }),
+      wait: 50,
       tool: "explain",
       sessionID: call.sessionID,
       messageID: call.messageID,
       callID: call.id,
     },
     call.signal,
-    50,
   )
   const sent = `${input.extended ? "EXPLAIN EXTENDED" : "EXPLAIN"} ${prepared.sent}`
   const { answer } = await submitRead(deps, {

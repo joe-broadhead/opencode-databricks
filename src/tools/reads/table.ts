@@ -71,9 +71,8 @@ const table: Handler<"table"> = async (input, call, deps) => {
   if (input.sample !== undefined) {
     const prepared = await prepareRead(
       deps,
-      { account, sql: sampleQuery(input.name, Math.min(input.sample, SAMPLE_LIMIT)), ...(input.warehouse ? { warehouse: input.warehouse } : {}), ...(input.start === undefined ? {} : { start: input.start }), tool: "table", sessionID: call.sessionID, messageID: call.messageID, callID: call.id },
+      { account, sql: sampleQuery(input.name, Math.min(input.sample, SAMPLE_LIMIT)), ...(input.warehouse ? { warehouse: input.warehouse } : {}), ...(input.start === undefined ? {} : { start: input.start }), wait, tool: "table", sessionID: call.sessionID, messageID: call.messageID, callID: call.id },
       call.signal,
-      wait,
     )
     const { answer } = await submitRead(deps, { account, tool: "table", call, prepared, rowLimit: Math.min(input.sample, SAMPLE_LIMIT), wait })
     const failure = failureOf(answer, wait)
@@ -91,13 +90,13 @@ const table: Handler<"table"> = async (input, call, deps) => {
         params: [{ name: LINEAGE_PARAM, value: input.name, type: "STRING" }],
         ...(input.warehouse ? { warehouse: input.warehouse } : {}),
         ...(input.start === undefined ? {} : { start: input.start }),
+        wait,
         tool: "table",
         sessionID: call.sessionID,
         messageID: call.messageID,
         callID: call.id,
       },
       call.signal,
-      wait,
     )
     const { answer } = await submitRead(deps, { account, tool: "table", call, prepared, parameters: [{ name: LINEAGE_PARAM, value: input.name, type: "STRING" }], rowLimit: 200, wait })
     const failure = failureOf(answer, wait)
@@ -119,6 +118,7 @@ const table: Handler<"table"> = async (input, call, deps) => {
     ...(info.comment ? { comment: info.comment } : {}),
     ...(info.owner ? { owner: info.owner } : {}),
     columns: info.columns.map((column) => ({ name: column.name, type: column.typeText, ...(column.nullable === undefined ? {} : { nullable: column.nullable }), ...(column.comment ? { comment: column.comment } : {}), ...(column.mask ? { mask: column.mask.functionName } : {}) })),
+    ...(info.partitionColumns?.length ? { partitionColumns: [...info.partitionColumns] } : {}),
     ...(info.rowFilter ? { rowFilter: info.rowFilter.functionName } : {}),
     ...(info.viewDefinition ? { viewDefinition: cut(info.viewDefinition) } : {}),
     ...(info.viewDependencies

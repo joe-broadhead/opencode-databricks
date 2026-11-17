@@ -23,7 +23,6 @@ import { DatabricksError } from "../domain/errors.js"
 import type { Options } from "../options.js"
 import type { Budget, Clock, LedgerPort, SpendTotals } from "../ports.js"
 import type { Warning } from "./dependencies.js"
-import { addedWarning } from "./codes.js"
 
 /** The budget the person set, if any (design §13: `budget` is the plugin's top-level option, not per account). */
 export function budgetOf(options: Options): Budget | undefined {
@@ -76,13 +75,10 @@ export interface StartCharge {
   readonly dbuHours: number
 }
 
-/**
- * The `BUDGET_OVER` warning a `warn` budget earns when a charge pushes past a limit: the estimate is in status, and the
- * call goes on (design §6.2). Absent until the contract declares the warning (see codes.ts).
- */
+/** The `BUDGET_OVER` warning a `warn` budget earns when a charge pushes past a limit: the estimate is in status, and the call goes on (design §6.2). */
 function overWarning(budget: Budget | undefined, exceeded: string | undefined): Warning | undefined {
   if (!exceeded || budget?.action !== "warn") return undefined
-  return addedWarning("BUDGET_OVER", `${WARNINGS.ESTIMATE_ONLY} The ${exceeded} budget is now exceeded; databricks_status({ include: ["spend"] }) shows today's estimate.`)
+  return { code: "BUDGET_OVER", message: `The ${exceeded} budget is exceeded, and the charge was still recorded: databricks_status({ include: ["spend"] }) shows today's estimate.` }
 }
 
 /** Charges a start before it happens; a `refuse` budget that this start would exceed throws and nothing is started. */

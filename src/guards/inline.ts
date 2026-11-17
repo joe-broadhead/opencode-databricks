@@ -16,7 +16,6 @@
  * them, and running it would either leak them or cost a warehouse start for nothing.
  */
 import type { Options } from "../options.js"
-import { addedCode } from "./codes.js"
 import { quoted, firstMatch } from "./pattern.js"
 import type { Refusal } from "./refusal.js"
 
@@ -43,7 +42,7 @@ export function inlineRefusal(input: InlineInput): Refusal | undefined {
   if (!INLINE_TOOLS.has(input.tool)) return undefined
   const save = "Run it with databricks_save({ sql }) to write the rows to a file instead."
   if (input.options.inlinePii === "save-only") {
-    return { code: addedCode("INLINE_WITHHELD", "FENCED"), detail: "inlinePii is save-only on this account, so no rows are returned inline.", next: save }
+    return { code: "INLINE_WITHHELD", detail: "inlinePii is save-only on this account, so no rows are returned inline.", next: save }
   }
   const inline = input.options.accounts?.[input.account]?.inline
   if (inline?.piiTags?.length) {
@@ -57,7 +56,7 @@ export function inlineRefusal(input: InlineInput): Refusal | undefined {
     const pattern = firstMatch(inline?.deny, table)
     if (pattern) {
       return {
-        code: addedCode("INLINE_WITHHELD", "FENCED"),
+        code: "INLINE_WITHHELD",
         detail: `The source table ${quoted(table)} matches inline.deny's ${quoted(pattern)}, so its rows are not returned inline.`,
         next: save,
       }

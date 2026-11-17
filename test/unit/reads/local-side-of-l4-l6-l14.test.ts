@@ -14,11 +14,11 @@
  * with or without a connection dependency, is `NEEDS_PLAN`, so a read never runs one (design §5.4: "such UDFs need a plan
  * until it passes"). **Not provable here:** the network behaviour itself.
  *
- * **L14 — masks, filters, parameters and definition visibility (local side).** A masked column and a row filter are shown by name, and
- * a sample's values are whatever Databricks returned to this identity: the plugin never widens or re-filters. A view
- * whose `view_definition` is not returned warns (`VIEW_BODY_UNREAD`) and, under a fence, is refused; a function whose
- * `routine_definition` is not returned is `NEEDS_PLAN`. **Not provable here:** whether a reader with only `SELECT` or
- * `EXECUTE` really is denied those bodies — the live check measures how often the strict rule fires.
+ * **L14 — masks, filters, parameters and definition visibility (local side).** A masked column and a row filter are shown
+ * by name, and a sample's values are whatever Databricks returned to this identity: the plugin never widens or
+ * re-filters. A view or function whose definition is not returned is `NEEDS_PLAN` (a recorded dependency list alone is
+ * never enough). **Not provable here:** whether a reader with only `SELECT` or `EXECUTE` really is denied those bodies —
+ * the live check measures how often the strict rule fires.
  */
 import { describe, expect, it } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
@@ -161,12 +161,9 @@ describe("L14, local side: masks, filters and definition visibility", () => {
     expect(result.sample).toEqual({ columns: ["email"], rows: [["m***@example.invalid"]] })
   })
 
-  it("warns VIEW_BODY_UNREAD when a view's definition is not returned, and refuses it under a fence", async () => {
+  it("is NEEDS_PLAN when a view's definition is not returned: the recorded list alone never allows a read", async () => {
     const noBody = { getTable: () => Promise.resolve(tableOf({ fullName: "main.s.v", tableType: "VIEW", viewDependencies: [] })) }
-    const warned = harness({ answers: noBody as never })
-    expect((await runTool("query", { sql: "select * from main.s.v" }, warned.call(), warned.deps, HANDLERS)).warnings).toEqual([expect.objectContaining({ code: "VIEW_BODY_UNREAD" })])
-    const fenced = harness({ options: { accounts: { work: { warehouse: "wh-small", fence: { allow: ["main.s.*"] } } } }, answers: noBody as never })
-    expect(await runTool("query", { sql: "select * from main.s.v" }, fenced.call(), fenced.deps, HANDLERS)).toMatchObject({ error: "DEPENDENCIES_UNKNOWN" })
+    expect(await runTool("query", { sql: "select * from main.s.v" }, harness({ answers: noBody as never }).call(), harness({ answers: noBody as never }).deps, HANDLERS)).toMatchObject({ error: "NEEDS_PLAN" })
   })
 
   it("is NEEDS_PLAN when a function's body is not returned to this identity", async () => {
@@ -183,12 +180,12 @@ describe("L14, local side: masks, filters and definition visibility", () => {
   it("says the enforcement a read runs under: a requested role is role-requested until doctor proves it", async () => {
     const h = harness({
       answers: { ...masked, getTable: () => Promise.resolve(tableOf({ fullName: "main.s.t" })) } as never,
-      auth: new (await import("../../fake/ports.js")).FakeAuth([{ alias: "work", mode: "interactive", host: "https://fake-workspace.cloud.databricks.com", cloud: "aws", features: [], warehouse: "wh-small", role: { groupId: "grp-1", name: "readers" } }]),
+      auth: new (await import("../../fake/ports.js")).FakeAuth([{ alias: "work", mode: "interactive", host: "https://fake-workspace.cloud.databricks.com", cloud: "aws", features: [], warehouse: "wh-small", role: { groupId: "grp-1", name: "readers" }, enforcement: "role-requested" }]),
     })
     expect(await runTool("query", { sql: "select * from main.s.t" }, h.call(), h.deps, HANDLERS)).toMatchObject({ enforcement: "role-requested" })
     const service = harness({
       answers: { getTable: () => Promise.resolve(tableOf({ fullName: "main.s.t" })) } as never,
-      auth: new (await import("../../fake/ports.js")).FakeAuth([{ alias: "work", mode: "m2m", host: "https://fake-workspace.cloud.databricks.com", cloud: "aws", features: [], warehouse: "wh-small" }]),
+      auth: new (await import("../../fake/ports.js")).FakeAuth([{ alias: "work", mode: "m2m", host: "https://fake-workspace.cloud.databricks.com", cloud: "aws", features: [], warehouse: "wh-small", enforcement: "service-principal" }]),
     })
     expect(await runTool("query", { sql: "select * from main.s.t" }, service.call(), service.deps, HANDLERS)).toMatchObject({ enforcement: "service-principal" })
   })
