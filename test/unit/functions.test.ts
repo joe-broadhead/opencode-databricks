@@ -5,7 +5,6 @@ import * as generated from "../../src/sql/generated/SqlBaseParser.js"
 import { BUILTIN_NAMES } from "../../src/domain/builtins.generated.js"
 import { AI_PREFIX, ALLOWLIST, decideFunction, EXCLUSIONS, KEYWORD_FORMS, NILADIC_FIXED, pathIsSafe, TABLE_ALLOWLIST } from "../../src/domain/functions.js"
 import { analyzeRead } from "../../src/sql/analyze.js"
-import { foldName } from "../../src/sql/parse.js"
 
 const read = (sql: string) => analyzeRead(sql)
 const code = (sql: string) => {
@@ -60,29 +59,51 @@ describe("the allowlist", () => {
   })
 })
 
-describe("the system qualifiers, folded as Spark compares them (review of #1, round 2, LOW 1)", () => {
-  it("folds ſ, ı, Kelvin K and İ as Java's equalsIgnoreCase does", () => {
-    expect(foldName("ſystem")).toBe("system")
-    expect(foldName("buıltin")).toBe("builtin")
-    expect(foldName("\u212Aafka")).toBe("kafka")
-    expect(foldName("\u0130D")).toBe("id")
-    expect(foldName("SYSTEM")).toBe("system")
-    expect(foldName("straße")).toBe("straße")
+describe("non-ASCII names are refused on the read path (review of #2, R2-M1)", () => {
+  const refused = (sql: string) => {
+    const result = read(sql)
+    expect(result.ok, sql).toBe(false)
+    return result.ok ? undefined : result.refusal
+  }
+
+  it.each([
+    ["the reviewer's LATERAL VIEW probe (ſ)", "select * from main.s.t lateral view poſexplode(arr) v"],
+    ["a LATERAL VIEW generator with ſ", "select * from main.s.t lateral view ſtack(1, a) v"],
+    ["the reviewer's qualified probe", "select ſystem.builtin.upper(a) from main.s.t"],
+    ["İ (U+0130) in a qualifier", "select system.buİltin.secret('s', 'k')"],
+    ["İ in a generator", "select * from main.s.t lateral view İnline(structs) v"],
+    ["ı (U+0131) in a qualifier", "select system.buıltin.secret('s', 'k')"],
+    ["ſ in the catalog part", "select ſystem.builtin.secret('s', 'k')"],
+    ["ſ in a one-part name", "select ſum(a) from main.s.t"],
+    ["the Kelvin sign K (U+212A)", "select * from read_\u212Aafka(bootstrapServers => 'h')"],
+    ["Kelvin in a scalar built-in", "select uppe\u212A(a) from main.s.t"],
+    ["full-width letters", "select ｓｅｃｒｅｔ('s', 'k')"],
+    ["full-width in a table function", "select * from ｒａｎｇｅ(3)"],
+    ["a combining mark", "select upper\u0301(a) from main.s.t"],
+    ["a ligature", "select cat.sch.\uFB00oo(1)"],
+    ["a backquoted non-ASCII name", "select `ſecret`('s', 'k')"],
+    ["a non-ASCII user function, fully named", "select cat.sch.ſecret_fn(1)"],
+    ["a keyword form spelt with ſ", "select ſubstring(s from 2) from main.s.t"],
+    ["a keyword form spelt with ı", "select extract(year from d), trım(both 'x' from s) from main.s.t"],
+    ["a niladic keyword spelt with ı", "select current_tımestamp"],
+    ["LEFT as a function name, spelt with ſ", "select * from main.s.t where a > 0 and ſelect_x = 1 or left(s, 1) = 'x' and ſELECT 1"],
+  ])("%s → refused", (_what, sql) => {
+    expect(refused(sql)).toBeDefined()
   })
 
-  it("decides the reviewer's probes as system.builtin.secret and system.ai.python_exec", () => {
-    expect(code("select ſystem.builtin.secret('s', 'k')")).toBe("SECRET_FUNCTION_REFUSED")
-    expect(code("select system.buıltin.secret('s', 'k')")).toBe("SECRET_FUNCTION_REFUSED")
-    expect(code("select ſystem.ai.python_exec('x')")).toBe("NEEDS_PLAN")
-    expect(code("select ſecret('s', 'k')")).toBe("SECRET_FUNCTION_REFUSED")
-    expect(code("select * from read_\u212Aafka(bootstrapServers => 'h')")).toBe("NEEDS_PLAN")
+  it("answers with the ASCII next step for a function name", () => {
+    expect(refused("select * from main.s.t lateral view poſexplode(arr) v")).toMatchObject({ code: "SQL_INVALID", next: "Write the function's name in ASCII." })
+    // ſystem upper-cases to SYSTEM, a keyword token: refused by the keyword rule.
+    expect(refused("select ſystem.builtin.upper(a) from main.s.t")).toMatchObject({ code: "SQL_INVALID", next: "Write keywords and function names in ASCII." })
+    expect(refused("select system.buİltin.upper(a) from main.s.t")).toMatchObject({ code: "SQL_INVALID", next: "Write the function's name in ASCII." })
+    expect(refused("select ſubstring(s from 2) from main.s.t")).toMatchObject({ code: "SQL_INVALID", next: "Write keywords and function names in ASCII." })
   })
 
-  it("never hands package C a user function whose name only reads as another under Java's case rules", () => {
-    const result = read("select caſ.sch.f(1)")
-    expect(!result.ok && result.refusal.code).toBe("SQL_INVALID")
-    const plain = read("select cat.sch.f(1)")
-    expect(plain.ok && plain.userFunctions.map((call) => call.confusable)).toEqual([false])
+  it("keeps the worst code when the name is refused anyway, and leaves plain ASCII and non-ASCII data alone", () => {
+    expect(refused("select secret('s', 'k'), ſum(a) from main.s.t")).toMatchObject({ code: "SECRET_FUNCTION_REFUSED" })
+    expect(sent("select upper(a), 'ſ', ünïcode, `straße` from main.s.t")).toBe("select system.builtin.upper(a), 'ſ', ünïcode, `straße` from main.s.t")
+    expect(sent("select * from main.s.t lateral view posexplode(arr) v")).toBe("select * from main.s.t lateral view posexplode(arr) v")
+    expect(sent("select system.builtin.upper(a) from main.s.t")).toBe("select system.builtin.upper(a) from main.s.t")
   })
 })
 

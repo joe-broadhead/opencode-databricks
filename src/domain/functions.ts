@@ -65,7 +65,8 @@ export type FunctionDecision =
  * statement sent alone has no temporary functions. `builtin.<name>` is a two-part name Databricks qualifies with
  * current_catalog(), but open-source Spark also tries `system.builtin.<name>` for it, so the exclusions apply to it
  * exactly as to `system.builtin.<name>` (review #1, LOW 1); otherwise it is `unknown`. Any other `system.*` name is
- * NEEDS_PLAN (`notAllowlisted`). Anything else is `unknown`. Parts arrive folded (`foldName`, src/sql/parse.ts).
+ * NEEDS_PLAN (`notAllowlisted`). Anything else is `unknown`. On the read path parts are ASCII: a non-ASCII function
+ * name is refused before this decision matters (src/sql/analyze.ts).
  */
 export function decideFunction(parts: readonly string[], position: "scalar" | "table"): FunctionDecision {
   const name = parts.join(".")

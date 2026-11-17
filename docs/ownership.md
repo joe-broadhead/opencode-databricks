@@ -45,8 +45,8 @@ edits only its own files, adds new files only under its own folders, and wires a
   `count(*)` and unqualified table names are path-sensitive.
 - `userFunctions` holds only three-part names outside the `system` catalog: a non-built-in function named by one or
   two parts is refused by `analyzeRead` (`FUNCTION_NAME_PARTIAL`), and any `system.*` name that is not an allowlisted
-  built-in, such as a built-in added after the pin, is `NEEDS_PLAN` there. Function names are folded as Spark compares
-  the system qualifiers (`foldName`), so `ſystem.builtin.secret` is decided as `system.builtin.secret`. Package C checks
+  built-in, such as a built-in added after the pin, is `NEEDS_PLAN` there. A function name, generator name or keyword
+  written with a non-ASCII character is refused (`SQL_INVALID`), so every name C sees is ASCII. Package C checks
   each user function under design §5.4 and sends it as written; **a function Unity Catalog does not return (not
   found, or not visible) is `NEEDS_PLAN`**, and C's tests pin that.
 - The read path is one entry point, `ReadGuardPort.prepare` (`src/ports.ts`), which package C implements in

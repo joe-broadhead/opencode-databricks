@@ -33,8 +33,7 @@ anything is sent:
    Catalog SQL function named in full (`catalog.schema.function`) whose body passes the same checks. A function that
    is not a built-in, named by one or two parts, is refused (`FUNCTION_NAME_PARTIAL`): Databricks would look it up
    along the SQL path, where `system.builtin` and `system.ai` come first, not where the plugin checked it. Everything
-   else needs a plan, including a `system.*` routine that is not an allowlisted built-in (a built-in added after the
-   pin). Names are compared as Spark compares them, so `ſystem.builtin.secret` is `system.builtin.secret`. `secret`, `try_secret` and
+   else needs a plan. `secret`, `try_secret` and
    `list_secrets` are refused everywhere; `reflect` and `java_method` too.
 3. **Qualified built-ins.** Each allowlisted call is sent as `system.builtin.<name>`, except a `LATERAL VIEW`
    generator, which Spark accepts with at most two name parts: it is sent as written and needs the default path. Databricks resolves a
