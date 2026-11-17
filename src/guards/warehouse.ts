@@ -21,7 +21,6 @@
  * Warehouses API's [15]. Every figure here is an estimate, and the result says so (`ESTIMATE_ONLY`).
  */
 import { DBU_PER_HOUR, sizeRank, type Size } from "../domain/cost.js"
-import type { DatabricksError } from "../domain/errors.js"
 import type { Options } from "../options.js"
 import type { Warehouse, WarehouseState } from "../ports.js"
 import { quoted, safeText } from "./pattern.js"
@@ -111,7 +110,3 @@ export function stateClass(state: WarehouseState): "ready" | "starting" | "start
   if (state === "STOPPED") return "startable"
   return "hopeless"
 }
-
-/** A Databricks error's code, for a caller that has to map one answer (results gone, not found) onto another code. */
-export const codeOf = (error: unknown): string | undefined =>
-  typeof error === "object" && error !== null && "code" in error ? String((error as DatabricksError).code) : undefined

@@ -21,7 +21,6 @@ import { sizeOf, usdPerHour } from "../../guards/warehouse.js"
 import { chargeStatement } from "../../guards/budget.js"
 import { sessionToken } from "../../guards/path.js"
 import type { Warning } from "../../guards/dependencies.js"
-import { safeText } from "../../guards/pattern.js"
 
 /** The account a call runs for: its `account` input, or the first configured account, or `default` (as the registry). */
 export function accountOf(input: { readonly account?: string }, deps: Deps): string {
@@ -65,9 +64,6 @@ export function statementRef(statementId: string): string {
   const safe = statementId.replace(/[^A-Za-z0-9_-]/gu, "").slice(0, 128)
   return safe ? `databricks_statement({ statementId: ${JSON.stringify(safe)}, wait: 30 })` : "databricks_statement({ statementId, wait: 30 })"
 }
-
-/** A warehouse name, safe for the plugin's own words. */
-export const warehouseName = (name: string): string => safeText(name, 120)
 
 /** A wait in seconds as the API takes it: 0, or 5 to 50 [6]. */
 export function waitTimeoutOf(wait: number): number {
