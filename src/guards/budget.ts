@@ -54,14 +54,16 @@ const budgetError = (spent: Spent, totals: SpendTotals): DatabricksError =>
     "Wait for the reset (local midnight for the daily budget), or raise the budget option.",
   )
 
-/** Refuses when a `refuse` budget is already spent. Called before a statement, and after a warehouse check. */
-export async function assertBudgetRoom(ledger: LedgerPort, options: Options, account: string, sessionId?: string): Promise<SpendTotals> {
-  const totals = await ledger.totals(account, sessionId)
+/**
+ * Refuses when a `refuse` budget is already spent. Called before a statement, and after a warehouse check. With no
+ * budget, or one that only warns, it touches nothing: the ledger's file is read only when a refusal could follow.
+ */
+export async function assertBudgetRoom(ledger: LedgerPort, options: Options, account: string, sessionId?: string): Promise<void> {
   const budget = budgetOf(options)
-  if (budget?.action !== "refuse") return totals
+  if (budget?.action !== "refuse") return
+  const totals = await ledger.totals(account, sessionId)
   const spent = reachedLimit(budget, totals)
   if (spent) throw budgetError(spent, totals)
-  return totals
 }
 
 export interface StartCharge {
