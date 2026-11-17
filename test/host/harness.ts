@@ -1,8 +1,8 @@
 // An embedded OpenCode host from the public @opencode/sdk, with no listener and no private host source, as in
 // opencode-github's host tests. The plugin is loaded the way a user loads it: a config `plugins` entry that points at
-// this package (its built dist/) with options. A probe plugin lends its context to the tests. Day 0's plugin calls no
-// Databricks API, so the fetch router has no target: any request off the machine fails the host's close(). Package B
-// points the router at its fake server (test/fake/databricks.ts).
+// this package (its built dist/) with options. A probe plugin lends its context to the tests. The fetch router has no
+// target here, so any request off the machine is blocked and fails the host's close(); a test that expects the plugin's
+// Databricks port to try (because no fake answers it) says so with `expectBlocked`, and asserts what the report says.
 //
 // Host version: the SDK in devDependencies (2.2.3). HOST_SDK_DIR names a directory whose node_modules holds another
 // @opencode/sdk (scripts/check.mjs installs each tested release outside the lockfile); the host then runs that SDK.
@@ -56,6 +56,11 @@ export interface HostInput {
   readonly config?: () => Record<string, unknown>
   /** The version the host reports to plugins; defaults to the SDK's. */
   readonly version?: string
+  /**
+   * The plugin's Databricks port is expected to try to reach a workspace, and the router blocks it: those calls are
+   * part of what the test checks (the report says they were unavailable), so `close()` does not fail on them.
+   */
+  readonly expectBlocked?: boolean
 }
 
 let hosts = 0
@@ -65,6 +70,7 @@ export async function startHost(input: HostInput = {}) {
   const work = join(base, "work")
   mkdirSync(work, { recursive: true })
   const blockedBefore = router.blocked.length
+  const expectBlocked = input.expectBlocked ?? false
   const config = {
     plugins: [{ package: REPO, options: input.options ?? {} }],
     // Keep the built-in local providers from probing their default ports.
@@ -94,7 +100,7 @@ export async function startHost(input: HostInput = {}) {
     async close() {
       await client.close()
       const blocked = router.blocked.slice(blockedBefore)
-      if (blocked.length > 0) throw new Error(`the host tried to leave the machine: ${[...new Set(blocked)].join(", ")}`)
+      if (!expectBlocked && blocked.length > 0) throw new Error(`the host tried to leave the machine: ${[...new Set(blocked)].join(", ")}`)
     },
   }
   try {

@@ -103,6 +103,7 @@ export const OPERATIONS = [
   "sql.statements.query",
   "sql.statements.get",
   "sql.statements.change",
+  "sql.statements.cancel",
   "sql.warehouses.list",
   "sql.warehouses.get",
   "sql.warehouses.start",

@@ -1,0 +1,51 @@
+{
+  "statement_id": "00000000-0000-4000-8000-000000000006",
+  "status": {
+    "state": "SUCCEEDED"
+  },
+  "manifest": {
+    "format": "ARROW_STREAM",
+    "schema": {
+      "column_count": 2,
+      "columns": [
+        {
+          "name": "id",
+          "position": 0,
+          "type_name": "LONG",
+          "type_text": "BIGINT"
+        },
+        {
+          "name": "amount",
+          "position": 1,
+          "type_name": "DECIMAL",
+          "type_precision": 18,
+          "type_scale": 2,
+          "type_text": "DECIMAL(18,2)"
+        }
+      ]
+    },
+    "total_chunk_count": 2,
+    "total_row_count": 200,
+    "total_byte_count": 587,
+    "truncated": false
+  },
+  "result": {
+    "chunk_index": 0,
+    "row_count": 100,
+    "row_offset": 0,
+    "byte_count": 293,
+    "external_links": [
+      {
+        "external_link": "https://fixture-results.s3.amazonaws.com/results/fixture-chunk-0?X-Amz-Signature=fixture-not-a-secret",
+        "expiration": "2026-11-17T09:45:00.000Z",
+        "chunk_index": 0,
+        "row_offset": 0,
+        "row_count": 100,
+        "byte_count": 293,
+        "next_chunk_index": 1,
+        "next_chunk_internal_link": "/api/2.0/sql/statements/00000000-0000-4000-8000-000000000006/result/chunks/1"
+      }
+    ],
+    "next_chunk_index": 1
+  }
+}

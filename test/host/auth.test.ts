@@ -15,7 +15,9 @@ const TOKEN = "dapi00000000000000000000000000000000-not-real"
 let host: Host
 
 beforeAll(async () => {
-  host = await startHost({ options: { accounts: { work: { warehouse: "wh-small" } } } })
+  // The doctor's checks reach for Databricks, and this host has no fake behind the router: the calls are blocked, the
+  // report says they were unavailable, and the tests assert that.
+  host = await startHost({ options: { accounts: { work: { warehouse: "wh-small" } } }, expectBlocked: true })
 })
 
 afterAll(async () => {
@@ -154,8 +156,9 @@ describe("/databricks-doctor", () => {
     })
     const event = await runCommand("databricks-doctor")
     expect(event).toContain("sign-in: OK")
-    expect(event).toContain("UNAVAILABLE")
-    expect(event).toContain("not built yet")
+    // Package B's client is the Databricks port now, so the check fails on the host test's blocked fetch rather than on
+    // a placeholder; either way it is UNAVAILABLE and no token reaches the report.
+    expect(event).toContain("identity: UNAVAILABLE")
     expect(event).not.toContain(TOKEN)
   }, 120_000)
 })

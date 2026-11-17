@@ -1,0 +1,32 @@
+{
+  "runs": [
+    {
+      "run_id": 455644833,
+      "job_id": 11223344,
+      "run_name": "nightly-orders",
+      "state": {
+        "life_cycle_state": "TERMINATED",
+        "result_state": "SUCCESS",
+        "state_message": ""
+      },
+      "start_time": 1794398400000,
+      "end_time": 1794398460000,
+      "creator_user_name": "owner@example.com",
+      "trigger": "PERIODIC",
+      "run_type": "JOB_RUN"
+    },
+    {
+      "run_id": 455644834,
+      "job_id": 11223344,
+      "run_name": "nightly-orders",
+      "state": {
+        "life_cycle_state": "RUNNING"
+      },
+      "start_time": 1794398500000,
+      "creator_user_name": "owner@example.com",
+      "trigger": "PERIODIC",
+      "run_type": "JOB_RUN"
+    }
+  ],
+  "has_more": false
+}
