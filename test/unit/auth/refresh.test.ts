@@ -96,6 +96,49 @@ describe("renewing a sign-in", () => {
     expect(stale.nextStep).toContain("/connect")
   })
 
+  it("M1: an older latest never replaces a newer sign-in; the newer one is refreshed and keeps its role", async () => {
+    const endpoint = await tokenEndpoint(() => ({ status: 200, body: { access_token: "NEW-A", refresh_token: "NEW-R2", scope: "sql", expires_in: 3600 } }))
+    endpoints.push(endpoint)
+    const state = refreshState()
+    // This process once held sign-in 1 (no role) and is holding its credential as `latest`.
+    state.latest.set("work", { credential: hostCredential({ refresh: "OLD-R", access: "OLD-A", generation: 1 }), generation: 1 })
+    // The person signed in again in another process (role 999); the host hands this process the new credential.
+    const newer = hostCredential({ refresh: "NEW-R1", access: "NEW-A0", roleGroupId: "999", generation: 2 })
+    const renewed = await refreshSignIn({ alias: "work", name: "Databricks", credential: newer, fetch: globalThis.fetch, now: () => NOW, state, tokenEndpoint: endpoint.url })
+    expect(endpoint.requests).toHaveLength(1)
+    expect(renewed.refresh).toBe("NEW-R2")
+    expect(readSignIn(renewed.metadata)?.roleGroupId).toBe("999")
+    expect(state.latest.get("work")?.credential.refresh).toBe("NEW-R2")
+  })
+
+  it("M1: a newer sign-in is returned to an older caller, so no older identity is ever restored", async () => {
+    const endpoint = await tokenEndpoint(() => ({ status: 200, body: { access_token: "WHY", refresh_token: "WHY", expires_in: 3600 } }))
+    endpoints.push(endpoint)
+    const state = refreshState()
+    const newer = hostCredential({ refresh: "NEW-R1", roleGroupId: "999", generation: 3 })
+    state.latest.set("work", { credential: newer, generation: 3, rotatedFrom: "NEW-R0" })
+    const older = hostCredential({ refresh: "OLD-R", generation: 1 })
+    const renewed = await refreshSignIn({ alias: "work", name: "Databricks", credential: older, fetch: globalThis.fetch, now: () => NOW, state, tokenEndpoint: endpoint.url })
+    expect(endpoint.requests).toHaveLength(0)
+    expect(renewed.refresh).toBe("NEW-R1")
+    expect(readSignIn(renewed.metadata)?.roleGroupId).toBe("999")
+  })
+
+  it("LOW 3: validates the stored workspace again before sending a refresh token to it", async () => {
+    const endpoint = await rotationEndpoint()
+    const error = (await refreshSignIn({
+      alias: "work",
+      name: "Databricks",
+      credential: hostCredential({ host: "http://dbc-1.cloud.databricks.com", refresh: "R1", expires: NOW }),
+      fetch: globalThis.fetch,
+      now: () => NOW,
+      state: refreshState(),
+      tokenEndpoint: endpoint.url,
+    }).catch((caught: unknown) => caught)) as DatabricksError
+    expect(error.code).toBe("HOST_INVALID")
+    expect(endpoint.requests).toHaveLength(0)
+  })
+
   it("maps invalid_grant to AUTH_REQUIRED with the sign-in-again step, and repeats no provider text", async () => {
     const endpoint = await rotationEndpoint()
     const error = (await refreshSignIn({

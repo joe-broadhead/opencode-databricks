@@ -18,8 +18,9 @@
  */
 import { spawn } from "node:child_process"
 import { DatabricksError } from "../domain/errors.js"
-import { reasonOf } from "../redact.js"
+import { shortReason } from "../redact.js"
 import type { AccountSettings } from "./accounts.js"
+import { parseWorkspaceHost } from "./host.js"
 import { requestToken } from "./token.js"
 import type { Token } from "../ports.js"
 
@@ -27,14 +28,17 @@ const CACHE_SKEW_MS = 60_000
 const CLI_TIMEOUT_MS = 30_000
 const OUTPUT_CAP = 1024 * 1024
 
+/** A minted token, before the auth core adds the workspace it was minted for. */
+export type MintedToken = Omit<Token, "host">
+
 /** A token with the moment it stops being usable, shared by the modes that mint one. */
 export interface TokenCache {
-  get(key: string, now: number): Token | undefined
-  set(key: string, token: Token): void
+  get(key: string, now: number): MintedToken | undefined
+  set(key: string, token: MintedToken): void
 }
 
 export function tokenCache(): TokenCache {
-  const entries = new Map<string, Token>()
+  const entries = new Map<string, MintedToken>()
   return {
     get(key, now) {
       const token = entries.get(key)
@@ -51,7 +55,7 @@ export function tokenCache(): TokenCache {
  * The personal access token from `tokenEnv`. A PAT carries whatever its user carries, so its scope is unknown here and
  * treated as every scope; only an interactive sign-in's grants are checked.
  */
-export function patToken(alias: string, settings: AccountSettings, env: NodeJS.ProcessEnv): Token {
+export function patToken(alias: string, settings: AccountSettings, env: NodeJS.ProcessEnv): MintedToken {
   const name = settings.tokenEnv
   if (!name) throw new DatabricksError("AUTH_REQUIRED", `Account ${alias} uses mode pat but names no tokenEnv.`, `Set accounts.${alias}.tokenEnv to the environment variable that holds the token.`)
   const value = env[name]?.trim()
@@ -74,13 +78,14 @@ export interface M2mInput {
   readonly scopes: readonly string[]
   readonly fetch: typeof globalThis.fetch
   readonly now: () => number
+  readonly allowCustomHost?: boolean
   readonly signal: AbortSignal
   readonly cache: TokenCache
   readonly tokenEndpoint?: string
 }
 
 /** The service principal's workspace token, from the client credentials grant [10]. */
-export async function m2mToken(input: M2mInput): Promise<Token> {
+export async function m2mToken(input: M2mInput): Promise<MintedToken> {
   if (input.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.")
   const { alias, settings } = input
   const secretName = settings.clientSecretEnv
@@ -93,12 +98,16 @@ export async function m2mToken(input: M2mInput): Promise<Token> {
   }
   const host = settings.host
   if (!host) throw new DatabricksError("AUTH_CLIENT_INVALID", `Account ${alias} uses mode m2m but names no workspace host.`, `Set accounts.${alias}.host to the workspace URL.`)
+  // The option may be written with a trailing slash or in another case; the endpoint uses the normalised workspace.
+  const endpoint = parseWorkspaceHost(host, input.allowCustomHost ?? false).host
   const scope = m2mScope(input.scopes)
+  // Fine-grained M2M scopes are not live-tested yet (L2): the request asks for the scopes this call needs, and a scoped
+  // secret narrower than that answers invalid_scope, mapped to AUTH_SCOPE_MISSING with the fix. docs/auth.md says so.
   const key = `m2m:${alias}:${scope}`
   const cached = input.cache.get(key, input.now())
   if (cached) return cached
   const token = await requestToken({
-    endpoint: input.tokenEndpoint ?? `${host}/oidc/v1/token`,
+    endpoint: input.tokenEndpoint ?? `${endpoint}/oidc/v1/token`,
     form: {
       grant_type: "client_credentials",
       scope,
@@ -110,7 +119,7 @@ export async function m2mToken(input: M2mInput): Promise<Token> {
     invalidScope: "scope",
   })
   const granted = token.scopes ?? scope.split(" ")
-  const minted: Token = { accessToken: token.accessToken, expiresAt: input.now() + token.expiresIn * 1000, scopes: granted }
+  const minted: MintedToken = { accessToken: token.accessToken, expiresAt: input.now() + token.expiresIn * 1000, scopes: granted }
   input.cache.set(key, minted)
   return minted
 }
@@ -182,10 +191,13 @@ export interface CliInput {
   readonly command?: string
 }
 
-/** The child's environment: the parent's, minus every DATABRICKS_* variable, so `--profile` is the only identity. */
+/** The child's environment: the parent's, minus every DATABRICKS_* variable except the one that relocates profiles. */
 function cliEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const cleaned: NodeJS.ProcessEnv = {}
-  for (const [key, value] of Object.entries(env)) if (!key.startsWith("DATABRICKS_")) cleaned[key] = value
+  for (const [key, value] of Object.entries(env)) {
+    // DATABRICKS_CONFIG_FILE names where the profiles live; it carries no identity. The rest could replace the profile's.
+    if (!key.startsWith("DATABRICKS_") || key === "DATABRICKS_CONFIG_FILE") cleaned[key] = value
+  }
   return cleaned
 }
 
@@ -194,7 +206,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** The token `databricks auth token --profile <profile>` reports: `{ access_token, token_type, expiry }` [14]. */
-export async function cliToken(input: CliInput): Promise<Token> {
+export async function cliToken(input: CliInput): Promise<MintedToken> {
   if (input.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.")
   const { alias, settings } = input
   const profile = settings.profile
@@ -215,8 +227,15 @@ export async function cliToken(input: CliInput): Promise<Token> {
   }
   if (result.timedOut) throw new DatabricksError("UNAVAILABLE", `The Databricks CLI did not answer within ${CLI_TIMEOUT_MS / 1000} seconds for profile ${profile}.`, "Run databricks auth token --profile " + profile + " in a terminal to see why.")
   if (result.code !== 0) {
-    const reason = reasonOf(result.stderr, "no reason given")
-    throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI could not get a token for profile ${profile}: ${reason}.`, `Run databricks auth login --profile ${profile} again, or sign in interactively with /connect.`)
+    // The CLI's stderr is provider text: it goes only in `providerError`, marked untrusted and redacted (design §12),
+    // never in `message`.
+    const detail = shortReason(result.stderr)
+    throw new DatabricksError(
+      "AUTH_REQUIRED",
+      `The Databricks CLI could not get a token for profile ${profile} (exit code ${result.code ?? "unknown"}).`,
+      `Run databricks auth login --profile ${profile} again, or sign in interactively with /connect.`,
+      detail ? { message: detail, trust: "untrusted" } : undefined,
+    )
   }
   let answer: unknown
   try {
@@ -229,7 +248,7 @@ export async function cliToken(input: CliInput): Promise<Token> {
   if (!access) throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI returned no access token for profile ${profile}.`, `Run databricks auth login --profile ${profile} again.`)
   if (Number.isNaN(expiry)) throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI returned no usable expiry for profile ${profile}.`, "Update the Databricks CLI, then run databricks auth login again.")
   if (expiry <= input.now()) throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI's cached token for profile ${profile} has expired.`, `Run databricks auth login --profile ${profile} again.`)
-  const token: Token = { accessToken: access, expiresAt: expiry, scopes: ["all-apis"] }
+  const token: MintedToken = { accessToken: access, expiresAt: expiry, scopes: ["all-apis"] }
   input.cache.set(`cli:${alias}`, token)
   return token
 }

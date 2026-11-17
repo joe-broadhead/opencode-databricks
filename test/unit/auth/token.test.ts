@@ -21,7 +21,7 @@ describe("an interactive token", () => {
     const credential = hostCredential({ access: DUMMY_TOKEN, expires: NOW + 3_600_000 })
     const { core } = authCore({ accounts: { work: { warehouse: "wh" } } }, { credential, now: () => NOW })
     const token = await core.token("work", ["sql", "unity-catalog"], signal())
-    expect(token).toEqual({ accessToken: DUMMY_TOKEN, expiresAt: NOW + 3_600_000, scopes: readSignIn(credential.metadata)!.grantedScopes })
+    expect(token).toEqual({ accessToken: DUMMY_TOKEN, expiresAt: NOW + 3_600_000, scopes: readSignIn(credential.metadata)!.grantedScopes, host: FAKE_HOST })
   })
 
   it("refuses with AUTH_REQUIRED when no sign-in is stored, before any network call", async () => {
@@ -123,7 +123,7 @@ describe("the account list and the sign-in summary", () => {
 
   it("lists a configured workspace at once", () => {
     const { core } = authCore({ accounts: { work: { host: FAKE_HOST, warehouse: "wh" } } }, { now: () => NOW })
-    expect(core.accounts()).toEqual([{ alias: "work", mode: "interactive", host: FAKE_HOST, cloud: "aws", features: [], warehouse: "wh" }])
+    expect(core.accounts()).toEqual([{ alias: "work", mode: "interactive", host: FAKE_HOST, cloud: "aws", features: [], warehouse: "wh", enforcement: "identity" }])
   })
 
   it("remembers the workspace and role across a restart without storing a token", async () => {
@@ -135,7 +135,7 @@ describe("the account list and the sign-in summary", () => {
     expect(JSON.stringify(storage.value())).not.toContain("refresh")
     const second = authCore({ accounts: { work: { warehouse: "wh", role: "123" } } }, { storage, now: () => NOW })
     await second.core.load()
-    expect(second.core.accounts()).toEqual([{ alias: "work", mode: "interactive", host: FAKE_HOST, cloud: "aws", features: [], role: { groupId: "123" }, warehouse: "wh" }])
+    expect(second.core.accounts()).toEqual([{ alias: "work", mode: "interactive", host: FAKE_HOST, cloud: "aws", features: [], role: { groupId: "123" }, warehouse: "wh", enforcement: "role-requested" }])
     expect(await codeOf(() => second.core.token("work", ["sql"], signal()))).toBe("AUTH_REQUIRED")
   })
 

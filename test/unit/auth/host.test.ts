@@ -54,6 +54,27 @@ describe("the workspace URL and its cloud", () => {
     expect(parseWorkspaceHost("https://private.example.com:8443", true).host).toBe("https://private.example.com:8443")
   })
 
+  it("P2: refuses lookalikes, backslash tricks, encoded paths, IDN and trailing dots", () => {
+    expect(codeOf("https://x.cloud.databricks.com.evil.com")).toBe("HOST_INVALID")
+    expect(codeOf("https://xcloud.databricks.com")).toBe("HOST_INVALID")
+    expect(codeOf("https://cloud.databricks.com")).toBe("HOST_INVALID")
+    expect(codeOf("https://evil.com\\@x.cloud.databricks.com")).toBe("HOST_INVALID")
+    expect(codeOf("https://evil.com#@x.cloud.databricks.com")).toBe("HOST_INVALID")
+    expect(codeOf("https://x.cloud.databricks.com@evil.com")).toBe("HOST_INVALID")
+    expect(codeOf("https://u:p@x.cloud.databricks.com")).toBe("HOST_INVALID")
+    expect(codeOf("https://x.cloud.databricks.com.")).toBe("HOST_INVALID")
+    expect(codeOf("https://x.cloud.databricks.com%2f.evil.com")).toBe("HOST_INVALID")
+    expect(codeOf("https://x.cloud.databricks.co%6d.evil.com")).toBe("HOST_INVALID")
+    expect(codeOf("https://x.cloud.databrícks.com")).toBe("HOST_INVALID")
+  })
+
+  it("P2: WHATWG folds some characters into a real Databricks name, which stays inside the Databricks zone", () => {
+    expect(parseWorkspaceHost("https://x。cloud.databricks.com", false).host).toBe("https://x.cloud.databricks.com")
+    expect(parseWorkspaceHost("https://X.CLOUD.DATABRICKS.COM:443/", false).host).toBe("https://x.cloud.databricks.com")
+    expect(parseWorkspaceHost("https://x.cloud.databricks.co%6d", false).host).toBe("https://x.cloud.databricks.com")
+    expect(parseWorkspaceHost("https://ｘ.cloud.databricks.com", false).host).toBe("https://x.cloud.databricks.com")
+  })
+
   it("never repeats the submitted value, which may carry a credential", () => {
     try {
       parseWorkspaceHost("https://hunter2:secret@dbc-1.cloud.databricks.com", false)

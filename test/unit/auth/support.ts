@@ -67,6 +67,7 @@ export interface CredentialInput {
   readonly grantedScopes?: readonly string[]
   readonly choice?: "fine" | "all-apis"
   readonly roleGroupId?: string
+  readonly generation?: number
 }
 
 /** A stored OAuth credential with a valid sign-in record. */
@@ -84,6 +85,7 @@ export function hostCredential(input: CredentialInput = {}): HostCredential {
       requestedScopes: input.requestedScopes ?? ["sql", "unity-catalog", "query-history", "offline_access"],
       grantedScopes: input.grantedScopes ?? ["sql", "unity-catalog", "query-history", "offline_access"],
       ...(input.roleGroupId !== undefined ? { roleGroupId: input.roleGroupId } : {}),
+      ...(input.generation !== undefined ? { generation: input.generation } : {}),
     }),
   }
 }

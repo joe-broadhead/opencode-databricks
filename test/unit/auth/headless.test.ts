@@ -82,6 +82,20 @@ describe("m2m", () => {
     expect(endpoint.requests[0]!.form.get("assume_group")).toBe("1234567890123456")
   })
 
+  it("P3: builds the endpoint from the normalised host, so a trailing slash or other case cannot double the path", async () => {
+    const seen: string[] = []
+    const fetch = (async (url: string | URL | Request) => {
+      seen.push(String(url))
+      return new Response(JSON.stringify({ access_token: "A", expires_in: 3600 }), { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+    const { core } = authCore(
+      { accounts: { ci: { mode: "m2m", host: "https://X.cloud.databricks.com/", clientId: CLIENT_ID, clientSecretEnv: "DBX_CLIENT_SECRET" } } },
+      { env: { DBX_CLIENT_SECRET: SECRET }, now: () => NOW, fetch },
+    )
+    await core.token("ci", ["sql"], signal())
+    expect(seen).toEqual(["https://x.cloud.databricks.com/oidc/v1/token"])
+  })
+
   it("maps invalid_client to AUTH_CLIENT_INVALID and invalid_scope to AUTH_SCOPE_MISSING", async () => {
     for (const [oauth, expected] of [
       ["invalid_client", "AUTH_CLIENT_INVALID"],
@@ -111,13 +125,15 @@ describe("cli", () => {
     const { command, dir } = fakeCli(
       `printf '%s\\n' "$@" > $DIR/args.txt\nenv > $DIR/env.txt\nprintf '%s' '{"access_token":"${DUMMY_TOKEN}","token_type":"Bearer","expiry":"2027-01-01T00:00:00Z"}'`,
     )
-    const { core } = authCore({ accounts: { lap: { mode: "cli", host: FAKE_HOST, profile: "work" } } }, { env: { PATH: process.env.PATH ?? "", DATABRICKS_TOKEN: DUMMY_TOKEN, DATABRICKS_HOST: "https://elsewhere.example.com" }, now: () => NOW, cliCommand: command })
+    const { core } = authCore({ accounts: { lap: { mode: "cli", host: FAKE_HOST, profile: "work" } } }, { env: { PATH: process.env.PATH ?? "", DATABRICKS_TOKEN: DUMMY_TOKEN, DATABRICKS_HOST: "https://elsewhere.example.com", DATABRICKS_CONFIG_FILE: "/tmp/profiles" }, now: () => NOW, cliCommand: command })
     const token = await core.token("lap", ["sql"], signal())
     expect(token.accessToken).toBe(DUMMY_TOKEN)
     expect(token.expiresAt).toBe(Date.parse("2027-01-01T00:00:00Z"))
     expect(readFileSync(join(dir, "args.txt"), "utf8").trim().split("\n")).toEqual(["auth", "token", "--profile", "work", "-o", "json"])
     const environment = readFileSync(join(dir, "env.txt"), "utf8")
-    expect(environment).not.toMatch(/^DATABRICKS_/mu)
+    expect(environment).not.toMatch(/^DATABRICKS_TOKEN=/mu)
+    expect(environment).not.toMatch(/^DATABRICKS_HOST=/mu)
+    expect(environment).toContain("DATABRICKS_CONFIG_FILE=/tmp/profiles")
   })
 
   it("caches until the reported expiry", async () => {
@@ -147,6 +163,11 @@ describe("cli", () => {
     expect(failure.code).toBe("AUTH_REQUIRED")
     expect(failure.message).toContain("profile work")
     expect(failure.message).not.toContain(DUMMY_TOKEN)
+    expect(failure.message).not.toContain("the CLI failed for")
+    // The CLI's own text is provider data: it goes to providerError, redacted, and never to the message.
+    expect(failure.providerError?.message).toContain("the CLI failed for")
+    expect(failure.providerError?.message).not.toContain(DUMMY_TOKEN)
+    expect(failure.providerError?.trust).toBe("untrusted")
 
     const nonsense = fakeCli(`printf '%s' 'not json'`)
     const bad = authCore({ accounts: { lap: { mode: "cli", host: FAKE_HOST, profile: "work" } } }, { now: () => NOW, cliCommand: nonsense.command }).core
@@ -159,8 +180,10 @@ describe("cli", () => {
 })
 
 describe("a Jelly-hosted engine", () => {
-  it("is detected by the plugin-secrets global, the surface Jelly documents", () => {
-    expect(isHostedEngine({ [JELLY_PLUGIN_SECRETS]: {} })).toBe(true)
+  it("P5: any of the three handoff globals Jelly installs marks a hosted engine", () => {
+    expect(isHostedEngine({ [JELLY_PLUGIN_SECRETS]: { get: () => undefined } })).toBe(true)
+    expect(isHostedEngine({ [Symbol.for("jelly.engine-seal")]: {} })).toBe(true)
+    expect(isHostedEngine({ [Symbol.for("jelly.action-key")]: {} })).toBe(true)
     expect(isHostedEngine({})).toBe(false)
     expect(isHostedEngine({ [Symbol.for("another.host")]: {} })).toBe(false)
   })

@@ -19,12 +19,15 @@ export interface DoctorCommandDeps {
   readonly options: Options
   readonly auth: AuthPort
   readonly databricks: () => DatabricksPort
+  /** Told about every report, so an earned `role` can be remembered for status (in memory only). */
+  readonly onReport?: (report: DoctorReport) => void
 }
 
-/** One account's block, in a stable order: the title, each check, then the warnings and one next step. */
+/** One account's block, in a stable order: the title, each check, the claim, then the warnings and one next step. */
 export function formatAccount(report: DoctorReport): string[] {
   const place = [report.mode, report.host ?? "no workspace URL yet", report.cloud].filter(Boolean).join(", ")
   const lines = [`${report.alias} (${place}): enforcement ${report.enforcement}`]
+  if (report.claim) lines.push(`Guarantee: ${report.claim}`)
   for (const item of report.checks) lines.push(`- ${item.id}: ${item.status} · ${item.detail}${item.next ? ` Next step: ${item.next}` : ""}`)
   if (report.warnings.length > 0) lines.push(`Warnings: ${report.warnings.map((warning) => `${warning.code} (${warning.message})`).join("; ")}`)
   lines.push(`Next step: ${report.nextStep}`)
@@ -60,7 +63,10 @@ export async function registerDoctorCommand(ctx: Pick<AuthContext, "command" | "
           signal: new AbortController().signal,
           now: Date.now,
         }).then(
-          (reports) => ({ text: formatDoctor(reports), description: summarizeDoctor(reports) }),
+          (reports) => {
+            for (const report of reports) deps.onReport?.(report)
+            return { text: formatDoctor(reports), description: summarizeDoctor(reports) }
+          },
           () => ({ text: `${DISPLAY_NAME} doctor could not run.`, description: `${DISPLAY_NAME} doctor could not run` }),
         )
         await ctx.session.synthetic({ sessionID, delivery, text: outcome.text, description: outcome.description, resume: false })

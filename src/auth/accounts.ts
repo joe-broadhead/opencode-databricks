@@ -10,6 +10,7 @@
 import type { Feature } from "../domain/actions.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { Options } from "../options.js"
+import type { EnforcementKind } from "../domain/contract.js"
 import type { AccountInfo, Mode } from "../ports.js"
 import { parseWorkspaceHost } from "./host.js"
 import type { ScopeChoice } from "./scopes.js"
@@ -119,14 +120,16 @@ export function validateAccounts(options: Options): void {
  * the identity the token carries. A configured role that differs from the bound one is `AUTH_REQUIRED` at the token, so
  * it is not shown as if it were in force.
  */
-export function accountInfo(account: AccountSettings, snapshotHost: string | undefined, allowCustomHost: boolean, roleGroupId?: string): AccountInfo | undefined {
+export type AccountBase = Omit<AccountInfo, "enforcement">
+
+export function accountInfo(account: AccountSettings, snapshotHost: string | undefined, allowCustomHost: boolean, roleGroupId?: string, roleName?: string): AccountBase | undefined {
   const raw = account.host ?? snapshotHost
   if (!raw) return undefined
   const { host, cloud } = parseWorkspaceHost(raw, allowCustomHost)
   const role =
     account.mode === "interactive"
       ? roleGroupId !== undefined && (account.role === undefined || account.role === roleGroupId)
-        ? { groupId: roleGroupId }
+        ? { groupId: roleGroupId, ...(roleName !== undefined ? { name: roleName } : {}) }
         : undefined
       : account.role !== undefined
         ? { groupId: account.role }
@@ -148,7 +151,7 @@ export function accountInfo(account: AccountSettings, snapshotHost: string | und
  * The enforcement a token carries, before `doctor` proves the role (design §5.6). Status words `role-requested` as
  * "<name> (requested)" until a clean doctor report earns `role`; this package owns the doctor, package F words status.
  */
-export function enforcementOf(account: AccountInfo): "role-requested" | "identity" | "service-principal" {
+export function enforcementOf(account: Pick<AccountInfo, "mode" | "role">): EnforcementKind {
   if (account.mode === "m2m") return "service-principal"
   return account.role !== undefined ? "role-requested" : "identity"
 }

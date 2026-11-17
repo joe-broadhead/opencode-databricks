@@ -7,24 +7,32 @@
  * 2. loads the non-secret sign-in summary so status can name a workspace before the first call;
  * 3. registers one OAuth integration per interactive account, `databricks-<alias>`, with the form, the browser flow,
  *    the refresh callback and the role binding (design §3.2);
- * 4. registers `/databricks-doctor` (design §14);
+ * 4. registers `/databricks-doctor` (design §14), and keeps the certification it earns in memory only;
  * 5. returns the `AuthPort` package B and every tool call `token(account, scopes, signal)` on.
  *
  * The token call is the one seat belt every Databricks request passes: a missing sign-in is `AUTH_REQUIRED`, a scope
  * the sign-in does not carry is `AUTH_SCOPE_MISSING` before any fetch, a configured role that differs from the one
  * bound at sign-in is `AUTH_REQUIRED`, and a headless mode in a Jelly-hosted engine is `HEADLESS_REFUSED`. `pat`, `m2m`
  * and `cli` read a secret only from the environment or the CLI's own cache (design §3.2); no option holds one.
+ *
+ * Two accepted contract additions are computed here before the keeper lands them, and are returned as extra fields:
+ * `AccountInfo.enforcement` (design §5.6; `role` only from a doctor report of this process, bound to the credential's
+ * host, role and grant, and cleared by any sign-in or refresh that changes them) and `Token.host` (the workspace the
+ * token was minted for, so package B never uses a stale display summary).
  */
 import { DISPLAY_NAME } from "../constants.js"
+import type { EnforcementKind } from "../domain/contract.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { Options } from "../options.js"
 import type { AccountInfo, AuthPort, DatabricksPort, Token } from "../ports.js"
-import { accountSettings, accountInfo, isHeadless, settingsOf, validateAccounts, type AccountSettings } from "./accounts.js"
+import { accountSettings, accountInfo, isHeadless, settingsOf, validateAccounts, type AccountBase, type AccountSettings } from "./accounts.js"
 import { registerDoctorCommand } from "./commands.js"
 import { readSignIn, type SignIn } from "./credential.js"
+import type { DoctorReport } from "./doctor.js"
 import { authorizeDatabricks, OAUTH_METHOD_ID } from "./oauth.js"
 import { integrationIdFor, integrationNames, readSignInAnswer, signInForm, type RedirectDefaults } from "./form.js"
 import { cliToken, m2mToken, patToken, tokenCache, type CliRunner } from "./headless.js"
+import { readHostCredential } from "./host-credential.js"
 import { parseWorkspaceHost } from "./host.js"
 import { isHostedEngine, headlessRefused } from "./jelly.js"
 import { refreshSignIn, refreshState, type RefreshState } from "./refresh.js"
@@ -52,12 +60,30 @@ export interface CoreInput {
 
 const signInAgain = (alias: string) => `Run /connect and choose ${DISPLAY_NAME}, or run opencode auth login databricks-${alias}.`
 
+/** What makes a doctor certification apply to the credential now in force: the workspace, role and granted scopes. */
+interface Seen {
+  readonly host: string
+  readonly roleGroupId?: string
+  readonly grantedScopes: readonly string[]
+}
+
+const sameSeen = (left: Seen, right: Seen): boolean =>
+  left.host === right.host && left.roleGroupId === right.roleGroupId && [...left.grantedScopes].sort().join(" ") === [...right.grantedScopes].sort().join(" ")
+
+const seenOf = (stored: SignIn): Seen => ({ host: stored.host, ...(stored.roleGroupId !== undefined ? { roleGroupId: stored.roleGroupId } : {}), grantedScopes: stored.grantedScopes })
+
 /** The auth port over one set of options. Tests build it with fakes; `createAuth` with the host. */
 export class AuthCore implements AuthPort {
   readonly port: AuthPort = this
   readonly refreshes: RefreshState = refreshState()
   private readonly input: CoreInput
   private readonly cache = tokenCache()
+  /** The credential in force per account, for the certification binding. In memory only. */
+  private readonly current = new Map<string, Seen>()
+  /** A doctor report that earned `role`, bound to the credential it proved. In memory only, never in storage. */
+  private readonly certified = new Map<string, Seen>()
+  /** The role group's display name, when SCIM returned it: display only (the contract's `AccountInfo.role.name`). */
+  private readonly roleNames = new Map<string, string>()
 
   constructor(input: CoreInput) {
     this.input = input
@@ -73,8 +99,8 @@ export class AuthCore implements AuthPort {
     for (const settings of accountSettings(this.input.options)) {
       const summary = this.input.summaries.get(settings.alias)
       try {
-        const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId)
-        if (info) infos.push(info)
+        const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId, this.roleNames.get(settings.alias))
+        if (info) infos.push({ ...info, enforcement: this.enforcementFor(settings.alias, info) })
       } catch {
         // A workspace this plugin would refuse is not an account; account() throws HOST_INVALID for it.
       }
@@ -85,7 +111,7 @@ export class AuthCore implements AuthPort {
   account(alias?: string): AccountInfo {
     const settings = this.settings(alias)
     const summary = this.input.summaries.get(settings.alias)
-    const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId)
+    const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId, this.roleNames.get(settings.alias))
     if (!info) {
       throw new DatabricksError(
         "AUTH_REQUIRED",
@@ -93,7 +119,7 @@ export class AuthCore implements AuthPort {
         `Run /connect and choose ${DISPLAY_NAME} and enter the workspace URL, or set accounts.${settings.alias}.host.`,
       )
     }
-    return info
+    return { ...info, enforcement: this.enforcementFor(settings.alias, info) }
   }
 
   async token(alias: string, scopes: readonly string[], signal: AbortSignal): Promise<Token> {
@@ -103,9 +129,12 @@ export class AuthCore implements AuthPort {
     switch (settings.mode) {
       case "interactive":
         return this.interactive(settings, scopes, signal)
-      case "pat":
-        return this.checked(patToken(alias, settings, this.input.env), scopes, settings)
-      case "m2m":
+      case "pat": {
+        const host = this.workspaceOf(settings)
+        return this.checked(patToken(alias, settings, this.input.env), scopes, settings, host)
+      }
+      case "m2m": {
+        const host = this.workspaceOf(settings)
         return this.checked(
           await m2mToken({
             alias,
@@ -114,14 +143,18 @@ export class AuthCore implements AuthPort {
             scopes,
             fetch: this.input.fetch,
             now: this.input.now,
+            allowCustomHost: this.input.options.allowCustomHost,
             signal,
             cache: this.cache,
             ...(this.input.tokenEndpoint !== undefined ? { tokenEndpoint: this.input.tokenEndpoint } : {}),
           }),
           scopes,
           settings,
+          host,
         )
-      case "cli":
+      }
+      case "cli": {
+        const host = this.workspaceOf(settings)
         return this.checked(
           await cliToken({
             alias,
@@ -135,7 +168,9 @@ export class AuthCore implements AuthPort {
           }),
           scopes,
           settings,
+          host,
         )
+      }
     }
   }
 
@@ -147,20 +182,45 @@ export class AuthCore implements AuthPort {
       credential,
       fetch: this.input.fetch,
       now: this.input.now,
+      allowCustomHost: this.input.options.allowCustomHost,
       state: this.refreshes,
       ...(signal !== undefined ? { signal } : {}),
       ...(this.input.tokenEndpoint !== undefined ? { tokenEndpoint: this.input.tokenEndpoint } : {}),
     })
-    await this.remember(alias, renewed)
+    await this.remember(alias, renewed, "read")
     return renewed
   }
 
-  /** Record a completed sign-in or a resolved token's workspace and role, for display only. */
-  async remember(alias: string, credential: HostCredential): Promise<void> {
+  /** Record a completed sign-in or a resolved token's triple; clears a certification the new credential no longer matches. */
+  async remember(alias: string, credential: HostCredential, kind: "sign-in" | "read" = "read"): Promise<void> {
     const stored = readSignIn(credential.metadata)
     if (!stored) return
-    this.refreshes.latest.set(alias, credential)
+    const seen = seenOf(stored)
+    this.current.set(alias, seen)
+    const certified = this.certified.get(alias)
+    if (certified && !sameSeen(certified, seen)) this.certified.delete(alias)
+    const generation = stored.generation ?? 0
+    const latest = this.refreshes.latest.get(alias)
+    // A delayed read of an older sign-in never replaces a newer one; a fresh sign-in at the same millisecond does.
+    if (!latest || generation > latest.generation || (kind === "sign-in" && generation >= latest.generation)) {
+      this.refreshes.latest.set(alias, { credential, generation })
+    }
     await this.input.summaries.remember(alias, { host: stored.host, ...(stored.roleGroupId !== undefined ? { roleGroupId: stored.roleGroupId } : {}) })
+  }
+
+  /** A doctor report raised `role`: remember the credential it proved, so `account().enforcement` can say so in this process. */
+  certify(report: DoctorReport): void {
+    if (report.role?.name !== undefined) this.roleNames.set(report.alias, report.role.name)
+    if (report.enforcement !== "role") return
+    const seen = this.current.get(report.alias)
+    if (seen) this.certified.set(report.alias, seen)
+  }
+
+  private enforcementFor(alias: string, info: AccountBase): EnforcementKind {
+    const base = info.mode === "m2m" ? "service-principal" : info.role !== undefined ? "role-requested" : "identity"
+    const certified = this.certified.get(alias)
+    const current = this.current.get(alias)
+    return certified && current && sameSeen(certified, current) ? "role" : base
   }
 
   private settings(alias?: string): AccountSettings {
@@ -169,6 +229,13 @@ export class AuthCore implements AuthPort {
       throw new DatabricksError("AUTH_REQUIRED", `No Databricks account is named ${alias}.`, `Use one of the configured accounts: ${accountSettings(this.input.options).map((account) => account.alias).join(", ")}.`)
     }
     return settings
+  }
+
+  private workspaceOf(settings: AccountSettings): string {
+    if (!settings.host) {
+      throw new DatabricksError("AUTH_REQUIRED", `No workspace URL is configured for ${settings.alias}.`, `Set accounts.${settings.alias}.host.`)
+    }
+    return parseWorkspaceHost(settings.host, this.input.options.allowCustomHost).host
   }
 
   private async interactive(settings: AccountSettings, scopes: readonly string[], signal: AbortSignal): Promise<Token> {
@@ -183,21 +250,23 @@ export class AuthCore implements AuthPort {
     if (!credential.access) throw new DatabricksError("AUTH_REQUIRED", `The stored Databricks sign-in for ${settings.alias} has no access token.`, signInAgain(settings.alias))
     const stored = readSignIn(credential.metadata)
     if (!stored) throw new DatabricksError("AUTH_REQUIRED", `The stored Databricks sign-in for ${settings.alias} has no workspace record.`, signInAgain(settings.alias))
-    this.binding(settings, stored)
-    await this.remember(settings.alias, credential)
-    return this.checked({ accessToken: credential.access, expiresAt: credential.expires, scopes: stored.grantedScopes }, scopes, settings, stored)
+    const host = this.binding(settings, stored)
+    await this.remember(settings.alias, credential, "read")
+    return this.checked({ accessToken: credential.access, expiresAt: credential.expires, scopes: stored.grantedScopes }, scopes, settings, host, stored)
   }
 
-  /** The security binding of design §3.1: the token's workspace and role must be the configured ones, so an edit of
-   * `opencode.json` can neither redirect the token nor change the identity an agent runs as. */
-  private binding(settings: AccountSettings, stored: SignIn): void {
-    const signInHost = parseWorkspaceHost(stored.host, this.input.options.allowCustomHost)
+  /**
+   * The security binding of design §3.1: the token's workspace and role must be the configured ones, so an edit of
+   * `opencode.json` can neither redirect the token nor change the identity an agent runs as. Returns the workspace.
+   */
+  private binding(settings: AccountSettings, stored: SignIn): string {
+    const signInHost = parseWorkspaceHost(stored.host, this.input.options.allowCustomHost).host
     if (settings.host !== undefined) {
       const configured = parseWorkspaceHost(settings.host, this.input.options.allowCustomHost)
-      if (configured.host !== signInHost.host) {
+      if (configured.host !== signInHost) {
         throw new DatabricksError(
           "AUTH_REQUIRED",
-          `The stored sign-in for ${settings.alias} is for ${signInHost.host}, and accounts.${settings.alias}.host is ${configured.host}.`,
+          `The stored sign-in for ${settings.alias} is for ${signInHost}, and accounts.${settings.alias}.host is ${configured.host}.`,
           `Sign in to ${configured.host} again, or restore the account's host.`,
         )
       }
@@ -212,13 +281,14 @@ export class AuthCore implements AuthPort {
         "A config change cannot change the identity a token runs as: sign in again with the role you want.",
       )
     }
+    return signInHost
   }
 
   /** The scope check before any call (design §3.3): a missing scope is `AUTH_SCOPE_MISSING`, and nothing is fetched. */
-  private checked(token: Token, needed: readonly string[], settings: AccountSettings, stored?: SignIn): Token {
+  private checked(token: Omit<Token, "host">, needed: readonly string[], settings: AccountSettings, host: string, stored?: SignIn): Token {
     const granted = stored?.grantedScopes ?? token.scopes
     const missing = needed.filter((scope) => scope !== "any" && !granted.includes(scope) && !granted.includes("all-apis"))
-    if (missing.length === 0) return { ...token, scopes: granted }
+    if (missing.length === 0) return { ...token, scopes: granted, host }
     const next = missing
       .map((scope) => {
         const feature = featureOfScope(scope)
@@ -255,25 +325,6 @@ function redirectDefaults(options: Options): RedirectDefaults {
   return { ...(options.redirectUri !== undefined ? { redirectUri: options.redirectUri } : {}), callbackPort: options.callbackPort }
 }
 
-/** The host's credential store, as the auth port reads it. */
-function hostCredentials(context: AuthContext): CredentialsSource {
-  return {
-    async read(alias, signal) {
-      if (signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.")
-      const connection = await context.integration.connection.active(integrationIdFor(alias))
-      if (!connection) return undefined
-      let credential: HostCredential | undefined
-      try {
-        credential = await context.integration.connection.resolve(connection)
-      } catch (error) {
-        if (error instanceof DatabricksError) throw error
-        throw new DatabricksError("AUTH_REQUIRED", `The stored Databricks sign-in for ${alias} could not be renewed.`, signInAgain(alias))
-      }
-      return credential?.type === "oauth" ? credential : undefined
-    },
-  }
-}
-
 /** One OAuth integration per interactive account, and the doctor command. */
 export async function createAuth(input: CreateAuthInput): Promise<AuthPort> {
   validateAccounts(input.options)
@@ -283,7 +334,7 @@ export async function createAuth(input: CreateAuthInput): Promise<AuthPort> {
   const registrations: Registration[] = []
   const core = new AuthCore({
     options: input.options,
-    credentials: hostCredentials(context),
+    credentials: { read: (alias, signal) => readHostCredential(context.integration.connection, alias, signal) },
     summaries: new SignInSummaries(input.storage ?? context.storage),
     env: input.env ?? process.env,
     now,
@@ -333,7 +384,7 @@ export async function createAuth(input: CreateAuthInput): Promise<AuthPort> {
                   expiresAt: authorization.expiresAt,
                   mode: "auto" as const,
                   callback: authorization.callback.then(async (credential) => {
-                    await core.remember(account.alias, credential)
+                    await core.remember(account.alias, credential, "sign-in")
                     return credential
                   }),
                 }
@@ -344,7 +395,7 @@ export async function createAuth(input: CreateAuthInput): Promise<AuthPort> {
         }),
       )
     }
-    registrations.push(await registerDoctorCommand(context, { options: input.options, auth: core.port, databricks: input.databricks }))
+    registrations.push(await registerDoctorCommand(context, { options: input.options, auth: core.port, databricks: input.databricks, onReport: (report) => core.certify(report) }))
   } catch (cause) {
     for (const registration of registrations.splice(0).reverse()) await registration.dispose().catch(() => undefined)
     throw cause

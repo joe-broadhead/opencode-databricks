@@ -153,15 +153,16 @@ describe("the code exchange", () => {
     expect(flow.instructions).toContain("https://id.example.com/connect/callback")
   })
 
-  it("refuses a state that is not the one it issued, without exchanging the code", async () => {
+  it("ignores a callback whose state does not match and keeps waiting for the real one", async () => {
     const { flow, endpoint, port } = await start()
-    const failure = flow.callback.catch((error: unknown) => error)
-    const response = await fetch(callbackUrl(port, `code=the-code&state=not-the-state`))
-    expect(response.status).toBe(400)
-    const error = await failure
-    expect(error).toBeInstanceOf(DatabricksError)
-    expect((error as DatabricksError).code).toBe("AUTH_REQUIRED")
-    expect(endpoint.requests).toHaveLength(0)
+    const state = new URL(flow.url).searchParams.get("state")!
+    // Any page can fire a no-cors GET at the loopback port; it must not end the sign-in.
+    const stray = await fetch(callbackUrl(port, `code=the-code&state=not-the-state`))
+    expect(stray.status).toBe(400)
+    const real = await fetch(callbackUrl(port, `code=the-code&state=${encodeURIComponent(state)}`))
+    expect(real.status).toBe(200)
+    await flow.callback
+    expect(endpoint.requests).toHaveLength(1)
   })
 
   it("maps invalid_client and invalid_scope to AUTH_CLIENT_INVALID with a next step and no provider text", async () => {
@@ -193,7 +194,8 @@ describe("the code exchange", () => {
     const { flow, port } = await start()
     const failure = flow.callback.catch((error: unknown) => error)
     const state = new URL(flow.url).searchParams.get("state")!
-    await fetch(callbackUrl(port, `error=access_denied&state=${encodeURIComponent(state)}`))
+    const response = await fetch(callbackUrl(port, `error=access_denied&state=${encodeURIComponent(state)}`))
+    expect(response.status).toBe(400)
     const error = (await failure) as DatabricksError
     expect(error.code).toBe("AUTH_REQUIRED")
     expect(error.message).toContain("access_denied")

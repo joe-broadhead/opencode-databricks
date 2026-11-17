@@ -206,8 +206,9 @@ export async function authorizeDatabricks(input: AuthorizeInput): Promise<Author
         return
       }
       if (!sameState(answerState, state)) {
-        respond(response, 400, "Sign-in failed", "<p>The OAuth state did not match. Start the sign-in again.</p>")
-        await finish(new DatabricksError("AUTH_REQUIRED", "The Databricks sign-in's state did not match.", "Run /connect again and choose Databricks."))
+        // Any page can fire a no-cors GET at the loopback port; a mismatched state is ignored, not a way to end the
+        // sign-in (review LOW 4). The real callback or the timeout still decides.
+        respond(response, 400, "Sign-in not accepted", "<p>The OAuth state did not match, so this callback was ignored. The sign-in is still waiting for the browser.</p>")
         return
       }
       if (denied) {
@@ -258,6 +259,7 @@ export async function authorizeDatabricks(input: AuthorizeInput): Promise<Author
           requestedScopes: input.scopes,
           grantedScopes: token.scopes ?? input.scopes,
           ...(input.roleGroupId !== undefined ? { roleGroupId: input.roleGroupId } : {}),
+          generation: now(),
         })
         const credential: HostCredential = {
           type: "oauth",

@@ -59,6 +59,11 @@ numbers and their sources.
   reads and plans as `run`, the strictest category.
 - **Keyword forms follow the path.** `EXTRACT`, `TRIM(… FROM …)`, `POSITION(… IN …)`, `SUBSTRING(… FROM …)` and similar
   forms cannot be qualified, so a read that uses one needs the workspace's default SQL path (`PATH_NOT_DEFAULT`).
+- **Single-use refresh tokens can sign one of two processes out.** With `enable_single_use_refresh_tokens` (Beta, an
+  admin's choice), each refresh invalidates the old refresh token. The plugin serializes refreshes within one process and
+  re-reads OpenCode's credential store after a failed read, but two OpenCode processes renewing the same sign-in at the
+  same instant can still sign one out (`AUTH_REQUIRED`); sign in again. A cross-process lock is the host's to provide.
+  [Auth](docs/auth.md#known-limits) has the details.
 - **Nothing is built yet** beyond `databricks_plan` for SQL (see the note above).
 
 ## Troubleshooting

@@ -26,6 +26,8 @@ const SignIn = z.object({
   requestedScopes: z.array(z.string().min(1).max(64)).max(32),
   grantedScopes: z.array(z.string().min(1).max(64)).max(64),
   roleGroupId: z.string().regex(/^\d{1,40}$/u).optional(),
+  /** When this sign-in was made: a later sign-in has a larger value, and an older one can never replace it (review M1). */
+  generation: z.number().int().nonnegative().optional(),
 })
 
 export type SignIn = z.output<typeof SignIn>
@@ -37,6 +39,7 @@ export interface SignInInput {
   readonly requestedScopes: readonly string[]
   readonly grantedScopes: readonly string[]
   readonly roleGroupId?: string
+  readonly generation?: number
 }
 
 /** The metadata a completed sign-in leaves, in the shape this module reads back. */
@@ -49,6 +52,7 @@ export function signInMetadata(input: SignInInput): Record<string, unknown> {
     requestedScopes: [...input.requestedScopes],
     grantedScopes: [...input.grantedScopes],
     ...(input.roleGroupId !== undefined ? { roleGroupId: input.roleGroupId } : {}),
+    ...(input.generation !== undefined ? { generation: input.generation } : {}),
   }
   return record
 }
