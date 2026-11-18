@@ -26,7 +26,7 @@ const flat = (text: string) => text.replace(/\n> /gu, " ").replace(/\n\s*/gu, " 
 
 const DOCS = ["README.md", "docs/auth.md", "docs/configuration.md", "docs/costs.md", "docs/jelly.md", "docs/safety.md", "docs/scripting.md", "docs/architecture.md"]
 const SKILLS = ["skills/opencode-databricks/SKILL.md", "skills/opencode-databricks-sql/SKILL.md"]
-const CITED = ["README.md", "docs/auth.md", "docs/costs.md", "docs/jelly.md", "docs/safety.md"]
+const CITED = ["README.md", "docs/auth.md", "docs/configuration.md", "docs/costs.md", "docs/jelly.md", "docs/safety.md"]
 
 /** A numbered citation's use in prose: `[6]`, but not the definition line `[6]:`. */
 const uses = (text: string): number[] => [...text.matchAll(/\[(\d+)\]/gu)].filter((match) => !text.slice(match.index + match[0].length).startsWith(":")).map((match) => Number(match[1]))
