@@ -73,8 +73,8 @@ export interface PlanPolicy {
     readonly maxClusters: number
     readonly autoStopMinutes: number
   }
-  /** Each target with its kind and type, so a table that became a view (or the reverse) is a change. */
-  readonly targets?: readonly { readonly name: string; readonly kind: string; readonly type?: string; readonly children?: readonly string[] }[]
+  /** Each target with its kind, type and CASCADE contents, so a retyped target or a changed drop set is a change. */
+  readonly targets?: readonly { readonly name: string; readonly kind: string; readonly type?: string; readonly children?: readonly { readonly name: string; readonly kind: string }[] }[]
   /** A job plan's job and, once `getJob` lands, a hash of the settings the preview listed. */
   readonly job?: { readonly jobId: number; readonly settings?: string }
   /** A notebook plan's path. */

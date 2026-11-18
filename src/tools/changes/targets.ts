@@ -67,8 +67,17 @@ export interface ResolvedTarget {
   readonly type?: string
   readonly owner?: string
   readonly exists?: boolean
-  /** A CASCADE schema's objects, sorted: what the statement will drop beyond the schema itself. */
-  readonly children?: readonly string[]
+  /**
+   * What a CASCADE drops beyond the target itself, sorted: a schema's objects, or a catalog's schemas and their objects.
+   * Each is asserted by its own resource, so a rule that names one of them reaches it (review of #7, rounds 2 and 3).
+   */
+  readonly children?: readonly CascadeChild[]
+}
+
+/** One object a CASCADE drops: a schema (`<c>.<s>`), or a table (`<c>.<s>.<t>`). */
+export interface CascadeChild {
+  readonly name: string
+  readonly kind: "schema" | "table"
 }
 
 export interface CheckedTargets {
@@ -245,7 +254,7 @@ export function qualifyName(target: ChangeTarget, defaults: NameDefaults): strin
 }
 
 export interface TargetDeps {
-  readonly databricks: Pick<DatabricksPort, "getTable" | "listTables">
+  readonly databricks: Pick<DatabricksPort, "getTable" | "listTables" | "listSchemas">
 }
 
 export interface ResolveInput {
@@ -272,8 +281,26 @@ async function schemaObjects(deps: TargetDeps, account: string, name: string, si
 }
 
 /**
- * Resolves every target: a table with `tables.get` (free), a function without a call (a function is not a table), and a
- * schema with `tables.list` when the statement would drop its contents. A name that is not fully qualified, and a
+ * Lists a catalog's schemas for a CASCADE, bounded; a list the plugin cannot read, or one past the bound, refuses the
+ * change with a next step. `schemas.list` is free (design §5.5's control-plane reads).
+ */
+async function catalogSchemas(deps: TargetDeps, account: string, catalog: string, signal: AbortSignal): Promise<readonly string[]> {
+  const names: string[] = []
+  let pageToken: string | undefined
+  for (let page = 0; page < MAX_CASCADE_OBJECTS / LIST_PAGE; page++) {
+    const answer = await deps.databricks.listSchemas(account, catalog, { maxResults: LIST_PAGE, ...(pageToken ? { pageToken } : {}) }, signal)
+    for (const schema of answer.items) names.push(schema.name)
+    if (names.length > MAX_CASCADE_OBJECTS) break
+    if (!answer.nextPageToken) return names.sort()
+    pageToken = answer.nextPageToken
+  }
+  throw new DatabricksError("FENCED", `${quoted(catalog)} has more than ${MAX_CASCADE_OBJECTS} schemas, more than this version will drop in one change.`, "Drop the catalog in the Databricks SQL editor, or empty it first.")
+}
+
+/**
+ * Resolves every target: a table with `tables.get` (free), a function without a call (a function is not a table), a
+ * schema with `tables.list` when the statement would drop its contents, and a catalog with `schemas.list` and then each
+ * schema's `tables.list` when it would — never with the catalog's wildcard alone. A name that is not fully qualified, and a
  * CASCADE whose contents cannot be listed, are refused — nothing the preview shows may be beyond the person's rules.
  */
 export async function resolveTargets(deps: TargetDeps, input: ResolveInput): Promise<CheckedTargets> {
@@ -291,8 +318,39 @@ export async function resolveTargets(deps: TargetDeps, input: ResolveInput): Pro
       continue
     }
     if (target.kind === "catalog") {
-      // A catalog's own objects are schemas; the assert is the catalog-wide wildcard, which covers them.
-      targets.push({ name, kind: "catalog", cascade: target.cascade, type: "CATALOG" })
+      if (!target.cascade) {
+        // Without CASCADE Databricks' RESTRICT default refuses a non-empty catalog, so only the catalog itself is
+        // asserted: nothing else can be dropped.
+        targets.push({ name, kind: "catalog", cascade: false, type: "CATALOG" })
+        continue
+      }
+      // CASCADE drops every schema and every object in them. Each is listed (free reads) and asserted by its own
+      // resource, so a rule that names `*.hr.*` or one table reaches it; the catalog's wildcard is asserted too. A list
+      // that cannot be read, or is past the bound, refuses the change rather than falling back to the wildcard alone.
+      let schemas: readonly string[]
+      try {
+        schemas = await catalogSchemas(deps, input.account, name, input.signal)
+      } catch (error) {
+        if (error instanceof DatabricksError && error.code === "FENCED") throw error
+        throw new DatabricksError("FENCED", `The plugin cannot list the schemas in ${quoted(name)}, so it cannot tell what DROP CATALOG … CASCADE would drop.`, "Drop it in the Databricks SQL editor, or empty it first and drop it without CASCADE.")
+      }
+      const children: CascadeChild[] = []
+      for (const schema of schemas) {
+        children.push({ name: `${name}.${schema}`, kind: "schema" })
+        let objects: readonly string[]
+        try {
+          objects = await schemaObjects(deps, input.account, `${name}.${schema}`, input.signal)
+        } catch (error) {
+          if (error instanceof DatabricksError && error.code === "FENCED" && /more than/u.test(error.detail)) throw error
+          throw new DatabricksError("FENCED", `The plugin cannot list the objects in ${quoted(`${name}.${schema}`)}, so it cannot tell what DROP CATALOG … CASCADE would drop.`, "Drop it in the Databricks SQL editor, or empty it first and drop it without CASCADE.")
+        }
+        for (const object of objects) children.push({ name: object, kind: "table" })
+        if (children.length > MAX_CASCADE_OBJECTS) {
+          throw new DatabricksError("FENCED", `${quoted(name)} has more than ${MAX_CASCADE_OBJECTS} objects, more than this version will drop in one change.`, "Drop it in the Databricks SQL editor, or empty it first.")
+        }
+      }
+      targets.push({ name, kind: "catalog", cascade: true, type: "CATALOG", children })
+      notes.push(`${quoted(name)} is dropped with CASCADE: its ${schemas.length} schema${schemas.length === 1 ? "" : "s"} and ${children.length - schemas.length} object${children.length - schemas.length === 1 ? "" : "s"} go with it, and each is checked against the person's rules.`)
       continue
     }
     if (target.kind === "schema") {
@@ -307,7 +365,7 @@ export async function resolveTargets(deps: TargetDeps, input: ResolveInput): Pro
         if (error instanceof DatabricksError && error.code === "FENCED") throw error
         throw new DatabricksError("FENCED", `The plugin cannot list the objects in ${quoted(name)}, so it cannot tell what DROP SCHEMA … CASCADE would drop.`, "Drop the schema in the Databricks SQL editor, or empty it first and drop it without CASCADE.")
       }
-      targets.push({ name, kind: "schema", cascade: true, type: "SCHEMA", children })
+      targets.push({ name, kind: "schema", cascade: true, type: "SCHEMA", children: children.map((child) => ({ name: child, kind: "table" as const })) })
       notes.push(`${quoted(name)} is dropped with CASCADE: its ${children.length} object${children.length === 1 ? "" : "s"} go with it, and the person's rule for the schema covers all of them.`)
       continue
     }
@@ -378,6 +436,6 @@ export async function assertTargets(deps: AssertDeps, input: AssertInput): Promi
     await ask(targetResource(input.account, target))
     // A CASCADE drops every object the plan listed, so each is asked about by name as well as by the schema's wildcard:
     // a rule that names one table has to reach it (review round 2, LOW 1). The list was bounded and read at plan time.
-    for (const child of target.children ?? []) await ask(targetResource(input.account, { name: child, kind: "table" }))
+    for (const child of target.children ?? []) await ask(targetResource(input.account, child))
   }
 }

@@ -44,18 +44,17 @@ import { categoryFor, changeTargets, resolveTargets } from "./targets.js"
 
 type Preview = NonNullable<Output<"plan">["preview"]>
 
-/** `jobs.list` paged to the end for one job: the plan needs the name, and nothing else about it. */
-async function jobOf(deps: Parameters<Handler<"plan">>[2], account: string, jobId: number, signal: AbortSignal): Promise<{ jobId: number; name: string; creatorUserName?: string }> {
-  let pageToken: string | undefined
-  for (let page = 0; page < 10; page++) {
-    const answer = await deps.databricks.listJobs(account, { limit: 100, ...(pageToken ? { pageToken } : {}) }, signal)
-    const found = answer.items.find((job) => job.jobId === jobId)
-    if (found) return found
-    if (!answer.nextPageToken) break
-    pageToken = answer.nextPageToken
-  }
-  throw new DatabricksError("NOT_FOUND", `No job with the id ${jobId} is visible to this identity.`, "Call databricks_jobs({}) to list the jobs you can see, then plan the run again.")
+/** One task's compute, in the plugin's own words (design §5.5's job-run preview; `JobCompute` in src/ports.ts). */
+function computeNote(compute: { readonly kind: string; readonly nodeTypeId?: string; readonly numWorkers?: number; readonly autoscale?: { readonly min: number; readonly max: number }; readonly clusterId?: string }): string {
+  if (compute.kind === "serverless") return "serverless compute"
+  if (compute.kind === "existing") return `the all-purpose cluster ${quoted(compute.clusterId ?? "unknown")}`
+  const workers = compute.autoscale ? `${compute.autoscale.min}–${compute.autoscale.max} workers (autoscale)` : `${compute.numWorkers ?? 1} worker${compute.numWorkers === 1 ? "" : "s"}`
+  return `a job cluster${compute.nodeTypeId ? ` of ${quoted(compute.nodeTypeId)}` : ""} with ${workers}`
 }
+
+/** The job's settings as one string, for the plan's fingerprint: a job that changed since the preview is PLAN_CHANGED. */
+export const jobSettingsKey = (job: { readonly name: string; readonly timeoutSeconds?: number; readonly tasks: readonly { readonly taskKey: string; readonly compute: unknown; readonly timeoutSeconds?: number }[] }): string =>
+  JSON.stringify({ name: job.name, timeout: job.timeoutSeconds ?? 0, tasks: job.tasks.map((task) => ({ key: task.taskKey, compute: task.compute, timeout: task.timeoutSeconds ?? 0 })) })
 
 /** Whether a notebook path exists, when the sign-in can read the workspace; never sends a statement. */
 async function checkNotebook(deps: Parameters<Handler<"plan">>[2], account: string, path: string, signal: AbortSignal): Promise<{ exists?: boolean; note: string }> {
@@ -75,10 +74,7 @@ async function checkNotebook(deps: Parameters<Handler<"plan">>[2], account: stri
   }
 }
 
-function adminDisabled(): DatabricksError {
-  // The contract keeper's amendment adds ADMIN_DISABLED; until it lands, PERMISSION_DENIED with the option named.
-  return new DatabricksError("PERMISSION_DENIED", "Admin plans are turned off by this plugin's admin.enabled option.", "Set admin.enabled to true to plan administrative changes, or make the change in Databricks.")
-}
+const adminDisabled = (): DatabricksError => new DatabricksError("ADMIN_DISABLED")
 
 /** The write row's pipeline note: creating or refreshing these bills outside the warehouse (design §5.5, [21]). */
 function pipelineNote(kind: string, sql: string): string | undefined {
@@ -102,7 +98,6 @@ function warehouseChanges(current: Warehouse, edit: Readonly<Record<string, unkn
   add("autoStopMinutes", current.autoStopMins, edit.autoStopMinutes)
   add("minClusters", current.minNumClusters, edit.minClusters)
   add("maxClusters", current.maxNumClusters, edit.maxClusters)
-  add("statementTimeoutSeconds", current.statementTimeoutSeconds ?? "unset", edit.statementTimeoutSeconds)
   return changes
 }
 
@@ -198,23 +193,26 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
   if (input.job !== undefined) {
     if (input.warehouse !== undefined || input.params !== undefined || input.catalog !== undefined || input.schema !== undefined) throw new DatabricksError("INPUT_INVALID", "A job plan takes job and reason only: its parameters go inside job.params.", "Pass job: { jobId, params }.")
     requireFeature(deps, account, "jobs", "Planning a job run")
-    const job = await jobOf(deps, account, input.job.jobId, call.signal)
-    const runs = await deps.databricks.listRuns(account, { jobId: input.job.jobId, limit: 1 }, call.signal)
-    const lastRun = runs.items[0]
-    const tasks = lastRun ? (await deps.databricks.getRun(account, lastRun.runId, call.signal)).tasks : []
+    const jobId = input.job.jobId
+    const job = await deps.databricks.getJob(account, jobId, call.signal).catch((error: unknown) => {
+      if (error instanceof DatabricksError && error.code === "NOT_FOUND") {
+        throw new DatabricksError("NOT_FOUND", `No job with the id ${jobId} is visible to this identity.`, "Call databricks_jobs({}) to list the jobs you can see, then plan the run again.")
+      }
+      throw error
+    })
     const creator = job.creatorUserName === undefined ? "" : ` by ${quoted(job.creatorUserName)}`
-    const taskList = tasks.length === 0 ? "not reported" : tasks.map((task) => quoted(task.taskKey)).join(", ")
+    const timeout = job.timeoutSeconds === undefined ? "the job's own timeout" : job.timeoutSeconds === 0 ? "no timeout (timeout_seconds 0)" : `timeout_seconds ${job.timeoutSeconds}, which stops it`
+    const tasks = job.tasks.map((task) => `${quoted(task.taskKey)} on ${computeNote(task.compute)}${task.timeoutSeconds === undefined ? "" : `, task timeout ${task.timeoutSeconds}s`}`)
     const notes = [
       "A job run: its effects are not known until it runs.",
       `The job ${quoted(job.name)}${creator} runs with its own settings and its own Run as identity; billed separately at the job's own compute rates.`,
-      lastRun === undefined
-        ? "The job has no run this version can see, so its tasks and their compute are not previewed."
-        : `Its last run's tasks were ${taskList}. The job's own compute and timeout_seconds are not readable through this version's client, so the preview does not claim them.`,
+      tasks.length === 0 ? "The job has no tasks this version can see." : `Its tasks: ${tasks.join("; ")}.`,
+      `The run runs for ${timeout}.`,
       "The run is submitted with idempotency_token = this plan's id, so a retried submit launches one run, not two.",
     ]
     const preview: Preview = { kind: "job", parsed: false, targets: [], tables: [], functions: [], notes, ...(input.reason ? { reason: input.reason } : {}) }
     const payload: PlanPayload = { kind: "job", jobId: input.job.jobId, ...(input.job.params ? { params: input.job.params } : {}) }
-    const policy: PlanPolicy = { kind: "job", job: { jobId: input.job.jobId } }
+    const policy: PlanPolicy = { kind: "job", job: { jobId: input.job.jobId, settings: jobSettingsKey(job) } }
     return stored(deps, { category: "run", kind: "job", account, call, payload, preview, targets: [], policy, ...(input.reason ? { reason: input.reason } : {}) })
   }
 
@@ -247,6 +245,11 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
   if (!deps.options.admin.enabled) throw adminDisabled()
   if (deps.options.admin.requireReason && !input.reason) throw new DatabricksError("ADMIN_REASON_REQUIRED")
   const edit = input.warehouse as { id: string; edit: Readonly<Record<string, unknown>> }
+  if (edit.edit.statementTimeoutSeconds !== undefined) {
+    // The edit body has no statement_timeout: it is a warehouse configuration parameter, not a field of this call
+    // (review of #7, request 2's ruling), so the preview does not pretend it can change it.
+    throw new DatabricksError("INPUT_INVALID", "statementTimeoutSeconds is not part of a warehouse edit in this version.", "Set statement_timeout with the warehouse's SQL configuration, or in the Databricks SQL warehouse settings.")
+  }
   const current = await deps.databricks.getWarehouse(account, edit.id, call.signal)
   const changes = warehouseChanges(current, edit.edit)
   if (changes.length === 0) throw new DatabricksError("INPUT_INVALID", "The warehouse edit changes nothing.", "Name at least one of size, autoStopMinutes, minClusters, maxClusters or statementTimeoutSeconds, with a different value.")
@@ -261,7 +264,7 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
     `A warehouse edit of ${describeWarehouse(current, deps.options)}: an administrative change through the control plane, free by itself.`,
     `Changes: ${changes.map((change) => `${change.field} ${change.from} → ${change.to}`).join("; ")}.`,
     `The rate is about $${before.toFixed(2)}/hour now and about $${after.toFixed(2)}/hour after, while the warehouse runs (a list-price estimate).`,
-    "This version's Databricks client has no warehouse update call, so this plan cannot be committed yet: its commit answers NOT_IMPLEMENTED and nothing runs.",
+    "Committing re-reads the warehouse first: a size or cluster bound that changed since this preview is PLAN_CHANGED.",
   ]
   const preview: Preview = { kind: "warehouse", parsed: false, targets: [], tables: [], functions: [], notes, ...(input.reason ? { reason: input.reason } : {}) }
   const payload: PlanPayload = { kind: "warehouse", id: edit.id, edit: { ...edit.edit } }

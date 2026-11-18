@@ -180,6 +180,6 @@ describe("admin plans", () => {
     const planned = await plan("ALTER TABLE main.s.t SET LOCATION '/mnt/x'", harness, { reason: "move to the new mount" })
     expect(planned).toMatchObject({ category: "admin", commitWith: "databricks_admin", preview: { reason: "move to the new mount" } })
     const off = changeHarness({ options: { admin: { enabled: false } } })
-    expect(await plan("ALTER TABLE main.s.t SET LOCATION '/mnt/x'", off, { reason: "move" })).toMatchObject({ error: "PERMISSION_DENIED", next: expect.stringContaining("admin.enabled") })
+    expect(await plan("ALTER TABLE main.s.t SET LOCATION '/mnt/x'", off, { reason: "move" })).toMatchObject({ error: "ADMIN_DISABLED", next: expect.stringContaining("admin.enabled") })
   })
 })

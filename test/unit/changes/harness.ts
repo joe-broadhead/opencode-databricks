@@ -8,7 +8,7 @@ import { createPlanStore } from "../../../src/domain/plans.js"
 import type { Feature } from "../../../src/domain/actions.js"
 import { loadOptions } from "../../../src/options.js"
 import type { Deps } from "../../../src/registry.js"
-import type { DatabricksPort, RunInfo, TableInfo, Warehouse } from "../../../src/ports.js"
+import type { DatabricksPort, JobInfo, RunInfo, TableInfo, Warehouse } from "../../../src/ports.js"
 import { FakeAuth, FakeReads, MemoryLedger, RecordingPermission, call, fakeClock, fakeDatabricks } from "../../fake/ports.js"
 import { DocumentedApi, type ApiState, historyRecord } from "./fixtures/api.js"
 import { documentedMethods } from "./fixtures/port.js"
@@ -31,8 +31,12 @@ export interface ChangeHarnessInput {
   readonly tables?: Readonly<Record<string, Partial<TableInfo>>>
   readonly history?: readonly Record<string, unknown>[]
   readonly jobs?: Readonly<Record<number, string>>
+  /** `getJob`'s answer per job; job 100 has one task on a job cluster by default. */
+  readonly jobSettings?: Readonly<Record<number, JobInfo>>
   /** Tables per `<catalog>.<schema>`, for `tables.list` (a CASCADE's contents). */
   readonly schemas?: Readonly<Record<string, readonly string[]>>
+  /** Schemas per catalog, for `schemas.list` (a `DROP CATALOG … CASCADE`). */
+  readonly catalogs?: Readonly<Record<string, readonly string[]>>
   readonly runs?: readonly RunInfo[]
   /** The statement answer for every submit, in the documented shape. */
   readonly statement?: (statement: string) => Record<string, unknown>
@@ -48,6 +52,10 @@ export interface ChangeHarness {
   readonly auth: FakeAuth
   /** `tables.list`'s answer per `<catalog>.<schema>`: change it to move a CASCADE's contents between plan and commit. */
   readonly schemas: Map<string, string[]>
+  /** `schemas.list`'s answer per catalog, for a `DROP CATALOG … CASCADE`. */
+  readonly catalogs: Map<string, string[]>
+  /** `getJob`'s answer per job: change it to move a job between plan and commit. */
+  readonly jobSettings: Map<number, JobInfo>
   /** Moves the warehouse under a plan or a commit, for the policy's TOCTOU and PLAN_CHANGED cases. */
   setWarehouse(warehouse: Warehouse): void
   /** The Day 0 port fake's calls, for the methods the documented API does not cover. */
@@ -89,7 +97,13 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
 
   const documented = documentedMethods(api)
   const tables = input.tables ?? {}
+  const jobSettings = new Map<number, JobInfo>(
+    Object.entries(input.jobSettings ?? {
+      100: { jobId: 100, name: "nightly", creatorUserName: "user@example.com", timeoutSeconds: 3600, tasks: [{ taskKey: "Orders_Ingest", compute: { kind: "job-cluster", nodeTypeId: "Standard_DS3_v2", numWorkers: 2 }, timeoutSeconds: 1800 }] },
+    }).map(([id, settings]) => [Number(id), settings]),
+  )
   const schemas = new Map(Object.entries(input.schemas ?? { "main.hr": ["salaries", "people"] }).map(([name, names]) => [name, [...names]]))
+  const catalogs = new Map(Object.entries(input.catalogs ?? { main: ["hr", "s"] }).map(([name, names]) => [name, [...names]]))
   const base = fakeDatabricks({
     getWarehouse: () => Promise.resolve(warehouse),
     startWarehouse: () => {
@@ -98,6 +112,20 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
     },
     stopWarehouse: () => Promise.resolve(undefined),
     me: () => ({ id: "42", userName: "user@example.com", displayName: "User" }),
+    getJob: (_account, jobId) => {
+      const settings = jobSettings.get(Number(jobId))
+      if (!settings) return Promise.reject(new DatabricksError("NOT_FOUND"))
+      return Promise.resolve(settings)
+    },
+    editWarehouse: (_account, _id, _edit) => Promise.resolve(undefined),
+    listSchemas: (_account, catalog, page) => {
+      const paging = page as { readonly pageToken?: string; readonly maxResults?: number } | undefined
+      const names = catalogs.get(String(catalog)) ?? []
+      const start = paging?.pageToken ? Number(paging.pageToken) : 0
+      const size = paging?.maxResults ?? 100
+      const items = names.slice(start, start + size).map((name) => ({ name }))
+      return Promise.resolve({ items, ...(start + size < names.length ? { nextPageToken: String(start + size) } : {}) })
+    },
     listTables: (_account, catalog, schema, page) => {
       const paging = page as { readonly pageToken?: string; readonly maxResults?: number } | undefined
       const names = schemas.get(`${String(catalog)}.${String(schema)}`) ?? []
@@ -133,6 +161,8 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
     clock,
     auth,
     schemas,
+    catalogs,
+    jobSettings,
     setWarehouse: (next) => {
       warehouse = next
     },

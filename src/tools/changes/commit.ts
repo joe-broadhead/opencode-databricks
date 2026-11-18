@@ -33,6 +33,7 @@ import { assertTool, PRIMARY_OPERATION } from "../../registry.js"
 import type { Call, Handler } from "../../tool-spec.js"
 import type { Warning } from "../../guards/dependencies.js"
 import { accountOf, changeFailure, commitParameters, decodePolicy, ensureChangeWarehouse, requireFeature, statementNext, submitChange } from "./context.js"
+import { jobSettingsKey } from "./plan.js"
 import { assertTargets, categoryFor, changeTargets, resolveTargets, type ResolvedTarget, type TargetKind } from "./targets.js"
 
 /** The commit tools, and the category each one runs. */
@@ -47,6 +48,7 @@ const planChanged = (detail: string): DatabricksError =>
 function operationFor(payload: Plan["payload"]["kind"], fallback: Operation): Operation {
   if (payload === "job") return "jobs.jobs.runNow"
   if (payload === "notebook") return "jobs.runs.submit"
+  if (payload === "warehouse") return "sql.warehouses.edit"
   return fallback
 }
 
@@ -54,7 +56,7 @@ function operationFor(payload: Plan["payload"]["kind"], fallback: Operation): Op
 function plannedTargets(plan: Plan): readonly ResolvedTarget[] {
   const policy = decodePolicy(plan.fingerprint.policy)
   if (policy?.targets) {
-    return policy.targets.map((target) => ({ name: target.name, kind: target.kind as TargetKind, cascade: false, ...(target.type ? { type: target.type } : {}), ...(target.children ? { children: target.children } : {}) }))
+    return policy.targets.map((target) => ({ name: target.name, kind: target.kind as TargetKind, cascade: false, ...(target.type ? { type: target.type } : {}), ...(target.children ? { children: target.children.map((child) => ({ name: child.name, kind: child.kind as "schema" | "table" })) } : {}) }))
   }
   return plan.fingerprint.targets.map((name) => ({ name, kind: "table" as const, cascade: false }))
 }
@@ -167,7 +169,13 @@ async function commitJob(plan: Plan, call: Call, deps: CommitDeps): Promise<Comm
   if (plan.payload.kind !== "job") throw new DatabricksError("PLAN_CHANGED", "The plan's payload is not a job run.")
   const payload = plan.payload
   requireFeature(deps, plan.account, "jobs", "Committing a job run")
-  if (decodePolicy(plan.fingerprint.policy)?.job?.jobId !== payload.jobId) throw planChanged("The plan's job is not the one it recorded.")
+  const policy = decodePolicy(plan.fingerprint.policy)
+  if (policy?.job?.jobId !== payload.jobId) throw planChanged("The plan's job is not the one it recorded.")
+  if (policy.job.settings !== undefined) {
+    // The preview listed the job's name, timeout and each task's compute: a job that changed since is PLAN_CHANGED.
+    const job = await deps.databricks.getJob(plan.account, payload.jobId, call.signal)
+    if (jobSettingsKey(job) !== policy.job.settings) throw planChanged("The job's settings changed since the plan was made: its name, timeout or tasks are not the ones the preview listed.")
+  }
   const answer = await submitOnce(
     () => deps.databricks.runNow(plan.account, { jobId: payload.jobId, ...(payload.params ? { params: payload.params } : {}), idempotencyToken: plan.id }, call.signal),
     call.signal,
@@ -190,6 +198,30 @@ async function commitNotebook(plan: Plan, call: Call, deps: CommitDeps): Promise
   return { state: "running", runId: answer.runId, next: `The notebook is running with a ${payload.timeoutSeconds}-second timeout: databricks_jobs({ runId: ${answer.runId} }) shows it.` }
 }
 
+/** A committed warehouse edit: `POST /api/2.0/sql/warehouses/{id}/edit`, after re-reading the warehouse. */
+async function commitWarehouse(plan: Plan, call: Call, deps: CommitDeps): Promise<CommitOutcome> {
+  if (plan.payload.kind !== "warehouse") throw new DatabricksError("PLAN_CHANGED", "The plan's payload is not a warehouse edit.")
+  const payload = plan.payload
+  const policy = decodePolicy(plan.fingerprint.policy)
+  const current = await deps.databricks.getWarehouse(plan.account, payload.id, call.signal)
+  if (policy?.warehouse) {
+    const planned = policy.warehouse
+    const now = { size: current.clusterSize, minClusters: current.minNumClusters, maxClusters: current.maxNumClusters, autoStopMinutes: current.autoStopMins }
+    const changed = (Object.keys(now) as (keyof typeof now)[]).filter((key) => String(now[key]) !== String(planned[key as "size" | "minClusters" | "maxClusters" | "autoStopMinutes"]))
+    if (changed.length) throw planChanged(`The warehouse changed since the plan was made: ${changed.map((key) => `${key} was ${String(planned[key as "size" | "minClusters" | "maxClusters" | "autoStopMinutes"])} and is ${String(now[key])}`).join("; ")}.`)
+  }
+  const raw = payload.edit
+  const edit = {
+    ...(typeof raw.size === "string" ? { clusterSize: raw.size } : {}),
+    ...(typeof raw.autoStopMinutes === "number" ? { autoStopMins: raw.autoStopMinutes } : {}),
+    ...(typeof raw.minClusters === "number" ? { minNumClusters: raw.minClusters } : {}),
+    ...(typeof raw.maxClusters === "number" ? { maxNumClusters: raw.maxClusters } : {}),
+  }
+  if (Object.keys(edit).length === 0) throw planChanged("The plan's edit names no field this version can change.")
+  await deps.databricks.editWarehouse(plan.account, payload.id, edit, call.signal)
+  return { state: "ok", next: "The warehouse is edited: databricks_warehouses({}) shows its new size, auto-stop and estimated price." }
+}
+
 /** One commit tool: check, assert, take the plan once, then run exactly what it previewed. */
 export function commitTool<T extends CommitTool>(tool: T): Handler<T> {
   const handler = async (input: { readonly planId: string }, call: Call, deps: CommitDeps): Promise<unknown> => {
@@ -207,11 +239,7 @@ export function commitTool<T extends CommitTool>(tool: T): Handler<T> {
     }
     // 4. Take it once.
     const plan = deps.plans.take(input.planId, tool as ToolName, caller)
-    if (plan.payload.kind === "warehouse") {
-      // The plan is valid and is consumed; the client has no warehouse update call yet (contract request 2), so nothing
-      // is sent.
-      throw new DatabricksError("NOT_IMPLEMENTED", "This version's Databricks client has no warehouse update call, so it cannot apply this plan.", "Change the warehouse in Databricks' SQL warehouse settings; the plan's preview names each field and the rate it implies.")
-    }
+    if (plan.payload.kind === "warehouse") return commitWarehouse(plan, call, deps)
     if (plan.payload.kind === "job") return commitJob(plan, call, deps)
     if (plan.payload.kind === "notebook") return commitNotebook(plan, call, deps)
     return commitSql(tool, plan, call, deps)

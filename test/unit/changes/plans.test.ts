@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import type { Output } from "../../../src/domain/contract.js"
 import { HANDLERS } from "../../../src/registry.js"
 import { runTool } from "../../../src/tool-spec.js"
-import { changeHarness, NOTEBOOK_PATH, recorded, type ChangeHarness } from "./harness.js"
+import { changeHarness, NOTEBOOK_PATH, recorded, RUNNING_WAREHOUSE, type ChangeHarness } from "./harness.js"
 
 const plan = async (input: Record<string, unknown>, harness: ChangeHarness = changeHarness()): Promise<Output<"plan">> =>
   (await runTool("plan", input, harness.call(), harness.deps, HANDLERS)) as Output<"plan">
@@ -54,21 +54,28 @@ describe("a job run", () => {
     expect(harness.api.requests).toEqual([])
   })
 
-  it("previews the job, its last run's tasks and what is billed separately, and sends nothing", async () => {
-    const harness = changeHarness({
-      runs: [{ runId: 7, jobId: 100, state: { lifeCycleState: "TERMINATED", resultState: "SUCCESS" }, startTime: 1_700_000_000_000, endTime: 1_700_000_100_000 }],
-    })
-    harness.api.state.runs.set(7, { ...harness.api.state.runs.get(7)!, tasks: [{ task_key: "Orders_Ingest", state: { life_cycle_state: "TERMINATED", result_state: "SUCCESS" }, run_duration: 100_000 }] })
+  it("previews the job's tasks and their compute, its timeout and what is billed separately, and sends nothing", async () => {
+    const harness = changeHarness()
     const planned = await plan({ job: { jobId: 100 }, reason: "backfill" }, harness)
     expect(planned).toMatchObject({ state: "planned", category: "run", commitWith: "databricks_run", preview: { kind: "job", parsed: false } })
     const notes = planned.preview!.notes.join(" ")
     expect(notes).toMatch(/`nightly`/)
-    expect(notes).toMatch(/Orders_Ingest/)
+    expect(notes).toMatch(/`Orders_Ingest` on a job cluster of `Standard_DS3_v2` with 2 workers/)
+    expect(notes).toMatch(/task timeout 1800s/)
+    expect(notes).toMatch(/timeout_seconds 3600, which stops it/)
     expect(notes).toMatch(/billed separately/)
     expect(notes).toMatch(/idempotency_token/)
-    expect(notes).toMatch(/not readable through this version's client/)
     expect(harness.statements()).toEqual([])
     harness.settle()
+  })
+
+  it("says a job with no timeout has none, and names an all-purpose cluster", async () => {
+    const harness = changeHarness({
+      jobSettings: { 100: { jobId: 100, name: "nightly", timeoutSeconds: 0, tasks: [{ taskKey: "one", compute: { kind: "existing", clusterId: "0923-164208-meows279" } }] } },
+    })
+    const notes = (await plan({ job: { jobId: 100 } }, harness)).preview!.notes.join(" ")
+    expect(notes).toMatch(/no timeout \(timeout_seconds 0\)/)
+    expect(notes).toMatch(/the all-purpose cluster `0923-164208-meows279`/)
   })
 
   it("refuses a job it cannot see", async () => {
@@ -117,7 +124,7 @@ describe("a one-time notebook run", () => {
 })
 
 describe("a warehouse edit plan", () => {
-  it("previews each field, the rate it implies and its reason, and its commit runs nothing", async () => {
+  it("previews each field, the rate it implies and its reason, and its commit edits the warehouse", async () => {
     const harness = changeHarness()
     expect(await plan({ warehouse: { id: "wh-small", edit: { size: "Medium" } } }, harness)).toMatchObject({ error: "ADMIN_REASON_REQUIRED" })
     const planned = await plan({ warehouse: { id: "wh-small", edit: { size: "Medium", autoStopMinutes: 5 } }, reason: "the nightly load needs more" }, harness)
@@ -126,11 +133,37 @@ describe("a warehouse edit plan", () => {
     expect(notes).toMatch(/size Small → Medium/)
     expect(notes).toMatch(/autoStopMinutes 10 → 5/)
     expect(notes).toMatch(/about \$8\.40\/hour now and about \$16\.80\/hour after/)
-    expect(notes).toMatch(/cannot be committed yet/)
+    expect(notes).toMatch(/Committing re-reads the warehouse first/)
     const answer = await commit("admin", harness, planned.planId!)
-    expect(answer).toMatchObject({ error: "NOT_IMPLEMENTED", next: expect.stringContaining("SQL warehouse settings") })
-    expect(harness.api.requests.filter((request) => request.path.startsWith("/api/2.2/jobs"))).toEqual([])
+    expect(answer).toMatchObject({ state: "ok", next: expect.stringContaining("databricks_warehouses") })
+    const edits = harness.calls.filter((entry) => entry.method === "editWarehouse")
+    expect(edits).toHaveLength(1)
+    expect(edits[0]!.args.slice(0, 3)).toEqual(["work", "wh-small", { clusterSize: "Medium", autoStopMins: 5 }])
+    // The commit asserts its own action on the operation it uses (design §10.1).
+    expect(harness.permission.requests.filter((request) => request.action === "databricks.admin")).toEqual([expect.objectContaining({ resource: "work:sql.warehouses.edit" })])
     expect(harness.statements()).toEqual([])
+  })
+
+  it("is PLAN_CHANGED when the warehouse was resized between the preview and the commit", async () => {
+    const harness = changeHarness()
+    const planned = await plan({ warehouse: { id: "wh-small", edit: { size: "Medium" } }, reason: "grow" }, harness)
+    harness.setWarehouse({ ...RUNNING_WAREHOUSE, clusterSize: "Large" })
+    expect(await commit("admin", harness, planned.planId!)).toMatchObject({ error: "PLAN_CHANGED", message: expect.stringContaining("changed since the plan was made") })
+    expect(harness.calls.filter((entry) => entry.method === "editWarehouse")).toEqual([])
+  })
+
+  it("refuses a statement_timeout in an edit, which the edit body cannot carry", async () => {
+    const harness = changeHarness()
+    expect(await plan({ warehouse: { id: "wh-small", edit: { statementTimeoutSeconds: 600 } }, reason: "timeout" }, harness)).toMatchObject({ error: "INPUT_INVALID", message: expect.stringContaining("statementTimeoutSeconds") })
+    expect(harness.calls.filter((entry) => entry.method === "editWarehouse")).toEqual([])
+  })
+
+  it("is PLAN_CHANGED when the job's settings changed after the preview", async () => {
+    const harness = changeHarness()
+    const planned = await plan({ job: { jobId: 100 } }, harness)
+    harness.jobSettings.set(100, { jobId: 100, name: "nightly", timeoutSeconds: 60, tasks: [] })
+    expect(await commit("run", harness, planned.planId!)).toMatchObject({ error: "PLAN_CHANGED", message: expect.stringContaining("settings changed") })
+    expect(harness.api.requests.filter((request) => request.path === "/api/2.2/jobs/run-now")).toEqual([])
   })
 
   it("refuses an edit that changes nothing, and one whose cluster bounds cross", async () => {
