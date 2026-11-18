@@ -33,6 +33,7 @@ const asToolError = (error: unknown): never => {
 
 /** `databricks_events_list`: the two event sources, as the model sees them. */
 const eventsList: Handler<"events_list"> = async (input, call, deps) => {
+  const notes: string[] = []
   try {
     const page = await eventsPage(deps, {
       account: accountFor(input, deps),
@@ -44,8 +45,9 @@ const eventsList: Handler<"events_list"> = async (input, call, deps) => {
       call,
       // The model's own tool: the family's asserts, and it reads the identity itself when no probe has recorded it.
       mode: "tool",
+      notes,
     })
-    return { state: "ok", ...page, source: input.source }
+    return { state: "ok", ...page, source: input.source, ...(notes.length ? { message: notes.join(" ") } : {}) }
   } catch (error) {
     return asToolError(error)
   }
