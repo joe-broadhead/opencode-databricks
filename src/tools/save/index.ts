@@ -18,7 +18,7 @@
  * 7. the result carries `charts: { path, format, rows, fitsCharts }`.
  */
 import { createHash } from "node:crypto"
-import { closeSync, existsSync, mkdirSync, openSync, renameSync, rmSync, statSync, writeSync } from "node:fs"
+import { closeSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeSync } from "node:fs"
 import { dirname } from "node:path"
 import { chargeStatement } from "../../guards/budget.js"
 import { sizeOf } from "../../guards/warehouse.js"
@@ -33,7 +33,7 @@ import { csvLine, fitsCharts, jsonLine } from "./formats.js"
 import { typedRow } from "./inline.js"
 import { assertLinkHost, linkExpired, readLink } from "./links.js"
 import { ParquetWriter, parquetCell, parquetTypeOf } from "./parquet.js"
-import { assertEdit, resolveTarget, type SaveFormat } from "./paths.js"
+import { assertEdit, folderIsReal, openTemporary, resolveTarget, type SaveFormat } from "./paths.js"
 
 const INLINE_LIMIT = 25 * 1024 * 1024
 
@@ -231,8 +231,10 @@ async function write(
 ): Promise<{ rows: number; bytes: number; sha256: string }> {
   const { account, call, deps, limits } = context
   mkdirSync(dirname(target), { recursive: true })
+  // The folder was checked as a real path; a link put on the way since then is refused rather than followed.
+  if (!folderIsReal(target)) throw new DatabricksError("SAVE_PATH_REFUSED", "The save folder changed into a link after it was checked.", "Save again, under a folder that is not a link.")
   const temp = `${target}.${deps.clock.uuid()}.tmp`
-  let fd = openSync(temp, "w")
+  let fd = openTemporary(temp)
   const hash = createHash("sha256")
   let rows = 0
   const sink = (bytes: Uint8Array) => {

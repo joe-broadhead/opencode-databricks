@@ -1,7 +1,7 @@
 // databricks_save (design §8.2): every format read back, the link rules, the inline fallback, the caps and the path
 // rules. Nothing reaches Databricks: the harness's fake answers the submit and the links, and the Arrow bytes are a
 // stream Apache Arrow's own writer produced from invented values (the Arrow IPC format, `format/Message.fbs`).
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, existsSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Bool, Float64, Int64, Utf8, tableFromArrays, tableFromIPC, tableToIPC, vectorFromArray } from "apache-arrow"
@@ -14,7 +14,12 @@ import { HANDLERS } from "../../../src/registry.js"
 import { harness, runningWarehouse, answerOf } from "../reads/harness.js"
 
 const root = mkdtempSync(join(tmpdir(), "dbx-save-"))
-afterAll(() => rmSync(root, { recursive: true, force: true }))
+// A folder outside every root (the project, resultsDir and allowedRoots), for the symlink escapes.
+const outside = mkdtempSync(join(tmpdir(), "dbx-save-outside-"))
+afterAll(() => {
+  rmSync(root, { recursive: true, force: true })
+  rmSync(outside, { recursive: true, force: true })
+})
 
 const warehouse = (): Warehouse => ({ ...runningWarehouse(), id: "wh-small", name: "small", serverless: true, clusterSize: "Small", autoStopMins: 10 })
 
@@ -230,6 +235,46 @@ describe("databricks_save", () => {
     expect(answer.rows).toBe(1_000_000)
     expect(growth).toBeLessThan(64 * 1024 * 1024)
   }, 120_000)
+
+  it("refuses a symlinked folder under a root that points outside every root (review S1), and a symlinked target", async () => {
+    // S1: <resultsDir>/escape is a link to a folder outside; a lexical check would pass it and write outside.
+    symlinkSync(outside, join(root, "escape"))
+    const escaped = await run({ format: "csv", path: join(root, "escape", "x.csv") }, harnessFor().test)
+    expect(escaped.error).toBe("SAVE_PATH_REFUSED")
+    expect(readdirSync(outside)).toEqual([])
+    // S3: the target itself is a link to a file outside: refused, and the file outside is untouched.
+    writeFileSync(join(outside, "victim.txt"), "keep")
+    symlinkSync(join(outside, "victim.txt"), join(root, "link.csv"))
+    const linked = await run({ format: "csv", path: join(root, "link.csv"), overwrite: true }, harnessFor().test)
+    expect(linked.error).toBe("SAVE_PATH_REFUSED")
+    expect(readFileSync(join(outside, "victim.txt"), "utf8")).toBe("keep")
+    // A dangling link on the way is refused rather than created through.
+    symlinkSync(join(outside, "missing"), join(root, "dangling"))
+    const dangling = await run({ format: "csv", path: join(root, "dangling", "x.csv") }, harnessFor().test)
+    expect(dangling.error).toBe("SAVE_PATH_REFUSED")
+    expect(readdirSync(outside)).toEqual(["victim.txt"])
+  })
+
+  it("follows a symlinked temp folder to its real path, and asks edit for the real path (as Colab #12)", async () => {
+    // macOS's temp folder is itself a link (/var → /private/var); here a link under the system temp folder plays it.
+    const real = mkdtempSync(join(root, "real-"))
+    const alias = join(tmpdir(), `dbx-save-alias-${process.pid}`)
+    rmSync(alias, { force: true })
+    symlinkSync(real, alias)
+    try {
+      const inside = join(real, "inner")
+      mkdirSync(inside)
+      symlinkSync(inside, join(real, "to-inner"))
+      const fake = harnessFor()
+      const answer = await run({ format: "csv", path: join(alias, "to-inner", "ok.csv") }, fake.test)
+      expect(answer.state).toBe("ok")
+      expect(existsSync(join(inside, "ok.csv"))).toBe(true)
+      const edit = fake.test.permission.requests.find((request) => request.action === "edit")
+      expect(edit?.resource).toBe(join(realpathSync.native(inside), "ok.csv"))
+    } finally {
+      rmSync(alias, { force: true })
+    }
+  })
 
   it("asks for edit on the file before writing, and puts no secret in the result", async () => {
     const fake = harnessFor()
