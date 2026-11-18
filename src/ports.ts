@@ -254,6 +254,14 @@ export type JobCompute =
   | { readonly kind: "existing"; readonly clusterId: string }
   /** A SQL warehouse task (`sql_task.warehouse_id`, `dbt_task.warehouse_id`, a notebook's `warehouse_id`). */
   | { readonly kind: "warehouse"; readonly warehouseId: string }
+  /** A task that needs no compute (`condition_task`). */
+  | { readonly kind: "none"; readonly what: string }
+  /** A `run_job_task`: its compute is the other job's. */
+  | { readonly kind: "job"; readonly jobId: number }
+  /** A `pipeline_task`: its compute belongs to the pipeline. */
+  | { readonly kind: "pipeline"; readonly pipelineId?: string }
+  /** A `for_each_task`: every iteration runs the inner task, so its compute is the inner task's. */
+  | { readonly kind: "for-each"; readonly compute: JobCompute }
   /** The task's compute cannot be determined from its settings; the preview says so rather than guessing. */
   | { readonly kind: "unknown"; readonly reason: string }
 

@@ -100,6 +100,34 @@ describe("a job run", () => {
     expect(notes).not.toMatch(/`mystery` on serverless/)
   })
 
+  it("R5-M1 (round 2): renders delegated, recursive and undetermined compute, and never calls one serverless", async () => {
+    const harness = changeHarness({
+      jobSettings: {
+        100: {
+          jobId: 100,
+          name: "nightly",
+          timeoutSeconds: 3600,
+          tasks: [
+            { taskKey: "each", compute: { kind: "for-each", compute: { kind: "job-cluster", nodeTypeId: "i3.8xlarge", numWorkers: 40 } } },
+            { taskKey: "nested", compute: { kind: "for-each", compute: { kind: "for-each", compute: { kind: "existing", clusterId: "c-1" } } } },
+            { taskKey: "child", compute: { kind: "job", jobId: 42 } },
+            { taskKey: "guard", compute: { kind: "none", what: "a condition task needs no compute" } },
+            { taskKey: "pipe", compute: { kind: "pipeline", pipelineId: "p-1" } },
+            { taskKey: "future", compute: { kind: "unknown", reason: "its task type new_kind_task is not one this version knows" } },
+          ],
+        },
+      },
+    })
+    const notes = (await plan({ job: { jobId: 100 } }, harness)).preview!.notes.join(" ")
+    expect(notes).toMatch(/`each` on each iteration on a job cluster of `i3.8xlarge` with 40 workers/)
+    expect(notes).toMatch(/`nested` on each iteration on each iteration on the all-purpose cluster `c-1`/)
+    expect(notes).toMatch(/`child` on the compute of job 42/)
+    expect(notes).toMatch(/`guard` on no compute \(a condition task needs no compute\)/)
+    expect(notes).toMatch(/`pipe` on the pipeline's own compute \(`p-1`\)/)
+    expect(notes).toMatch(/`future` on compute not determined \(its task type new_kind_task is not one this version knows\)/)
+    expect(notes).not.toMatch(/`future` on serverless/)
+  })
+
   it("says a job with no timeout has none, and names an all-purpose cluster", async () => {
     const harness = changeHarness({
       jobSettings: { 100: { jobId: 100, name: "nightly", timeoutSeconds: 0, tasks: [{ taskKey: "one", compute: { kind: "existing", clusterId: "0923-164208-meows279" } }] } },

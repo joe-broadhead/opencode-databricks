@@ -194,23 +194,71 @@ function taskWarehouse(task: Record<string, unknown>): string | undefined {
   return undefined
 }
 
+/** The task types `JobTaskSettings` documents (Jobs API 2.2, `TaskSettings`). */
+const TASK_TYPES: ReadonlySet<string> = new Set([
+  "notebook_task",
+  "spark_python_task",
+  "python_wheel_task",
+  "spark_jar_task",
+  "spark_submit_task",
+  "pipeline_task",
+  "sql_task",
+  "dbt_task",
+  "run_job_task",
+  "condition_task",
+  "for_each_task",
+  "alert_task",
+  "dashboard_task",
+  "power_bi_task",
+  "ai_runtime_task",
+  "ai_function_task",
+  "clean_rooms_notebook_task",
+])
+
+/**
+ * The task types Databricks documents as supporting serverless compute: "Serverless compute is supported with the
+ * notebook, Python script, dbt, Python wheel, and JAR task types"
+ * (https://docs.databricks.com/aws/en/jobs/run-serverless-jobs).
+ */
+const SERVERLESS_TASK_TYPES: ReadonlySet<string> = new Set(["notebook_task", "spark_python_task", "python_wheel_task", "spark_jar_task", "spark_submit_task", "dbt_task"])
+
 /**
  * Where one task of a job runs, from `GET /api/2.2/jobs/get`'s `JobTaskSettings`
- * (https://docs.databricks.com/api/jobs/v2/get-job.md):
+ * (https://docs.databricks.com/api/jobs/v2/get-job.md). The rules, in order:
  *
- * - `existing_cluster_id` → that all-purpose cluster;
- * - `new_cluster` → a job cluster, with its `node_type_id` and `num_workers` or `autoscale`;
- * - `job_cluster_key` → "this task is executed reusing the cluster specified in `job.settings.job_clusters`", so the
- *   matching entry's `new_cluster` is the compute (a key the settings do not hold is not guessed at);
- * - a SQL warehouse task (`sql_task.warehouse_id`, `dbt_task.warehouse_id`, a notebook's `warehouse_id`) → that
- *   warehouse;
- * - `environment_key`, or a task that names no compute on a serverless job (one with `environments` or a
- *   `performance_target`) → serverless;
- * - anything else, including a pipeline task whose compute belongs to its pipeline → `unknown`, which the preview states
- *   plainly: it never calls an unrecognised task serverless.
+ * - `condition_task` needs no compute; `run_job_task` runs on the other job's; `pipeline_task` on its pipeline's; a
+ *   `for_each_task` runs its inner task once per iteration, so its compute is the inner task's (recursively).
+ * - `existing_cluster_id` is that all-purpose cluster; `new_cluster` is a job cluster with its `node_type_id` and
+ *   `num_workers` or `autoscale`; `job_cluster_key` is "the cluster specified in `job.settings.job_clusters`" (a key the
+ *   settings do not hold is undetermined).
+ * - A SQL warehouse task (`sql_task.warehouse_id`, `dbt_task.warehouse_id`, a notebook's `warehouse_id`) runs there.
+ * - `environment_key` selects serverless compute. A notebook, Python script, Python wheel, JAR or dbt task with no
+ *   compute field at all also runs on serverless, as the page above documents.
+ * - **Absence is never read as serverless otherwise**: an unrecognised task type, a task with no task type, or a task
+ *   type whose compute this version does not map is `unknown`, with a reason the preview states plainly.
  */
 export function toJobCompute(value: unknown, jobSettings: unknown = {}): JobCompute {
   const task = record(value)
+  const typeFields = Object.keys(task).filter((key) => key.endsWith("_task"))
+  const unknownType = typeFields.find((key) => !TASK_TYPES.has(key))
+  if (unknownType !== undefined) return { kind: "unknown", reason: `its task type ${unknownType} is not one this version knows` }
+  if (typeFields.length === 0) return { kind: "unknown", reason: "the task names no task type" }
+  if (typeFields.length > 1) return { kind: "unknown", reason: `the task names more than one task type (${typeFields.join(", ")})` }
+  const type = typeFields[0]!
+  if (type === "condition_task") return { kind: "none", what: "a condition task needs no compute" }
+  if (type === "run_job_task") {
+    const jobId = count(record(task.run_job_task).job_id)
+    return jobId === undefined ? { kind: "unknown", reason: "its run_job_task names no job" } : { kind: "job", jobId }
+  }
+  if (type === "pipeline_task") {
+    const pipelineId = maybeText(record(task.pipeline_task).pipeline_id)
+    return { kind: "pipeline", ...(pipelineId ? { pipelineId } : {}) }
+  }
+  if (type === "for_each_task") {
+    const inner = record(task.for_each_task).task
+    if (inner === undefined) return { kind: "unknown", reason: "its for_each_task names no inner task" }
+    return { kind: "for-each", compute: toJobCompute(inner, jobSettings) }
+  }
   const existing = maybeText(task.existing_cluster_id)
   if (existing) return { kind: "existing", clusterId: existing }
   const inline = clusterCompute(record(task.new_cluster))
@@ -226,11 +274,10 @@ export function toJobCompute(value: unknown, jobSettings: unknown = {}): JobComp
   }
   const warehouse = taskWarehouse(task)
   if (warehouse) return { kind: "warehouse", warehouseId: warehouse }
+  if (type === "sql_task") return { kind: "unknown", reason: "its SQL task names no warehouse" }
   if (maybeText(task.environment_key)) return { kind: "serverless" }
-  if (task.pipeline_task !== undefined) return { kind: "unknown", reason: "a pipeline task runs on its pipeline's compute" }
-  const job = record(jobSettings)
-  const serverlessJob = list(job.environments).length > 0 || maybeText(job.performance_target) !== undefined
-  return serverlessJob ? { kind: "serverless" } : { kind: "unknown", reason: "the task names no compute this version can read" }
+  if (SERVERLESS_TASK_TYPES.has(type)) return { kind: "serverless" }
+  return { kind: "unknown", reason: `its ${type.replace(/_task$/u, "")} task does not document the compute it uses` }
 }
 
 /** One job's settings (`GET /api/2.2/jobs/get`); `timeout_seconds` 0 is documented as "no timeout". */

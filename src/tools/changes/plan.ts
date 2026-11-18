@@ -50,15 +50,30 @@ type Preview = NonNullable<Output<"plan">["preview"]>
  * this version cannot read says so, and is never called serverless.
  */
 function computeNote(compute: JobCompute, warehouses: ReadonlyMap<string, string | undefined>): string {
-  if (compute.kind === "serverless") return "serverless compute"
-  if (compute.kind === "existing") return `the all-purpose cluster ${quoted(compute.clusterId)}`
-  if (compute.kind === "warehouse") {
-    const described = warehouses.get(compute.warehouseId)
-    return described === undefined ? `the SQL warehouse ${quoted(compute.warehouseId)}, which this identity cannot read` : `the SQL warehouse ${described}`
+  switch (compute.kind) {
+    case "serverless":
+      return "serverless compute"
+    case "existing":
+      return `the all-purpose cluster ${quoted(compute.clusterId)}`
+    case "warehouse": {
+      const described = warehouses.get(compute.warehouseId)
+      return described === undefined ? `the SQL warehouse ${quoted(compute.warehouseId)}, which this identity cannot read` : `the SQL warehouse ${described}`
+    }
+    case "none":
+      return `no compute (${compute.what})`
+    case "job":
+      return `the compute of job ${compute.jobId}`
+    case "pipeline":
+      return `the pipeline's own compute${compute.pipelineId ? ` (${quoted(compute.pipelineId)})` : ""}`
+    case "for-each":
+      return `each iteration on ${computeNote(compute.compute, warehouses)}`
+    case "unknown":
+      return `compute not determined (${compute.reason})`
+    case "job-cluster": {
+      const workers = compute.autoscale ? `${compute.autoscale.min}–${compute.autoscale.max} workers (autoscale)` : `${compute.numWorkers ?? 1} worker${compute.numWorkers === 1 ? "" : "s"}`
+      return `a job cluster${compute.jobClusterKey ? ` shared as ${quoted(compute.jobClusterKey)}` : ""}${compute.nodeTypeId ? ` of ${quoted(compute.nodeTypeId)}` : ""} with ${workers}`
+    }
   }
-  if (compute.kind === "unknown") return `compute not determined (${compute.reason})`
-  const workers = compute.autoscale ? `${compute.autoscale.min}–${compute.autoscale.max} workers (autoscale)` : `${compute.numWorkers ?? 1} worker${compute.numWorkers === 1 ? "" : "s"}`
-  return `a job cluster${compute.jobClusterKey ? ` shared as ${quoted(compute.jobClusterKey)}` : ""}${compute.nodeTypeId ? ` of ${quoted(compute.nodeTypeId)}` : ""} with ${workers}`
 }
 
 /** The job's settings as one string, for the plan's fingerprint: a job that changed since the preview is PLAN_CHANGED. */
