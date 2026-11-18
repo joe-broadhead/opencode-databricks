@@ -18,7 +18,9 @@ beforeAll(async () => {
   // The doctor's checks reach for Databricks, and this host has no fake behind the router: the calls are blocked, the
   // report says they were unavailable, and the tests assert that.
   host = await startHost({ options: { accounts: { work: { warehouse: "wh-small" } } }, expectBlocked: true })
-})
+  // Starting a real host takes about 4 s on an idle runner: bun's default 5 s hook timeout failed it on a busy one
+  // (CI's macos-26, and loaded machines). The budget plugin.test.ts gives the same start.
+}, 120_000)
 
 afterAll(async () => {
   await host?.close()

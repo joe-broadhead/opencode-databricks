@@ -22,6 +22,11 @@ All notable changes to this project are documented here. The format follows [Kee
 - The statement table that gives every change its plan category, `databricks_plan` for SQL, and single-use plans that
   commit only through their category's tool.
 - The local spend ledger, the `access` option's default rules, the `sources` declaration, and the status skeleton.
+- `databricks_save`: a read saved as CSV, JSONL, Parquet or Arrow under the results folder or an allowed root, compared
+  as real paths, so a symlinked folder cannot carry a save outside them.
+- Three sources for Memory and Jelly: `databricks.queries` (your finished statements) and `databricks.runs` (the
+  workspace's finished job runs), each listed once when it ends, and the `databricks.saved` snapshot; `probe` records
+  who you are so content reads never read the identity. [Sources](docs/sources.md).
 
 ### Changed
 
