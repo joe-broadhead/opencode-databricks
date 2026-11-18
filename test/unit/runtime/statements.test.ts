@@ -1,7 +1,7 @@
 // §15.1 "retries": the statement submit is never resent (§9) — its answer is recovered from Query History; §15.1's
 // query tags; §15.3 Stop: a signal cancels the statement the call started; the asynchronous poll; L5's cache identity;
 // L8's cancel at the wait.
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
 import type { AuthPort, StatementAnswer, StatementRequest } from "../../../src/ports.js"
 import { type DatabricksClientOptions, createDatabricksClient } from "../../../src/process/client.js"
@@ -501,6 +501,30 @@ describe("L5: one result-cache identity, with and without row_limit", () => {
       const bare = await client.history("work", {}, signal)
       expect(bare.items[0]?.resultFromCache).toBeUndefined()
     } finally {
+      await fake.close()
+    }
+  })
+})
+
+describe("Query History's order, newest first, when two statements share a millisecond", () => {
+  // macOS CI (run 44204769617): the read and its save were recorded in the same millisecond, the fake sorted by start
+  // time alone, and the tie kept the older record first, so L5 saw the uncached run. A frozen clock makes the tie
+  // certain, so this fails without the fake's tie-break, on any machine.
+  it("lists the statement recorded last first", async () => {
+    const frozen = Date.now()
+    const now = vi.spyOn(Date, "now").mockReturnValue(frozen)
+    const { fake, auth } = await workspace({ statements: new Map([[STATEMENT, oneRow]]) })
+    try {
+      const client = clientFor(auth)
+      const signal = new AbortController().signal
+      const first = await client.submit(request({ rowLimit: 50 }), signal)
+      const second = await client.submit(request({ rowLimit: 50 }), signal)
+      const page = await client.history("work", { includeMetrics: true }, signal)
+      expect(page.items.map((item) => item.queryStartTimeMs)).toEqual([frozen, frozen])
+      expect(page.items.map((item) => item.queryId)).toEqual([second.statementId, first.statementId])
+      expect(page.items.map((item) => item.resultFromCache)).toEqual([true, false])
+    } finally {
+      now.mockRestore()
       await fake.close()
     }
   })
