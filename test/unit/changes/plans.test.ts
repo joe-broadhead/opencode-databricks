@@ -1,0 +1,150 @@
+// The plan store's semantics and package D's non-SQL plans (design §15.1 "Plans": single use, TTL, caller binding,
+// PLAN_CHANGED, admin reason, and the run's idempotency token equal to the plan ID), against the documented Jobs API
+// shapes in `fixtures/`.
+import { describe, expect, it } from "vitest"
+import type { Output } from "../../../src/domain/contract.js"
+import { HANDLERS } from "../../../src/registry.js"
+import { runTool } from "../../../src/tool-spec.js"
+import { changeHarness, NOTEBOOK_PATH, recorded, type ChangeHarness } from "./harness.js"
+
+const plan = async (input: Record<string, unknown>, harness: ChangeHarness = changeHarness()): Promise<Output<"plan">> =>
+  (await runTool("plan", input, harness.call(), harness.deps, HANDLERS)) as Output<"plan">
+const commit = async (tool: "write" | "delete" | "share" | "export" | "run" | "admin", harness: ChangeHarness, planId: string, id = "call_commit") =>
+  (await runTool(tool, { planId }, harness.call(id), harness.deps, HANDLERS)) as Record<string, unknown>
+
+describe("the plan store", () => {
+  it("is single use, bound to its caller, and expires after planTtlSeconds", async () => {
+    const harness = changeHarness()
+    const planned = await plan({ sql: "DELETE FROM main.s.t WHERE id = 1" }, harness)
+    const id = planned.planId!
+    expect(harness.deps.plans.peek(id)).toMatchObject({ used: false, plan: { category: "delete", account: "work", sessionId: "ses_test", agentId: "build" } })
+    expect(await commit("delete", harness, id)).toMatchObject({ state: "ok" })
+    expect(await commit("delete", harness, id, "call_2")).toMatchObject({ error: "PLAN_ALREADY_USED" })
+
+    const other = await plan({ sql: "DELETE FROM main.s.t WHERE id = 1" }, harness)
+    expect(await runTool("delete", { planId: other.planId! }, { ...harness.call("call_3"), sessionID: "ses_other" }, harness.deps, HANDLERS)).toMatchObject({ error: "PLAN_CALLER_MISMATCH" })
+    expect(await runTool("delete", { planId: "pln_none" }, harness.call("call_4"), harness.deps, HANDLERS)).toMatchObject({ error: "PLAN_NOT_FOUND" })
+
+    const expiring = await plan({ sql: "DELETE FROM main.s.t WHERE id = 1" }, harness)
+    harness.clock.advance(300_000)
+    expect(await commit("delete", harness, expiring.planId!, "call_5")).toMatchObject({ error: "PLAN_EXPIRED" })
+  })
+
+  it("refuses a plan committed with another category's tool, naming the right one, and consumes nothing", async () => {
+    const harness = changeHarness()
+    const planned = await plan({ sql: "GRANT SELECT ON TABLE main.s.t TO `team`" }, harness)
+    expect(await commit("write", harness, planned.planId!)).toMatchObject({ error: "CATEGORY_MISMATCH", next: expect.stringContaining("databricks_share") })
+    expect(harness.deps.plans.peek(planned.planId!)).toMatchObject({ used: false })
+    expect(await commit("share", harness, planned.planId!, "call_2")).toMatchObject({ state: "ok" })
+  })
+
+  it("takes exactly one of sql, job, notebook and warehouse, and a SQL plan's params stay inside it", async () => {
+    expect(await plan({})).toMatchObject({ error: "INPUT_INVALID" })
+    expect(await plan({ sql: "DELETE FROM main.s.t WHERE id = 1", job: { jobId: 100 } })).toMatchObject({ error: "INPUT_INVALID" })
+    expect(await plan({ job: { jobId: 100 }, params: [{ name: "v", value: 1 }] })).toMatchObject({ error: "INPUT_INVALID" })
+    expect(await plan({ notebook: { path: NOTEBOOK_PATH }, warehouse: "wh-small" })).toMatchObject({ error: "INPUT_INVALID" })
+  })
+})
+
+describe("a job run", () => {
+  it("needs the jobs API family before any call", async () => {
+    const harness = changeHarness({ features: [] })
+    expect(await plan({ job: { jobId: 100 } }, harness)).toMatchObject({ error: "AUTH_SCOPE_MISSING", next: expect.stringContaining("features") })
+    expect(harness.calls).toEqual([])
+    expect(harness.api.requests).toEqual([])
+  })
+
+  it("previews the job, its last run's tasks and what is billed separately, and sends nothing", async () => {
+    const harness = changeHarness({
+      runs: [{ runId: 7, jobId: 100, state: { lifeCycleState: "TERMINATED", resultState: "SUCCESS" }, startTime: 1_700_000_000_000, endTime: 1_700_000_100_000 }],
+    })
+    harness.api.state.runs.set(7, { ...harness.api.state.runs.get(7)!, tasks: [{ task_key: "Orders_Ingest", state: { life_cycle_state: "TERMINATED", result_state: "SUCCESS" }, run_duration: 100_000 }] })
+    const planned = await plan({ job: { jobId: 100 }, reason: "backfill" }, harness)
+    expect(planned).toMatchObject({ state: "planned", category: "run", commitWith: "databricks_run", preview: { kind: "job", parsed: false } })
+    const notes = planned.preview!.notes.join(" ")
+    expect(notes).toMatch(/`nightly`/)
+    expect(notes).toMatch(/Orders_Ingest/)
+    expect(notes).toMatch(/billed separately/)
+    expect(notes).toMatch(/idempotency_token/)
+    expect(notes).toMatch(/not readable through this version's client/)
+    expect(harness.statements()).toEqual([])
+    harness.settle()
+  })
+
+  it("refuses a job it cannot see", async () => {
+    expect(await plan({ job: { jobId: 999 } })).toMatchObject({ error: "NOT_FOUND", next: expect.stringContaining("databricks_jobs") })
+  })
+
+  it("commits through run-now with the plan id as the idempotency token and the plan's own parameters", async () => {
+    const harness = changeHarness()
+    const planned = await plan({ job: { jobId: 100, params: { day: "2026-11-17" } } }, harness)
+    const id = planned.planId!
+    expect(id.length).toBeLessThanOrEqual(64)
+    const answer = await commit("run", harness, id)
+    expect(answer).toMatchObject({ state: "running", runId: expect.any(Number), next: expect.stringContaining("databricks_jobs") })
+    const requests = harness.api.requests.filter((request) => request.path === "/api/2.2/jobs/run-now")
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.body).toEqual({ job_id: 100, job_parameters: { day: "2026-11-17" }, idempotency_token: id })
+    harness.settle()
+  })
+})
+
+describe("a one-time notebook run", () => {
+  it("carries runTimeoutSeconds, previews it, and puts this plan's id on the run", async () => {
+    const harness = changeHarness({ options: { runTimeoutSeconds: 1800 } })
+    const planned = await plan({ notebook: { path: NOTEBOOK_PATH, params: { day: "2026-11-17" } } }, harness)
+    expect(planned).toMatchObject({ category: "run", preview: { kind: "notebook", targets: [{ name: NOTEBOOK_PATH, type: "NOTEBOOK", exists: true }] } })
+    expect(planned.preview!.notes.join(" ")).toMatch(/timeout_seconds 1800/)
+    expect(planned.preview!.notes.join(" ")).toMatch(/serverless/)
+    const answer = await commit("run", harness, planned.planId!)
+    expect(answer).toMatchObject({ state: "running", runId: expect.any(Number) })
+    expect(String(answer.next)).toContain("1800-second timeout")
+    const requests = harness.api.requests.filter((request) => request.path === "/api/2.2/jobs/runs/submit")
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.body).toMatchObject({
+      idempotency_token: planned.planId,
+      timeout_seconds: 1800,
+      tasks: [{ task_key: "notebook", notebook_task: { notebook_path: NOTEBOOK_PATH, base_parameters: { day: "2026-11-17" } } }],
+    })
+    harness.settle()
+  })
+
+  it("says a path it cannot see would make runs/submit fail, and still plans it", async () => {
+    const planned = await plan({ notebook: { path: "/Shared/missing" } })
+    expect(planned).toMatchObject({ state: "planned", preview: { targets: [{ name: "/Shared/missing", exists: false }] } })
+    expect(planned.preview!.notes.join(" ")).toMatch(/runs\/submit would fail/)
+  })
+})
+
+describe("a warehouse edit plan", () => {
+  it("previews each field, the rate it implies and its reason, and its commit runs nothing", async () => {
+    const harness = changeHarness()
+    expect(await plan({ warehouse: { id: "wh-small", edit: { size: "Medium" } } }, harness)).toMatchObject({ error: "ADMIN_REASON_REQUIRED" })
+    const planned = await plan({ warehouse: { id: "wh-small", edit: { size: "Medium", autoStopMinutes: 5 } }, reason: "the nightly load needs more" }, harness)
+    expect(planned).toMatchObject({ category: "admin", commitWith: "databricks_admin", preview: { kind: "warehouse", reason: "the nightly load needs more" } })
+    const notes = planned.preview!.notes.join(" ")
+    expect(notes).toMatch(/size Small → Medium/)
+    expect(notes).toMatch(/autoStopMinutes 10 → 5/)
+    expect(notes).toMatch(/about \$8\.40\/hour now and about \$16\.80\/hour after/)
+    expect(notes).toMatch(/cannot be committed yet/)
+    const answer = await commit("admin", harness, planned.planId!)
+    expect(answer).toMatchObject({ error: "NOT_IMPLEMENTED", next: expect.stringContaining("SQL warehouse settings") })
+    expect(harness.api.requests.filter((request) => request.path.startsWith("/api/2.2/jobs"))).toEqual([])
+    expect(harness.statements()).toEqual([])
+  })
+
+  it("refuses an edit that changes nothing, and one whose cluster bounds cross", async () => {
+    expect(await plan({ warehouse: { id: "wh-small", edit: { size: "Small" } }, reason: "same" })).toMatchObject({ error: "INPUT_INVALID", message: expect.stringContaining("changes nothing") })
+    expect(await plan({ warehouse: { id: "wh-small", edit: { minClusters: 3, maxClusters: 1 } }, reason: "crossed" })).toMatchObject({ error: "INPUT_INVALID" })
+  })
+})
+
+describe("drift after a commit", () => {
+  it("reports a recorded type outside the category's set as a warning and records it", async () => {
+    const harness = changeHarness({ history: [recorded({ statementId: "ddl-1", statementType: "DROP" })] })
+    harness.api.state.statements.set("*", () => ({ statement_id: "ddl-1", status: { state: "SUCCEEDED" } }))
+    const planned = await plan({ sql: "INSERT INTO main.s.t SELECT 1" }, harness)
+    const answer = await commit("write", harness, planned.planId!)
+    expect(answer).toMatchObject({ state: "ok", warnings: [{ code: "CLASSIFICATION_DRIFT" }] })
+  })
+})

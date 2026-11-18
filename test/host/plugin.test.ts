@@ -53,13 +53,19 @@ describe("the plugin in a host", () => {
       const tools = host.probe().rpc(Tools) as unknown as Record<string, (input: unknown, options?: unknown) => Promise<unknown>>
       const described = (await tools.describe!({ sessionID })) as { methods: { name: string }[] }
       expect(described.methods.map((method) => method.name).sort()).toEqual([...RPC_METHODS].sort())
+      // `databricks_plan` is package D's, and a plan reads the warehouse and the targets: with the placeholder auth (no
+      // credential yet) it refuses before anything is sent. Its classification and its preview are proven against the
+      // fakes in test/unit/changes/plan-classification.test.ts.
       const planned = (await tools.plan!({ sessionID, input: { sql: "DROP TABLE main.sales.orders" } })) as Record<string, unknown>
-      expect(planned).toMatchObject({ state: "planned", category: "delete", commitWith: "databricks_delete" })
+      expect(planned).toMatchObject({ state: "refused", error: "AUTH_REQUIRED" })
       const read = (await tools.query!({ sessionID, input: { sql: "select 1" } })) as Record<string, unknown>
       // A read with no usable credential refuses before anything is sent: package C's tools are real, and the auth seam
       // is package A's; a tool no package has built yet still says NOT_IMPLEMENTED.
       expect(read).toMatchObject({ state: "refused", error: "AUTH_REQUIRED" })
-      const unbuilt = (await tools.jobs!({ sessionID, input: {} })) as Record<string, unknown>
+      // `jobs` is package D's and needs an account (its jobs family); with no credential it refuses at the account.
+      // `saved_read` is package E's and still the Day 0 stub.
+      expect(await tools.jobs!({ sessionID, input: {} })).toMatchObject({ state: "refused", error: "AUTH_REQUIRED" })
+      const unbuilt = (await tools.saved_read!({ sessionID, input: { query: "q-1", sha: "0".repeat(64) } })) as Record<string, unknown>
       expect(unbuilt).toMatchObject({ state: "refused", error: "NOT_IMPLEMENTED" })
     } finally {
       await host.close()

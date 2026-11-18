@@ -1,0 +1,249 @@
+/**
+ * What the change tools share (design §5.5, §6.2): the account and feature a call needs, the warehouse a plan previews
+ * and a commit re-checks, and the one submit a committed statement makes.
+ *
+ * **Nothing here sends a statement.** `databricks_plan` calls only `warehouses.get` and `tables.get` (free reads,
+ * design §5.5 step 4) and never `EXPLAIN`s anything (step 3), so this module has no path to `submit` except
+ * `submitChange`, which only a commit calls.
+ *
+ * **The warehouse, as a plan promises.** A plan reads the warehouse once and previews what committing will do:
+ *
+ * - `RUNNING` (or `STARTING`): the statement runs there, and no start is involved.
+ * - `STOPPED`: a plan may still be made, because a change is a deliberate act and the preview can say what it costs —
+ *   but only when the start policy allows it (`startVerdict`, design §6.2). The preview then says plainly that
+ *   committing starts the warehouse and bills until it auto-stops, and the plan records that intent.
+ * - anything else: `WAREHOUSE_STOPPED`.
+ *
+ * A commit re-reads the warehouse and honours **exactly** what the plan previewed: a start happens only when the plan
+ * said so, it asserts `databricks.start` on `<account>:warehouse:<id>` before anything is charged or started (so a
+ * person's rule can stop it), it is charged to the ledger before Databricks is asked, and the commit waits for
+ * `RUNNING`. A warehouse that moved out from under the plan in any other way answers `PLAN_CHANGED`: the person
+ * previewed one thing and would get another.
+ */
+import { START_ACTION, warehouseResource } from "../../domain/actions.js"
+import { DatabricksError, WARNINGS } from "../../domain/errors.js"
+import { startDbuHours } from "../../domain/cost.js"
+import { chargeStart, chargeStatement } from "../../guards/budget.js"
+import type { Warning } from "../../guards/dependencies.js"
+import { describe, minStartUsd, sizeOf, startRefusal, startVerdict, stateClass, stoppedRefusal, usdPerHour } from "../../guards/warehouse.js"
+import type { StatementAnswer, StatementRequest, Warehouse } from "../../ports.js"
+import type { Deps } from "../../registry.js"
+import type { Feature } from "../../domain/actions.js"
+import type { Call } from "../../tool-spec.js"
+import { queryTags, statementRef, type ParamLike, typeOf, waitTimeoutOf } from "../reads/context.js"
+
+export { accountOf } from "../reads/context.js"
+
+/** How long between two `warehouses.get` calls while a commit waits for a warehouse to start. */
+export const START_POLL_MS = 1000
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * The API family a tool needs (design §3.3). With fine-grained scopes the sign-in carries exactly the families it asked
+ * for, so a missing one is `AUTH_SCOPE_MISSING` **before** any call: the server would refuse it anyway, and the message
+ * can name the option that fixes it.
+ */
+export function requireFeature(deps: Deps, account: string, feature: Feature, what: string): void {
+  const identity = deps.auth.account(account)
+  if (identity.features.includes(feature)) return
+  throw new DatabricksError(
+    "AUTH_SCOPE_MISSING",
+    `${what} needs the ${feature} API family, and this account's sign-in does not carry it.`,
+    `Add "${feature}" to accounts.${account}.features and sign in again, or ask the admin to allow the ${feature} scope on the app connection.`,
+  )
+}
+
+/** What a plan promised about the warehouse. */
+export type WarehouseIntent = "running" | "start"
+
+export interface PlannedWarehouse {
+  readonly warehouse: Warehouse
+  readonly intent: WarehouseIntent
+  readonly warnings: readonly Warning[]
+}
+
+/**
+ * The plan's read of the warehouse (design §5.5 step 4, §6.2). Sends nothing and starts nothing. A stopped warehouse is
+ * allowed only when the start policy would allow starting it, and the plan then previews that start and its cost.
+ */
+export async function planWarehouse(deps: Deps, input: { readonly account: string; readonly warehouseId: string; readonly signal: AbortSignal }): Promise<PlannedWarehouse> {
+  const warehouse = await deps.databricks.getWarehouse(input.account, input.warehouseId, input.signal)
+  const state = stateClass(warehouse.state)
+  if (state === "ready" || state === "starting") return { warehouse, intent: "running", warnings: [] }
+  if (state === "hopeless") {
+    const refusal = stoppedRefusal(warehouse, deps.options, warehouse.state)
+    throw new DatabricksError(refusal.code, refusal.detail, refusal.next)
+  }
+  const verdict = startVerdict(warehouse, deps.options)
+  if (!verdict.allowed) {
+    const refusal = startRefusal(warehouse, deps.options, verdict)
+    throw new DatabricksError(refusal.code, refusal.detail, refusal.next)
+  }
+  return { warehouse, intent: "start", warnings: [] }
+}
+
+/** The one line a preview uses for the warehouse and, when committing would start it, for that start's cost. */
+export function warehouseNote(warehouse: Warehouse, intent: WarehouseIntent, deps: Deps): string {
+  if (intent === "start") {
+    const least = minStartUsd(warehouse, deps.options)
+    return `The warehouse ${describe(warehouse, deps.options)} is stopped: committing this plan starts it,${least === undefined ? "" : ` which costs at least about $${least.toFixed(2)}`} and bills until it auto-stops.`
+  }
+  if (warehouse.state === "STARTING") return `The warehouse ${describe(warehouse, deps.options)} is starting; committing this plan waits for it to be running.`
+  return `Runs on ${describe(warehouse, deps.options)}; the warehouse is already running.`
+}
+
+/** The preview's `warehouse`, in the contract's shape. A plan starts nothing, so `started` is always false. */
+export function warehouseUseOf(warehouse: Warehouse, deps: Deps): { id: string; name: string; started: boolean; usdPerHour: number } {
+  return { id: warehouse.id, name: warehouse.name, started: false, usdPerHour: usdPerHour(warehouse, deps.options) }
+}
+
+async function waitForRunning(deps: Deps, account: string, warehouse: Warehouse, wait: number, signal: AbortSignal): Promise<Warehouse | undefined> {
+  const seconds = Math.max(0, wait)
+  let current = warehouse
+  for (let elapsed = 0; elapsed < seconds; elapsed++) {
+    if (signal.aborted) throw new DatabricksError("CANCELLED")
+    await sleep(START_POLL_MS)
+    current = await deps.databricks.getWarehouse(account, warehouse.id, signal)
+    if (current.state === "RUNNING") return current
+    if (current.state !== "STARTING") return undefined
+  }
+  return current.state === "RUNNING" ? current : undefined
+}
+
+const planChanged = (detail: string): DatabricksError =>
+  new DatabricksError("PLAN_CHANGED", detail, "Plan the change again with databricks_plan, and show the new preview before committing it.")
+
+export interface EnsuredChangeWarehouse {
+  readonly warehouse: Warehouse
+  readonly started: boolean
+  readonly warnings: readonly Warning[]
+}
+
+/**
+ * The commit's re-check of the warehouse policy (design §5.5, §6.2). Honours only what the plan previewed: a start
+ * happens when the plan recorded that intent, and never otherwise.
+ */
+export async function ensureChangeWarehouse(
+  deps: Deps,
+  input: { readonly account: string; readonly warehouseId: string; readonly intent: WarehouseIntent; readonly wait: number; readonly sessionID: string; readonly messageID?: string; readonly callID?: string; readonly signal: AbortSignal },
+): Promise<EnsuredChangeWarehouse> {
+  const warehouse = await deps.databricks.getWarehouse(input.account, input.warehouseId, input.signal)
+  const state = stateClass(warehouse.state)
+  if (state === "ready") return { warehouse, started: false, warnings: [] }
+  if (state === "starting") {
+    const running = await waitForRunning(deps, input.account, warehouse, input.wait, input.signal)
+    if (!running) throw planChanged(`The warehouse ${describe(warehouse, deps.options)} is still starting and did not reach RUNNING within ${input.wait} seconds.`)
+    return { warehouse: running, started: false, warnings: [] }
+  }
+  if (state !== "startable") throw planChanged(`The warehouse ${describe(warehouse, deps.options)} is ${warehouse.state.toLowerCase()} now, and this plan cannot run there.`)
+  if (input.intent !== "start") throw planChanged(`The warehouse ${describe(warehouse, deps.options)} was running when this plan was made, so its preview named no start; it is stopped now.`)
+  const verdict = startVerdict(warehouse, deps.options)
+  if (!verdict.allowed) throw planChanged(`The start policy now refuses ${describe(warehouse, deps.options)}: ${verdict.reasons.join("; ")}.`)
+  const size = sizeOf(warehouse)
+  if (!size) throw planChanged(`The warehouse ${describe(warehouse, deps.options)} has a size this version's DBU table does not know, so its start cannot be charged.`)
+  // The person's rules first: a denied `databricks.start` must not use up a budget's last start, and must not start.
+  await deps.permission.assert(
+    { action: START_ACTION, resource: warehouseResource(input.account, warehouse.id), sessionID: input.sessionID, ...(input.messageID && input.callID ? { messageID: input.messageID, callID: input.callID } : {}) },
+    input.signal,
+  )
+  const charged = await chargeStart(deps.ledger, deps.options, {
+    account: input.account,
+    sessionId: input.sessionID,
+    warehouseId: warehouse.id,
+    dbuHours: startDbuHours({ size, autoStopMinutes: warehouse.autoStopMins, clusters: Math.max(1, warehouse.numClusters ?? warehouse.minNumClusters ?? 1) }),
+  })
+  await deps.databricks.startWarehouse(input.account, warehouse.id, input.signal)
+  const running = await waitForRunning(deps, input.account, { ...warehouse, state: "STARTING" }, input.wait, input.signal)
+  if (!running) throw new DatabricksError("UNAVAILABLE", `The warehouse ${describe(warehouse, deps.options)} was started and did not reach RUNNING within ${input.wait} seconds.`, `Check it with databricks_warehouses; the start already bills at least about $${(minStartUsd(warehouse, deps.options) ?? 0).toFixed(2)} until it auto-stops.`)
+  return { warehouse: running, started: true, warnings: [{ code: "STARTED_WAREHOUSE", message: WARNINGS.STARTED_WAREHOUSE }, ...(charged.warning ? [charged.warning] : [])] }
+}
+
+/** A parameter as the commit sends it: the plan stores the caller's own values. */
+export function commitParameters(params: readonly { name: string; value: unknown; type?: string }[] | undefined): readonly { name: string; value: string | null; type?: string }[] | undefined {
+  if (!params?.length) return undefined
+  return params.map((param) => {
+    const value = param.value as ParamLike["value"]
+    const type = param.type ?? typeOf(value)
+    return { name: param.name, value: value === null ? null : String(value), ...(type ? { type } : {}) }
+  })
+}
+
+export interface SubmittedChange {
+  readonly answer: StatementAnswer
+  readonly durationMs: number
+}
+
+/**
+ * The one submit a commit makes (design §5.5): the plan's exact text, with `oc_plan=<planId>` alongside the `oc_*` tags
+ * of every statement, the warehouse's own wait and `on_wait_timeout: CANCEL` at or below 50 seconds so Databricks itself
+ * stops a change nobody is watching. Never retried: the Statement API has no idempotency key (design §9).
+ */
+export async function submitChange(
+  deps: Deps,
+  input: {
+    readonly account: string
+    readonly planId: string
+    readonly call: Call
+    readonly statement: string
+    readonly warehouse: Warehouse
+    readonly parameters?: readonly { name: string; value: string | null; type?: string }[]
+    readonly catalog?: string
+    readonly schema?: string
+    readonly wait: number
+  },
+): Promise<SubmittedChange> {
+  const startedAt = deps.clock.now()
+  const request: StatementRequest = {
+    account: input.account,
+    operation: "sql.statements.change",
+    statement: input.statement,
+    warehouseId: input.warehouse.id,
+    ...(input.catalog ? { catalog: input.catalog } : {}),
+    ...(input.schema ? { schema: input.schema } : {}),
+    ...(input.parameters?.length ? { parameters: input.parameters } : {}),
+    byteLimit: 1024 * 1024,
+    disposition: "INLINE",
+    format: "JSON_ARRAY",
+    waitTimeout: waitTimeoutOf(input.wait),
+    onWaitTimeout: input.wait <= 50 ? "CANCEL" : "CONTINUE",
+    queryTags: queryTags("change", input.call, { oc_plan: input.planId }),
+  }
+  const answer = await deps.databricks.submit(request, input.call.signal)
+  const durationMs = Math.max(0, deps.clock.now() - startedAt)
+  if (answer.ambiguous) {
+    throw new DatabricksError("UNAVAILABLE", "The submit got no answer, so the change may have run.", `Check it before calling again: databricks_history({}) shows the statement, and Query History records the oc_plan tag ${input.planId}.`)
+  }
+  if (answer.state === "SUCCEEDED" || answer.state === "FAILED" || answer.state === "CANCELED") {
+    const size = sizeOf(input.warehouse)
+    if (size) {
+      await chargeStatement(deps.ledger, deps.clock, deps.options, {
+        account: input.account,
+        sessionId: input.call.sessionID,
+        warehouseId: input.warehouse.id,
+        statementId: answer.statementId,
+        size,
+        autoStopMinutes: input.warehouse.autoStopMins,
+        clusters: Math.max(1, input.warehouse.numClusters ?? input.warehouse.minNumClusters ?? 1),
+        durationMs,
+      })
+    }
+  }
+  return { answer, durationMs }
+}
+
+/** The refusal a committed statement's terminal answer carries, or undefined when it succeeded. */
+export function changeFailure(answer: StatementAnswer): DatabricksError | undefined {
+  if (answer.state === "SUCCEEDED") return undefined
+  const provider = answer.error ? { ...answer.error, trust: "untrusted" as const } : undefined
+  if (answer.state === "FAILED") return new DatabricksError("STATEMENT_FAILED", "Databricks ran the change and it failed.", "Fix it as providerError says; the statement ran, so nothing is retried.", provider)
+  if (answer.state === "CANCELED") return new DatabricksError("RUN_TIMEOUT", "Databricks cancelled the change at its wait (on_wait_timeout: CANCEL).", "Read the statement before retrying: databricks_history({}) shows whether any effect happened.")
+  if (answer.state === "CLOSED") return new DatabricksError("RESULTS_EXPIRED", "The statement was closed, so its result is gone.", "The change itself may have run; databricks_history({}) shows its record.")
+  if (answer.state === "PENDING" || answer.state === "RUNNING") {
+    return new DatabricksError("UNAVAILABLE", "The change was accepted and is still running after its wait.", `Read it with ${statementRef(answer.statementId)}; nothing is retried.`)
+  }
+  return undefined
+}
+
+/** The next step a committed statement leaves: its id, for `databricks_statement`. */
+export const statementNext = (statementId: string) => statementRef(statementId)
