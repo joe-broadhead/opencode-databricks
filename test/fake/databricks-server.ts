@@ -706,13 +706,16 @@ export const startFakeDatabricks: StartFake = async (seed = {}) => {
       const start = Number(url.searchParams.get("filter_by.query_start_time_range.start_time_ms") ?? Number.NaN)
       const end = Number(url.searchParams.get("filter_by.query_start_time_range.end_time_ms") ?? Number.NaN)
       const max = Math.min(Number(url.searchParams.get("max_results") ?? 100) || 100, HISTORY_PAGE_MAX)
+      // Newest first, as the API lists them. Two records can share a millisecond (a read and its save, on a fast
+      // machine), so a tie goes to the one recorded later: sorting by start time alone kept the older first.
+      const recorded = new Map(state.history.map((entry, index) => [entry, index]))
       const filtered = state.history
         .filter((entry) => warehouses.length === 0 || (entry.warehouseId !== undefined && warehouses.includes(entry.warehouseId)))
         .filter((entry) => statementIds.length === 0 || statementIds.includes(entry.queryId))
         .filter((entry) => users.length === 0 || (entry.userId !== undefined && users.includes(entry.userId)))
         .filter((entry) => Number.isNaN(start) || entry.queryStartTimeMs >= start)
         .filter((entry) => Number.isNaN(end) || entry.queryStartTimeMs <= end)
-        .sort((a, b) => b.queryStartTimeMs - a.queryStartTimeMs)
+        .sort((a, b) => b.queryStartTimeMs - a.queryStartTimeMs || recorded.get(b)! - recorded.get(a)!)
       const offset = Number(/^p:(\d+)$/u.exec(url.searchParams.get("page_token") ?? "")?.[1] ?? 0)
       const page = filtered.slice(offset, offset + max)
       const next = offset + max < filtered.length ? `p:${offset + max}` : undefined

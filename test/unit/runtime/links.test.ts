@@ -125,12 +125,17 @@ describe("§15.1 links: no workspace token, and an expired link re-read", () => 
         new AbortController().signal,
       )
       const expired = submitted.links![0]!
-      await new Promise((resolve) => setTimeout(resolve, 60))
-      const stream = await linkStream(client, fetchImpl, { account: "work", statementId: submitted.statementId, link: expired, cloud: "aws", signal: new AbortController().signal })
+      // Expiry is driven by the clock linkStream is given, not by sleeping: a 60 ms sleep against a 40 ms TTL also
+      // let the *fresh* link minted by the re-read expire before it was fetched on a slow runner (RESULTS_EXPIRED,
+      // found under CPU starvation). The re-read mints a link with the fake's normal lifetime.
+      const afterExpiry = Date.parse(expired.expiration) + 1
+      expect(linkExpired(expired, afterExpiry)).toBe(true)
+      fake.behave({ linkTtlMs: 15 * 60 * 1000 })
+      const stream = await linkStream(client, fetchImpl, { account: "work", statementId: submitted.statementId, link: expired, cloud: "aws", signal: new AbortController().signal, now: () => afterExpiry })
       expect(await streamText(stream)).toBe("fresh")
-      // The chunk index was re-read once, and its fresh link was fetched.
-      expect(fake.requests.filter((entry) => entry.path.includes("/result/chunks/0")).length).toBeGreaterThanOrEqual(1)
-      expect(linkExpired(expired)).toBe(true)
+      // The expired link was never fetched; the chunk index was re-read once, and its fresh link was fetched.
+      expect(fake.requests.filter((entry) => entry.path.includes("/result/chunks/0")).length).toBe(1)
+      expect(fake.requests.filter((entry) => entry.path === "/results/expiring").length).toBe(1)
     } finally {
       await fake.close()
     }
