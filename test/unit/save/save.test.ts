@@ -161,7 +161,8 @@ describe("databricks_save", () => {
     expect(table.numRows).toBe(3)
     expect(table.getChild("name")?.get(0)).toBe("alpha")
     expect(table.getChild("name")?.get(1)).toBe(null)
-    expect(answer.charts).toMatchObject({ path: join(root, "out.arrow"), format: "arrow", fitsCharts: false })
+    // The answer names the real path (macOS's temp folder is itself a link, /var → /private/var).
+    expect(answer.charts).toMatchObject({ path: join(realpathSync.native(root), "out.arrow"), format: "arrow", fitsCharts: false })
   })
 
   it("keeps a second chunk's rows and the schema", async () => {
