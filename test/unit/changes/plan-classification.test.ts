@@ -145,10 +145,31 @@ describe("the preview", () => {
     expect(fresh).toMatchObject({ category: "write" })
   })
 
-  it("does not check a name it cannot fully qualify, and says so", async () => {
+  it("refuses a name it cannot fully qualify, rather than letting the server resolve it", async () => {
     const answer = await plan("DROP TABLE t")
-    expect(answer.preview!.targets).toEqual([{ name: "t" }])
-    expect(answer.preview!.notes.join(" ")).toMatch(/not fully qualified/)
+    expect(answer).toMatchObject({ error: "INPUT_INVALID", message: expect.stringContaining("not fully qualified") })
+    expect(answer.next).toMatch(/catalog\.schema\.name/)
+    expect(answer).not.toHaveProperty("planId")
+  })
+
+  it("resolves a one-part name with the catalog first, then the schema", async () => {
+    const harness = changeHarness({ tables: { "main.hr.salaries": { tableType: "MANAGED", owner: "hr" } } })
+    const answer = await plan("DROP TABLE salaries", harness, { catalog: "main", schema: "hr" })
+    expect(answer.preview!.targets).toEqual([{ name: "main.hr.salaries", type: "MANAGED", owner: "hr", exists: true }])
+  })
+
+  it("resolves a two-part name against the catalog only", async () => {
+    const harness = changeHarness({ tables: { "main.hr.salaries": {} } })
+    const answer = await plan("DROP TABLE hr.salaries", harness, { catalog: "main" })
+    expect(answer.preview!.targets).toEqual([{ name: "main.hr.salaries", type: "MANAGED", exists: true }])
+  })
+
+  it("stores the defaults it resolved with, so the commit sends the same ones", async () => {
+    const harness = changeHarness()
+    const planned = await plan("DROP TABLE salaries", harness, { catalog: "main", schema: "hr" })
+    await plan("DROP TABLE salaries", harness, { catalog: "main", schema: "hr" })
+    const stored = harness.deps.plans.peek(planned.planId!)!.plan
+    expect(stored.payload).toMatchObject({ kind: "sql", catalog: "main", schema: "hr" })
   })
 })
 

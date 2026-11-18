@@ -28,6 +28,7 @@ const toRunInfo = (run: DocRun): RunInfo => ({
   ...(run.end_time === undefined ? {} : { endTime: run.end_time }),
   ...(run.run_type === undefined ? {} : { runType: run.run_type }),
   ...(run.trigger === undefined ? {} : { triggerType: run.trigger }),
+  ...(run.creator_user_name === undefined ? {} : { creatorUserName: run.creator_user_name }),
 })
 
 const toRun = (run: DocRun): RunInfo & { tasks: readonly { taskKey: string; state: string; durationMs?: number; error?: string }[] } => ({

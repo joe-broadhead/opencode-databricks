@@ -36,7 +36,7 @@ describe("a committed SQL plan", () => {
       parameters: [{ name: "v", value: "7", type: "BIGINT" }],
     })
     const tags = (sent[0]!.query_tags as { key: string; value?: string }[]) ?? []
-    expect(Object.fromEntries(tags.map((tag) => [tag.key, tag.value]))).toMatchObject({ oc_plugin: "databricks", oc_tool: "change", oc_plan: planned.planId })
+    expect(Object.fromEntries(tags.map((tag) => [tag.key, tag.value]))).toMatchObject({ oc_plugin: "databricks", oc_tool: "delete", oc_plan: planned.planId })
     harness.settle()
   })
 
@@ -80,6 +80,25 @@ describe("a committed SQL plan", () => {
     const harness = changeHarness({ statement: () => ({ statement_id: "st-c", status: { state: "CANCELED" } }) })
     const planned = await plan({ sql: "DELETE FROM main.s.t WHERE id = 1" }, harness)
     expect(await commit("delete", harness, planned.planId!)).toMatchObject({ state: "failed", error: "RUN_TIMEOUT" })
+  })
+})
+
+describe("a submit B recovered by its tag", () => {
+  it("LOW 1: reports the recovered statement and id, and charges it, instead of discarding it", async () => {
+    const harness = changeHarness()
+    const real = harness.deps.databricks
+    const recovered = new Proxy(real, {
+      get(target, name, receiver) {
+        // B's client joins a statement it found by this call's own `oc_call` tag after a submit that got no answer
+        // (design §9): it answers the joined statement with `ambiguous: true`.
+        if (name === "submit") return async () => ({ statementId: "st-recovered", state: "SUCCEEDED", ambiguous: true, manifest: { columns: [], totalRowCount: 2 } })
+        return Reflect.get(target, name, receiver)
+      },
+    }) as DatabricksPort
+    const planned = await plan({ sql: "DELETE FROM main.s.t WHERE id = 1" }, harness)
+    const answer = await commit("delete", harness, planned.planId!, { ...harness.deps, databricks: recovered })
+    expect(answer).toMatchObject({ state: "ok", statementId: "st-recovered", rowsAffected: 2, next: expect.stringContaining("reported rather than resent") })
+    expect(harness.ledger.charges.map((charge) => charge.kind)).toContain("statement")
   })
 })
 

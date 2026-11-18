@@ -57,6 +57,43 @@ export function requireFeature(deps: Deps, account: string, feature: Feature, wh
 /** What a plan promised about the warehouse. */
 export type WarehouseIntent = "running" | "start"
 
+/**
+ * What a plan promised, kept in `Plan.fingerprint.policy` as JSON so the commit can compare it (design §5.5's "Commit
+ * re-checks the warehouse policy and the targets", and the review of #7's LOW 4: a fingerprint that holds names only
+ * misses a target that changed type, or a warehouse that was resized after the preview showed its price).
+ */
+export interface PlanPolicy {
+  readonly kind: "sql" | "job" | "notebook" | "warehouse"
+  /** The warehouse the plan previewed, with the shape the preview's price was based on. */
+  readonly warehouse?: {
+    readonly id: string
+    readonly intent: WarehouseIntent
+    readonly size: string
+    readonly minClusters: number
+    readonly maxClusters: number
+    readonly autoStopMinutes: number
+  }
+  /** Each target with its kind and type, so a table that became a view (or the reverse) is a change. */
+  readonly targets?: readonly { readonly name: string; readonly kind: string; readonly type?: string; readonly children?: readonly string[] }[]
+  /** A job plan's job and, once `getJob` lands, a hash of the settings the preview listed. */
+  readonly job?: { readonly jobId: number; readonly settings?: string }
+  /** A notebook plan's path. */
+  readonly notebook?: { readonly path: string }
+}
+
+export const encodePolicy = (policy: PlanPolicy): string => JSON.stringify(policy)
+
+/** A plan's policy, or undefined for a plan written before this field held JSON. */
+export function decodePolicy(text: string | undefined): PlanPolicy | undefined {
+  if (!text) return undefined
+  try {
+    const parsed = JSON.parse(text) as PlanPolicy
+    return typeof parsed === "object" && parsed !== null && typeof parsed.kind === "string" ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export interface PlannedWarehouse {
   readonly warehouse: Warehouse
   readonly intent: WarehouseIntent
@@ -126,9 +163,27 @@ export interface EnsuredChangeWarehouse {
  */
 export async function ensureChangeWarehouse(
   deps: Deps,
-  input: { readonly account: string; readonly warehouseId: string; readonly intent: WarehouseIntent; readonly wait: number; readonly sessionID: string; readonly messageID?: string; readonly callID?: string; readonly signal: AbortSignal },
+  input: {
+    readonly account: string
+    readonly warehouseId: string
+    readonly intent: WarehouseIntent
+    /** The warehouse's shape at plan time: a resize since the preview is PLAN_CHANGED. */
+    readonly planned?: { readonly size: string; readonly minClusters: number; readonly maxClusters: number; readonly autoStopMinutes: number }
+    readonly wait: number
+    readonly sessionID: string
+    readonly messageID?: string
+    readonly callID?: string
+    readonly signal: AbortSignal
+  },
 ): Promise<EnsuredChangeWarehouse> {
   const warehouse = await deps.databricks.getWarehouse(input.account, input.warehouseId, input.signal)
+  if (input.planned) {
+    const now = { size: warehouse.clusterSize, minClusters: warehouse.minNumClusters, maxClusters: warehouse.maxNumClusters, autoStopMinutes: warehouse.autoStopMins }
+    const changed = (Object.keys(now) as (keyof typeof now)[]).filter((key) => now[key] !== input.planned![key])
+    if (changed.length) {
+      throw planChanged(`The warehouse ${describe(warehouse, deps.options)} changed since the plan was made: ${changed.map((key) => `${key} was ${String(input.planned![key])} and is ${String(now[key])}`).join("; ")}.`)
+    }
+  }
   const state = stateClass(warehouse.state)
   if (state === "ready") return { warehouse, started: false, warnings: [] }
   if (state === "starting") {
@@ -187,6 +242,7 @@ export async function submitChange(
     readonly call: Call
     readonly statement: string
     readonly warehouse: Warehouse
+    readonly tool: string
     readonly parameters?: readonly { name: string; value: string | null; type?: string }[]
     readonly catalog?: string
     readonly schema?: string
@@ -207,13 +263,16 @@ export async function submitChange(
     format: "JSON_ARRAY",
     waitTimeout: waitTimeoutOf(input.wait),
     onWaitTimeout: input.wait <= 50 ? "CANCEL" : "CONTINUE",
-    queryTags: queryTags("change", input.call, { oc_plan: input.planId }),
+    queryTags: queryTags(input.tool, input.call, { oc_plan: input.planId }),
   }
   const answer = await deps.databricks.submit(request, input.call.signal)
   const durationMs = Math.max(0, deps.clock.now() - startedAt)
-  if (answer.ambiguous) {
+  if (answer.ambiguous && !answer.statementId) {
     throw new DatabricksError("UNAVAILABLE", "The submit got no answer, so the change may have run.", `Check it before calling again: databricks_history({}) shows the statement, and Query History records the oc_plan tag ${input.planId}.`)
   }
+  // B's client joins a statement it found by this call's own `oc_call` tag after a submit that got no answer (design §9).
+  // That is the statement this commit sent, not an unknown one, so its state and id are reported rather than thrown
+  // away; nothing is retried.
   if (answer.state === "SUCCEEDED" || answer.state === "FAILED" || answer.state === "CANCELED") {
     const size = sizeOf(input.warehouse)
     if (size) {

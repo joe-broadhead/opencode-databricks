@@ -5,49 +5,71 @@
  *
  * Every commit, in this order:
  *
- * 1. asserts its own dotted action (`assertTool`, in the factory) — before any Databricks call;
- * 2. takes the plan once, which checks the caller (session, agent, account), the TTL and the category
- *    (`CATEGORY_MISMATCH` names the right tool);
- * 3. **re-checks what the plan previewed**, before it sends anything: it classifies the planned text again, resolves its
- *    targets again with `tables.get`, and compares the category and the target set with the plan's fingerprint. A
- *    different category or target set is `PLAN_CHANGED`; a target that appeared or vanished can change a `CREATE` into a
- *    replace, which is exactly the case the fingerprint catches;
- * 4. asserts each target table as `<account>:table:<c>.<s>.<t>` under its own dotted action, from the plan's own names,
- *    before the re-check's calls — so a person's `deny databricks.delete on work:table:*.hr.*` stops the commit before
- *    anything is read or run;
- * 5. re-checks the warehouse policy (`ensureChangeWarehouse`): it starts one only when the plan previewed a start, and
+ * 1. reads the plan without consuming it and checks the caller (session, agent, account), the TTL and the category, so a
+ *    plan that is not this caller's, is spent or is the wrong tool's is refused **before** the person is asked anything
+ *    (the review of #7's LOW 2: an assert on someone else's plan is a prompt they can never need);
+ * 2. asserts its own dotted action (`assertTool`) on the operation its kind actually uses — `sql.statements.change`,
+ *    `jobs.jobs.runNow`, `jobs.runs.submit` — so a rule on `work:jobs.*` reaches a job run;
+ * 3. asserts each of the plan's targets under that action: a table as `<account>:table:<c>.<s>.<t>`, a function as
+ *    `<account>:function:<c>.<s>.<f>`, a schema as `<account>:table:<c>.<s>.*` (`targets.ts`);
+ * 4. takes the plan once (the authoritative check);
+ * 5. **re-checks what the plan previewed**, before it sends anything: it classifies the planned text again, resolves its
+ *    targets again with `tables.get` (and a CASCADE's contents with `tables.list`), and compares the category, the target
+ *    set and the shapes the preview showed — each target's kind and type, the warehouse's size and cluster bounds — with
+ *    the plan's policy. Any difference is `PLAN_CHANGED`;
+ * 6. re-checks the warehouse policy (`ensureChangeWarehouse`): it starts one only when the plan previewed a start, and
  *    that start asserts `databricks.start` and is charged before Databricks is asked;
- * 6. sends the plan's exact text with `oc_plan=<planId>` (or the documented Jobs call), never retried;
- * 7. compares Query History's `statement_type` with the category (`src/drift.ts`) and reports a mismatch as a warning —
+ * 7. sends the plan's exact text with `oc_plan=<planId>` and `oc_tool=<the commit tool>` (or the documented Jobs call),
+ *    never re-sending a statement the API may already have;
+ * 8. compares Query History's `statement_type` with the category (`src/drift.ts`) and reports a mismatch as a warning —
  *    the change has already run, so a bookkeeping difference never hides its statement id.
  */
-import { actionOf, tableResource, type ToolName } from "../../domain/actions.js"
+import { actionOf, COMMIT_TOOL, type Operation, type ToolName } from "../../domain/actions.js"
 import { DatabricksError } from "../../domain/errors.js"
 import type { Plan } from "../../domain/plans.js"
 import { classifyPlan } from "../../domain/statements.js"
 import { checkDrift } from "../../drift.js"
-import { assertTool } from "../../registry.js"
+import { assertTool, PRIMARY_OPERATION } from "../../registry.js"
 import type { Call, Handler } from "../../tool-spec.js"
 import type { Warning } from "../../guards/dependencies.js"
-import { accountOf, changeFailure, commitParameters, ensureChangeWarehouse, requireFeature, statementNext, submitChange, type WarehouseIntent } from "./context.js"
-import { categoryFor, checkTargets, statementTables } from "./targets.js"
+import { accountOf, changeFailure, commitParameters, decodePolicy, ensureChangeWarehouse, requireFeature, statementNext, submitChange } from "./context.js"
+import { assertTargets, categoryFor, changeTargets, resolveTargets, type ResolvedTarget, type TargetKind } from "./targets.js"
 
 /** The commit tools, and the category each one runs. */
 export type CommitTool = "write" | "delete" | "share" | "export" | "run" | "admin"
 
+type CommitDeps = Parameters<Handler<ToolName>>[2]
+
 const planChanged = (detail: string): DatabricksError =>
   new DatabricksError("PLAN_CHANGED", detail, "Plan the change again with databricks_plan, and show the new preview before committing it.")
 
-/** The plan's own targets, asserted under the commit tool's dotted action before any call. */
-async function assertTargets(tool: CommitTool, account: string, targets: readonly string[], call: Call, deps: Parameters<Handler<ToolName>>[2]): Promise<void> {
-  for (const name of targets) {
-    const parts = name.split(".")
-    if (parts.length !== 3) continue
-    await deps.permission.assert(
-      { action: actionOf(tool), resource: tableResource(account, parts[0]!, parts[1]!, parts[2]!), sessionID: call.sessionID, ...(call.messageID && call.id ? { messageID: call.messageID, callID: call.id } : {}) },
-      call.signal,
-    )
+/** The operation a plan's kind actually uses (design §10.1). */
+function operationFor(payload: Plan["payload"]["kind"], fallback: Operation): Operation {
+  if (payload === "job") return "jobs.jobs.runNow"
+  if (payload === "notebook") return "jobs.runs.submit"
+  return fallback
+}
+
+/** The plan's targets, with the kinds its policy recorded; a plan without a policy is read as tables. */
+function plannedTargets(plan: Plan): readonly ResolvedTarget[] {
+  const policy = decodePolicy(plan.fingerprint.policy)
+  if (policy?.targets) {
+    return policy.targets.map((target) => ({ name: target.name, kind: target.kind as TargetKind, cascade: false, ...(target.type ? { type: target.type } : {}), ...(target.children ? { children: target.children } : {}) }))
   }
+  return plan.fingerprint.targets.map((name) => ({ name, kind: "table" as const, cascade: false }))
+}
+
+/**
+ * The store's own checks, without consuming the plan: a plan that is not this caller's, is spent, is stale or is the
+ * wrong tool's is refused before any assert (`PlanStorePort.take` repeats them atomically when it is taken).
+ */
+function checkPlan(entry: { readonly plan: Plan; readonly used: boolean }, tool: ToolName, caller: { readonly sessionId: string; readonly agentId: string; readonly account: string }, now: number): void {
+  const { plan } = entry
+  if (plan.sessionId !== caller.sessionId || plan.agentId !== caller.agentId || plan.account !== caller.account) throw new DatabricksError("PLAN_CALLER_MISMATCH")
+  if (entry.used) throw new DatabricksError("PLAN_ALREADY_USED")
+  if (now >= plan.expiresAt) throw new DatabricksError("PLAN_EXPIRED")
+  const expected = COMMIT_TOOL[plan.category]
+  if (tool !== expected) throw new DatabricksError("CATEGORY_MISMATCH", `This is a ${plan.category} plan.`, `Commit it with databricks_${expected}({ planId }).`)
 }
 
 interface CommitOutcome {
@@ -61,25 +83,32 @@ interface CommitOutcome {
 }
 
 /** A committed SQL plan: the plan's text, its warehouse, and the drift check afterwards. */
-async function commitSql(tool: CommitTool, plan: Plan, call: Call, deps: Parameters<Handler<ToolName>>[2]): Promise<CommitOutcome> {
+async function commitSql(tool: CommitTool, plan: Plan, call: Call, deps: CommitDeps): Promise<CommitOutcome> {
   if (plan.payload.kind !== "sql") throw new DatabricksError("PLAN_CHANGED", "The plan's payload is not the SQL this tool runs.")
   const payload = plan.payload
+  const policy = decodePolicy(plan.fingerprint.policy)
+  const defaults = { ...(payload.catalog ? { catalog: payload.catalog } : {}), ...(payload.schema ? { schema: payload.schema } : {}) }
   const classified = classifyPlan(payload.sql)
   if (!classified.ok) throw planChanged("The planned text no longer classifies the way it did when it was planned.")
-  await assertTargets(tool, plan.account, plan.fingerprint.targets, call, deps)
-  const checked = await checkTargets(deps, { account: plan.account, tables: statementTables(payload.sql), ...(payload.catalog ? { catalog: payload.catalog } : {}), ...(payload.schema ? { schema: payload.schema } : {}), signal: call.signal })
+  const checked = await resolveTargets(deps, { account: plan.account, targets: changeTargets(payload.sql), defaults, signal: call.signal })
   const category = categoryFor(classified, checked)
   if (category !== plan.category) throw planChanged(`The targets now make this a ${category} change, and the plan was previewed as ${plan.category}.`)
   if (JSON.stringify([...checked.names]) !== JSON.stringify([...plan.fingerprint.targets])) {
     throw planChanged(`The targets changed since the plan was made: it named ${plan.fingerprint.targets.join(", ") || "none"}, and the text resolves to ${checked.names.join(", ") || "none"} now.`)
   }
+  if (policy?.targets) {
+    const before = JSON.stringify(policy.targets.map((target) => ({ name: target.name, kind: target.kind, type: target.type ?? null, children: target.children ?? null })))
+    const now = JSON.stringify(checked.targets.map((target) => ({ name: target.name, kind: target.kind, type: target.type ?? null, children: target.children ?? null })))
+    if (before !== now) throw planChanged("A target's kind, type or contents changed since the plan was made.")
+  }
   const warehouseId = payload.warehouse
   if (plan.fingerprint.warehouse && plan.fingerprint.warehouse !== warehouseId) throw planChanged("The plan's warehouse is not the one it recorded.")
-  const intent = (plan.fingerprint.policy ?? "running") as WarehouseIntent
+  const intended = policy?.warehouse
   const ensured = await ensureChangeWarehouse(deps, {
     account: plan.account,
     warehouseId,
-    intent,
+    intent: intended?.intent ?? "running",
+    ...(intended ? { planned: { size: intended.size, minClusters: intended.minClusters, maxClusters: intended.maxClusters, autoStopMinutes: intended.autoStopMinutes } } : {}),
     wait: deps.options.wait,
     sessionID: call.sessionID,
     ...(call.messageID && call.id ? { messageID: call.messageID, callID: call.id } : {}),
@@ -92,6 +121,7 @@ async function commitSql(tool: CommitTool, plan: Plan, call: Call, deps: Paramet
     call,
     statement: payload.sql,
     warehouse: ensured.warehouse,
+    tool,
     ...(parameters ? { parameters } : {}),
     ...(payload.catalog ? { catalog: payload.catalog } : {}),
     ...(payload.schema ? { schema: payload.schema } : {}),
@@ -103,13 +133,16 @@ async function commitSql(tool: CommitTool, plan: Plan, call: Call, deps: Paramet
   const drift = await checkDrift({ databricks: deps.databricks, now: deps.clock.now }, { account: plan.account, statementId: answer.statementId, category: plan.category, planId: plan.id, signal: call.signal })
   const warnings = [...ensured.warnings, ...drift]
   const rowsAffected = answer.manifest?.totalRowCount
+  const recovered = answer.ambiguous === true
   return {
     state: "ok",
     statementId: answer.statementId,
     ...(rowsAffected === undefined ? {} : { rowsAffected }),
     durationMs,
     ...(warnings.length ? { warnings } : {}),
-    next: `Databricks ran the change: ${statementNext(answer.statementId)} reads its statement.`,
+    next: recovered
+      ? `The submit got no answer and Databricks found the statement by this call's tag, so it is reported rather than resent: ${statementNext(answer.statementId)} reads it. Nothing was retried.`
+      : `Databricks ran the change: ${statementNext(answer.statementId)} reads its statement.`,
   }
 }
 
@@ -130,11 +163,11 @@ async function submitOnce<T>(submit: () => Promise<T>, signal: AbortSignal): Pro
 }
 
 /** A committed job run: `POST /api/2.2/jobs/run-now`, with the plan id as the idempotency token. */
-async function commitJob(plan: Plan, call: Call, deps: Parameters<Handler<ToolName>>[2]): Promise<CommitOutcome> {
+async function commitJob(plan: Plan, call: Call, deps: CommitDeps): Promise<CommitOutcome> {
   if (plan.payload.kind !== "job") throw new DatabricksError("PLAN_CHANGED", "The plan's payload is not a job run.")
   const payload = plan.payload
   requireFeature(deps, plan.account, "jobs", "Committing a job run")
-  if (plan.fingerprint.policy !== `job:${payload.jobId}`) throw planChanged("The plan's job is not the one it recorded.")
+  if (decodePolicy(plan.fingerprint.policy)?.job?.jobId !== payload.jobId) throw planChanged("The plan's job is not the one it recorded.")
   const answer = await submitOnce(
     () => deps.databricks.runNow(plan.account, { jobId: payload.jobId, ...(payload.params ? { params: payload.params } : {}), idempotencyToken: plan.id }, call.signal),
     call.signal,
@@ -144,11 +177,11 @@ async function commitJob(plan: Plan, call: Call, deps: Parameters<Handler<ToolNa
 }
 
 /** A committed one-time notebook run: `POST /api/2.2/jobs/runs/submit` on serverless compute, with its timeout. */
-async function commitNotebook(plan: Plan, call: Call, deps: Parameters<Handler<ToolName>>[2]): Promise<CommitOutcome> {
+async function commitNotebook(plan: Plan, call: Call, deps: CommitDeps): Promise<CommitOutcome> {
   if (plan.payload.kind !== "notebook") throw new DatabricksError("PLAN_CHANGED", "The plan's payload is not a notebook run.")
   const payload = plan.payload
   requireFeature(deps, plan.account, "jobs", "Committing a notebook run")
-  if (plan.fingerprint.policy !== `notebook:${payload.path}`) throw planChanged("The plan's notebook is not the one it recorded.")
+  if (decodePolicy(plan.fingerprint.policy)?.notebook?.path !== payload.path) throw planChanged("The plan's notebook is not the one it recorded.")
   const answer = await submitOnce(
     () => deps.databricks.submitRun(plan.account, { notebookPath: payload.path, ...(payload.params ? { params: payload.params } : {}), idempotencyToken: plan.id, timeoutSeconds: payload.timeoutSeconds }, call.signal),
     call.signal,
@@ -157,26 +190,31 @@ async function commitNotebook(plan: Plan, call: Call, deps: Parameters<Handler<T
   return { state: "running", runId: answer.runId, next: `The notebook is running with a ${payload.timeoutSeconds}-second timeout: databricks_jobs({ runId: ${answer.runId} }) shows it.` }
 }
 
-/** What a commit's handler needs: the one input every commit tool takes, and the shared deps. */
-type CommitDeps = Parameters<Handler<ToolName>>[2]
-
-/** One commit tool: assert, take the plan once, then run exactly what it previewed. */
+/** One commit tool: check, assert, take the plan once, then run exactly what it previewed. */
 export function commitTool<T extends CommitTool>(tool: T): Handler<T> {
   const handler = async (input: { readonly planId: string }, call: Call, deps: CommitDeps): Promise<unknown> => {
-    // The plan's own account, when the id names one: the assert must be about the account the plan belongs to.
     const peeked = deps.plans.peek(input.planId)
     const account = peeked?.plan.account ?? accountOf({}, deps)
-    await assertTool(tool as ToolName, account, call, deps)
-    const plan = deps.plans.take(input.planId, tool as ToolName, { sessionId: call.sessionID, agentId: call.agent, account })
-    let outcome: CommitOutcome
+    const caller = { sessionId: call.sessionID, agentId: call.agent, account }
+    // 1. The store's checks without consuming: no prompt on a plan this caller could never commit.
+    if (peeked) checkPlan(peeked, tool as ToolName, caller, deps.clock.now())
+    // 2. The tool's own action, on the operation its kind uses.
+    const operation = operationFor(peeked?.plan.payload.kind ?? "sql", PRIMARY_OPERATION[tool as ToolName])
+    await assertTool(tool as ToolName, account, call, deps, operation)
+    // 3. Every target the plan recorded.
+    if (peeked) {
+      await assertTargets({ permission: deps.permission }, { account, action: actionOf(tool), targets: plannedTargets(peeked.plan), sessionID: call.sessionID, ...(call.messageID && call.id ? { messageID: call.messageID, callID: call.id } : {}), signal: call.signal })
+    }
+    // 4. Take it once.
+    const plan = deps.plans.take(input.planId, tool as ToolName, caller)
     if (plan.payload.kind === "warehouse") {
-      // The plan is valid and is consumed; the client has no warehouse update call, so nothing is sent. The contract
-      // request is in the PR (DatabricksPort.editWarehouse).
+      // The plan is valid and is consumed; the client has no warehouse update call yet (contract request 2), so nothing
+      // is sent.
       throw new DatabricksError("NOT_IMPLEMENTED", "This version's Databricks client has no warehouse update call, so it cannot apply this plan.", "Change the warehouse in Databricks' SQL warehouse settings; the plan's preview names each field and the rate it implies.")
-    } else if (plan.payload.kind === "job") outcome = await commitJob(plan, call, deps)
-    else if (plan.payload.kind === "notebook") outcome = await commitNotebook(plan, call, deps)
-    else outcome = await commitSql(tool, plan, call, deps)
-    return outcome
+    }
+    if (plan.payload.kind === "job") return commitJob(plan, call, deps)
+    if (plan.payload.kind === "notebook") return commitNotebook(plan, call, deps)
+    return commitSql(tool, plan, call, deps)
   }
   return handler as unknown as Handler<T>
 }

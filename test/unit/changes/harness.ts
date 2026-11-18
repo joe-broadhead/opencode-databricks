@@ -31,6 +31,8 @@ export interface ChangeHarnessInput {
   readonly tables?: Readonly<Record<string, Partial<TableInfo>>>
   readonly history?: readonly Record<string, unknown>[]
   readonly jobs?: Readonly<Record<number, string>>
+  /** Tables per `<catalog>.<schema>`, for `tables.list` (a CASCADE's contents). */
+  readonly schemas?: Readonly<Record<string, readonly string[]>>
   readonly runs?: readonly RunInfo[]
   /** The statement answer for every submit, in the documented shape. */
   readonly statement?: (statement: string) => Record<string, unknown>
@@ -44,6 +46,8 @@ export interface ChangeHarness {
   readonly reads: FakeReads
   readonly clock: ReturnType<typeof fakeClock>
   readonly auth: FakeAuth
+  /** `tables.list`'s answer per `<catalog>.<schema>`: change it to move a CASCADE's contents between plan and commit. */
+  readonly schemas: Map<string, string[]>
   /** Moves the warehouse under a plan or a commit, for the policy's TOCTOU and PLAN_CHANGED cases. */
   setWarehouse(warehouse: Warehouse): void
   /** The Day 0 port fake's calls, for the methods the documented API does not cover. */
@@ -62,7 +66,20 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
   let warehouse = input.warehouse ?? RUNNING_WAREHOUSE
   const api = new DocumentedApi({
     jobs: new Map(Object.entries(input.jobs ?? { 100: "nightly" }).map(([id, name]) => [Number(id), { name }])),
-    runs: new Map((input.runs ?? []).map((run) => [run.runId, { run_id: run.runId, ...(run.jobId === undefined ? {} : { job_id: run.jobId }), state: { life_cycle_state: run.state.lifeCycleState, ...(run.state.resultState === undefined ? {} : { result_state: run.state.resultState }) }, start_time: run.startTime, ...(run.endTime === undefined ? {} : { end_time: run.endTime }), tasks: [] }])),
+    runs: new Map(
+      (input.runs ?? []).map((run) => [
+        run.runId,
+        {
+          run_id: run.runId,
+          ...(run.jobId === undefined ? {} : { job_id: run.jobId }),
+          ...(run.creatorUserName === undefined ? {} : { creator_user_name: run.creatorUserName }),
+          state: { life_cycle_state: run.state.lifeCycleState, ...(run.state.resultState === undefined ? {} : { result_state: run.state.resultState }) },
+          start_time: run.startTime,
+          ...(run.endTime === undefined ? {} : { end_time: run.endTime }),
+          tasks: [],
+        },
+      ]),
+    ),
     workspace: new Map([["/Shared", [{ path: NOTEBOOK_PATH, object_type: "NOTEBOOK", object_id: 1 }]], ["/", []]]),
     notebooks: new Map([[NOTEBOOK_PATH, NOTEBOOK_SOURCE]]),
     directories: new Map([["/Volumes/main/s/v", [{ path: "/Volumes/main/s/v/a.parquet", is_directory: false, file_size: 12, last_modified: 1_700_000_000_000 }]]]),
@@ -72,6 +89,7 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
 
   const documented = documentedMethods(api)
   const tables = input.tables ?? {}
+  const schemas = new Map(Object.entries(input.schemas ?? { "main.hr": ["salaries", "people"] }).map(([name, names]) => [name, [...names]]))
   const base = fakeDatabricks({
     getWarehouse: () => Promise.resolve(warehouse),
     startWarehouse: () => {
@@ -80,6 +98,14 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
     },
     stopWarehouse: () => Promise.resolve(undefined),
     me: () => ({ id: "42", userName: "user@example.com", displayName: "User" }),
+    listTables: (_account, catalog, schema, page) => {
+      const paging = page as { readonly pageToken?: string; readonly maxResults?: number } | undefined
+      const names = schemas.get(`${String(catalog)}.${String(schema)}`) ?? []
+      const start = paging?.pageToken ? Number(paging.pageToken) : 0
+      const size = paging?.maxResults ?? 100
+      const items = names.slice(start, start + size).map((name) => ({ name, tableType: "MANAGED" }))
+      return Promise.resolve({ items, ...(start + size < names.length ? { nextPageToken: String(start + size) } : {}) })
+    },
     getTable: (account, fullName) => {
       const found = tables[String(fullName)]
       if (!found) return Promise.reject(new DatabricksError("NOT_FOUND"))
@@ -106,6 +132,7 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
     reads,
     clock,
     auth,
+    schemas,
     setWarehouse: (next) => {
       warehouse = next
     },

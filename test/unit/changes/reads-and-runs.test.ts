@@ -18,6 +18,7 @@ const withRuns = (harness: ChangeHarness) => {
     run_id: 7,
     job_id: 100,
     run_name: "nightly run",
+    creator_user_name: "user@example.com",
     run_type: "JOB_RUN",
     state: { life_cycle_state: "TERMINATED", result_state: "SUCCESS" },
     start_time: 1_700_000_000_000,
@@ -98,9 +99,9 @@ describe("databricks_workspace", () => {
 
 describe("databricks_cancel", () => {
   it("cancels a statement through its own free endpoint", async () => {
-    const harness = changeHarness()
+    const harness = changeHarness({ history: [recorded({ statementId: "st-1", userId: 42, status: "RUNNING" })] })
     expect(await run("cancel", { statementId: "st-1" }, harness)).toMatchObject({ state: "ok", cancelled: "statement st-1" })
-    expect(harness.api.paths()).toEqual(["POST /api/2.0/sql/statements/st-1/cancel"])
+    expect(harness.api.paths()).toEqual(["GET /api/2.0/sql/history/queries", "POST /api/2.0/sql/statements/st-1/cancel"])
     expect(harness.permission.requests[0]).toMatchObject({ action: "databricks.cancel", resource: "work:sql.statements.get" })
     harness.settle()
   })
@@ -109,9 +110,33 @@ describe("databricks_cancel", () => {
     const harness = withRuns(changeHarness())
     const answer = await run("cancel", { runId: 7 }, harness)
     expect(answer).toMatchObject({ state: "ok", cancelled: "run 7", next: expect.stringContaining("asynchronously") })
-    expect(harness.api.paths()).toEqual(["POST /api/2.2/jobs/runs/cancel"])
+    expect(harness.api.paths()).toEqual(["GET /api/2.2/jobs/runs/get", "POST /api/2.2/jobs/runs/cancel"])
     expect(harness.permission.requests[0]).toMatchObject({ action: "databricks.cancel", resource: "work:jobs.runs.cancel" })
     harness.settle()
+  })
+
+  it("refuses a statement that is not this identity's, and never sends the cancel", async () => {
+    const harness = changeHarness({ history: [recorded({ statementId: "st-1", userId: 99, status: "RUNNING" })] })
+    expect(await run("cancel", { statementId: "st-1" }, harness)).toMatchObject({ error: "STOP_NOT_PERMITTED", next: expect.stringContaining("/databricks-cleanup") })
+    expect(harness.api.paths()).toEqual(["GET /api/2.0/sql/history/queries"])
+  })
+
+  it("refuses a statement it cannot attribute, and one with no record at all", async () => {
+    const unattributable = changeHarness({ history: [recorded({ statementId: "st-1", userId: 42 })].map((record) => ({ ...record, user_id: undefined })) })
+    expect(await run("cancel", { statementId: "st-1" }, unattributable)).toMatchObject({ error: "STOP_NOT_PERMITTED" })
+    const missing = changeHarness({ history: [] })
+    expect(await run("cancel", { statementId: "st-9" }, missing)).toMatchObject({ error: "STOP_NOT_PERMITTED" })
+    expect(missing.api.paths()).toEqual(["GET /api/2.0/sql/history/queries"])
+  })
+
+  it("refuses a run another user created, and one with no creator", async () => {
+    const foreign = withRuns(changeHarness())
+    foreign.api.state.runs.set(7, { ...foreign.api.state.runs.get(7)!, creator_user_name: "someone@example.com" })
+    expect(await run("cancel", { runId: 7 }, foreign)).toMatchObject({ error: "STOP_NOT_PERMITTED" })
+    expect(foreign.api.paths()).not.toContain("POST /api/2.2/jobs/runs/cancel")
+    const nameless = withRuns(changeHarness())
+    nameless.api.state.runs.set(7, { ...nameless.api.state.runs.get(7)!, creator_user_name: undefined })
+    expect(await run("cancel", { runId: 7 }, nameless)).toMatchObject({ error: "STOP_NOT_PERMITTED" })
   })
 
   it("takes exactly one id, and needs the jobs family for a run", async () => {

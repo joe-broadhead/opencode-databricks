@@ -62,6 +62,8 @@ export interface DocRun {
   readonly run_id: number
   readonly job_id?: number
   readonly run_name?: string
+  /** `creator_user_name`: "The creator user name" (`GET /api/2.2/jobs/runs/get`). */
+  readonly creator_user_name?: string
   readonly run_type?: string
   readonly trigger?: string
   readonly state: { readonly life_cycle_state: string; readonly result_state?: string; readonly state_message?: string }
@@ -129,6 +131,11 @@ export class DocumentedApi {
   private reject(why: string): never {
     this.rejections.push(why)
     throw new Rejected(why)
+  }
+
+  /** Records a request outside every documented route, for a caller that answers 404 instead of throwing. */
+  note(why: string): void {
+    this.rejections.push(why)
   }
 
   /**

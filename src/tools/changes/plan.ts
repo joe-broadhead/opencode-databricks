@@ -9,22 +9,25 @@
  * Four kinds of plan, one shape:
  *
  * - **SQL** (`sql`): the category comes only from `classifyPlan` (`src/domain/statements.ts`); the token rules can only
- *   raise it. Every table the statement names is checked with `tables.get` (free, [27]), and a `CREATE` whose target
- *   already exists is a replace, and so `delete` (§5.5). A `run` plan says plainly that its statements are not known
- *   until it runs.
+ *   raise it. Every target is resolved with `tables.get` (free, [27]) against the catalog and schema the statement will
+ *   carry — so a one-part name is `<catalog>.<schema>.<name>`, never the other way round (`targets.ts`). A `CREATE` over
+ *   an existing target is a replace, and so `delete` (§5.5). A name the plugin cannot fully qualify is refused rather
+ *   than resolved by the server out of the person's rules' reach.
  * - **A job run** (`job`): `POST /api/2.2/jobs/run-now` at commit, with the job's parameters and `idempotency_token` =
- *   the plan id ([29], https://docs.databricks.com/api/jobs/v2/run-now.md). The preview names the job and what its last
- *   run's tasks were; the job's own compute and `timeout_seconds` are not readable through this version's client (a
- *   contract request in the PR), so the preview says that instead of guessing.
+ *   the plan id ([29], https://docs.databricks.com/api/jobs/v2/run-now.md). The preview names the job, what its last
+ *   run's tasks were, and — once `DatabricksPort.getJob` lands (contract request 1) — each task's compute and the job's
+ *   `timeout_seconds`.
  * - **A one-time notebook run** (`notebook`): `POST /api/2.2/jobs/runs/submit` on serverless compute, which returns a
  *   `run_id` and carries `timeout_seconds`, whose documented default is `0` — no timeout ([29],
  *   https://docs.databricks.com/api/jobs/v2/submit-run.md). So the plan always carries `runTimeoutSeconds`.
- * - **A warehouse edit** (`warehouse`, admin): the plan previews the change and the rate it implies. This version's
- *   client has no warehouse update call, so its commit answers `NOT_IMPLEMENTED` and nothing runs (a contract request).
+ * - **A warehouse edit** (`warehouse`, admin): the plan previews the change and the rate it implies. The commit applies
+ *   it once `DatabricksPort.editWarehouse` lands (contract request 2); until then its commit answers `NOT_IMPLEMENTED`
+ *   and nothing runs.
  *
  * The plan is stored with the account, session and agent that made it (`src/domain/plans.ts`), expires after
- * `planTtlSeconds`, is used once, and records the fingerprint its commit compares again: the target set and the
- * warehouse's policy answer (`PLAN_CHANGED`).
+ * `planTtlSeconds`, is used once, and records the fingerprint its commit compares again: the target set and a JSON of
+ * what the preview showed — each target's kind and type, the warehouse's size and cluster bounds, the job's settings —
+ * so a change since the preview is `PLAN_CHANGED` (`context.ts`'s `PlanPolicy`).
  */
 import { type Category, COMMIT_TOOL } from "../../domain/actions.js"
 import type { Output } from "../../domain/contract.js"
@@ -36,8 +39,8 @@ import { describe as describeWarehouse, usdPerHour } from "../../guards/warehous
 import type { Warehouse } from "../../ports.js"
 import { assertTool } from "../../registry.js"
 import type { Call, Handler } from "../../tool-spec.js"
-import { accountOf, planWarehouse, requireFeature, warehouseNote, warehouseUseOf, type WarehouseIntent } from "./context.js"
-import { categoryFor, checkTargets, statementTables } from "./targets.js"
+import { accountOf, encodePolicy, planWarehouse, requireFeature, warehouseNote, warehouseUseOf, type PlanPolicy, type WarehouseIntent } from "./context.js"
+import { categoryFor, changeTargets, resolveTargets } from "./targets.js"
 
 type Preview = NonNullable<Output<"plan">["preview"]>
 
@@ -73,9 +76,14 @@ async function checkNotebook(deps: Parameters<Handler<"plan">>[2], account: stri
 }
 
 function adminDisabled(): DatabricksError {
-  // No dedicated code: PERMISSION_DENIED is the family's refusal for "the plugin will not let this identity do that",
-  // and the message names the option. A dedicated ADMIN_DISABLED code is a contract request in the PR.
+  // The contract keeper's amendment adds ADMIN_DISABLED; until it lands, PERMISSION_DENIED with the option named.
   return new DatabricksError("PERMISSION_DENIED", "Admin plans are turned off by this plugin's admin.enabled option.", "Set admin.enabled to true to plan administrative changes, or make the change in Databricks.")
+}
+
+/** The write row's pipeline note: creating or refreshing these bills outside the warehouse (design §5.5, [21]). */
+function pipelineNote(kind: string, sql: string): string | undefined {
+  const pipeline = kind === "CreatePipelineDatasetContext" || /^\s*create\s+(or\s+refresh\s+)?materialized\s+view\b/iu.test(sql) || /^\s*create\s+streaming\s+table\b/iu.test(sql)
+  return pipeline ? "A streaming table or materialized view: creating or refreshing it bills at serverless pipeline rates, outside this warehouse." : undefined
 }
 
 interface FieldChange {
@@ -106,8 +114,8 @@ interface StoredInput {
   readonly payload: PlanPayload
   readonly preview: Preview
   readonly targets: readonly string[]
+  readonly policy: PlanPolicy
   readonly warehouse?: string
-  readonly policy?: string
   readonly reason?: string
 }
 
@@ -122,7 +130,7 @@ function stored(deps: Parameters<Handler<"plan">>[2], input: StoredInput): Outpu
     agentId: input.call.agent,
     payload: input.payload,
     preview: input.preview,
-    fingerprint: { targets: input.targets, ...(input.warehouse ? { warehouse: input.warehouse } : {}), ...(input.policy ? { policy: input.policy } : {}) },
+    fingerprint: { targets: input.targets, ...(input.warehouse ? { warehouse: input.warehouse } : {}), policy: encodePolicy(input.policy) },
     ...(input.reason ? { reason: input.reason } : {}),
   })
   return {
@@ -151,39 +159,40 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
     if (classified.category === "admin" && deps.options.admin.requireReason && !input.reason) throw new DatabricksError("ADMIN_REASON_REQUIRED")
     if (typeof input.warehouse === "object") throw new DatabricksError("INPUT_INVALID", "A SQL plan names its warehouse as an id, not as an edit.", "Pass warehouse as an id for a SQL plan, or plan a warehouse edit without sql.")
     if (input.job !== undefined || input.notebook !== undefined) throw new DatabricksError("INPUT_INVALID", "A SQL plan cannot also name a job or a notebook.", "Pass one of sql, job, notebook or warehouse.")
-    const warehouseId = input.warehouse ?? deps.auth.account(account).warehouse
+    const identity = deps.auth.account(account)
+    const warehouseId = input.warehouse ?? identity.warehouse
     if (!warehouseId) throw new DatabricksError("WAREHOUSE_REQUIRED")
+    // The defaults the statement will carry: its own, or the account's. A one-part target resolves against these, and
+    // the commit sends them, so the statement runs against exactly the defaults the preview used.
+    const catalog = input.catalog ?? identity.catalog
+    const schema = input.schema ?? identity.schema
+    const defaults = { ...(catalog ? { catalog } : {}), ...(schema ? { schema } : {}) }
     const warehouse = await planWarehouse(deps, { account, warehouseId, signal: call.signal })
-    const tables = statementTables(input.sql)
-    const checked = await checkTargets(deps, { account, tables, ...(input.catalog ? { catalog: input.catalog } : {}), ...(input.schema ? { schema: input.schema } : {}), signal: call.signal })
+    const checked = await resolveTargets(deps, { account, targets: changeTargets(input.sql), defaults, signal: call.signal })
     const category = categoryFor(classified, checked)
     const replaced = category !== classified.category
     const notes = [...classified.notes, ...checked.notes, warehouseNote(warehouse.warehouse, warehouse.intent, deps)]
     if (replaced) notes.push("Its first target already exists, so this is a replace: a delete plan.")
+    const pipeline = pipelineNote(classified.kind, input.sql)
+    if (pipeline) notes.push(pipeline)
     if (classified.raisedBy.length) notes.push(`Raised to run by ${classified.raisedBy.join(", ")}.`)
     const preview: Preview = {
       kind: classified.kind,
       parsed: classified.parsed,
       targets: checked.targets.map((target) => ({ name: target.name, ...(target.type ? { type: target.type } : {}), ...(target.owner ? { owner: target.owner } : {}), ...(target.exists === undefined ? {} : { exists: target.exists }) })),
-      tables: tables.map((parts) => parts.join(".")),
+      tables: classified.tables.map((parts) => parts.join(".")),
       functions: [...classified.functions],
       warehouse: warehouseUseOf(warehouse.warehouse, deps),
       notes,
       ...(input.reason ? { reason: input.reason } : {}),
     }
-    const payload: PlanPayload = { kind: "sql", sql: input.sql, ...(input.params ? { params: input.params } : {}), warehouse: warehouse.warehouse.id, ...(input.catalog ? { catalog: input.catalog } : {}), ...(input.schema ? { schema: input.schema } : {}) }
-    return stored(deps, {
-      category,
-      kind: classified.kind,
-      account,
-      call,
-      payload,
-      preview,
-      targets: checked.names,
-      warehouse: warehouse.warehouse.id,
-      policy: warehouse.intent satisfies WarehouseIntent,
-      ...(input.reason ? { reason: input.reason } : {}),
-    })
+    const payload: PlanPayload = { kind: "sql", sql: input.sql, ...(input.params ? { params: input.params } : {}), warehouse: warehouse.warehouse.id, ...(catalog ? { catalog } : {}), ...(schema ? { schema } : {}) }
+    const policy: PlanPolicy = {
+      kind: "sql",
+      warehouse: { id: warehouse.warehouse.id, intent: warehouse.intent, size: warehouse.warehouse.clusterSize, minClusters: warehouse.warehouse.minNumClusters, maxClusters: warehouse.warehouse.maxNumClusters, autoStopMinutes: warehouse.warehouse.autoStopMins },
+      targets: checked.targets.map((target) => ({ name: target.name, kind: target.kind, ...(target.type ? { type: target.type } : {}), ...(target.children ? { children: target.children } : {}) })),
+    }
+    return stored(deps, { category, kind: classified.kind, account, call, payload, preview, targets: checked.names, policy, warehouse: warehouse.warehouse.id, ...(input.reason ? { reason: input.reason } : {}) })
   }
 
   if (input.job !== undefined) {
@@ -193,17 +202,20 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
     const runs = await deps.databricks.listRuns(account, { jobId: input.job.jobId, limit: 1 }, call.signal)
     const lastRun = runs.items[0]
     const tasks = lastRun ? (await deps.databricks.getRun(account, lastRun.runId, call.signal)).tasks : []
+    const creator = job.creatorUserName === undefined ? "" : ` by ${quoted(job.creatorUserName)}`
+    const taskList = tasks.length === 0 ? "not reported" : tasks.map((task) => quoted(task.taskKey)).join(", ")
     const notes = [
       "A job run: its effects are not known until it runs.",
-      `The job ${quoted(job.name)}${job.creatorUserName ? ` by ${quoted(job.creatorUserName)}` : ""} runs with its own settings and its own Run as identity; billed separately at the job's own compute rates.`,
-      lastRun
-        ? `Its last run's tasks were ${tasks.length ? tasks.map((task) => quoted(task.taskKey)).join(", ") : "not reported"}. The job's own compute and timeout_seconds are not readable through this version's client, so the preview does not claim them.`
-        : "The job has no run this version can see, so its tasks and their compute are not previewed.",
+      `The job ${quoted(job.name)}${creator} runs with its own settings and its own Run as identity; billed separately at the job's own compute rates.`,
+      lastRun === undefined
+        ? "The job has no run this version can see, so its tasks and their compute are not previewed."
+        : `Its last run's tasks were ${taskList}. The job's own compute and timeout_seconds are not readable through this version's client, so the preview does not claim them.`,
       "The run is submitted with idempotency_token = this plan's id, so a retried submit launches one run, not two.",
     ]
     const preview: Preview = { kind: "job", parsed: false, targets: [], tables: [], functions: [], notes, ...(input.reason ? { reason: input.reason } : {}) }
     const payload: PlanPayload = { kind: "job", jobId: input.job.jobId, ...(input.job.params ? { params: input.job.params } : {}) }
-    return stored(deps, { category: "run", kind: "job", account, call, payload, preview, targets: [], policy: `job:${input.job.jobId}`, ...(input.reason ? { reason: input.reason } : {}) })
+    const policy: PlanPolicy = { kind: "job", job: { jobId: input.job.jobId } }
+    return stored(deps, { category: "run", kind: "job", account, call, payload, preview, targets: [], policy, ...(input.reason ? { reason: input.reason } : {}) })
   }
 
   if (input.notebook !== undefined) {
@@ -227,7 +239,8 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
       ...(input.reason ? { reason: input.reason } : {}),
     }
     const payload: PlanPayload = { kind: "notebook", path: input.notebook.path, ...(input.notebook.params ? { params: input.notebook.params } : {}), timeoutSeconds }
-    return stored(deps, { category: "run", kind: "notebook", account, call, payload, preview, targets: [], policy: `notebook:${input.notebook.path}`, ...(input.reason ? { reason: input.reason } : {}) })
+    const policy: PlanPolicy = { kind: "notebook", notebook: { path: input.notebook.path } }
+    return stored(deps, { category: "run", kind: "notebook", account, call, payload, preview, targets: [], policy, ...(input.reason ? { reason: input.reason } : {}) })
   }
 
   // A warehouse edit: admin only, with a reason when the option requires one.
@@ -252,18 +265,11 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
   ]
   const preview: Preview = { kind: "warehouse", parsed: false, targets: [], tables: [], functions: [], notes, ...(input.reason ? { reason: input.reason } : {}) }
   const payload: PlanPayload = { kind: "warehouse", id: edit.id, edit: { ...edit.edit } }
-  return stored(deps, {
-    category: "admin",
+  const policy: PlanPolicy = {
     kind: "warehouse",
-    account,
-    call,
-    payload,
-    preview,
-    targets: [],
-    warehouse: edit.id,
-    policy: JSON.stringify({ size: current.clusterSize, autoStopMinutes: current.autoStopMins, minClusters: current.minNumClusters, maxClusters: current.maxNumClusters, statementTimeoutSeconds: current.statementTimeoutSeconds ?? null }),
-    ...(input.reason ? { reason: input.reason } : {}),
-  })
+    warehouse: { id: edit.id, intent: "running", size: current.clusterSize, minClusters: current.minNumClusters, maxClusters: current.maxNumClusters, autoStopMinutes: current.autoStopMins },
+  }
+  return stored(deps, { category: "admin", kind: "warehouse", account, call, payload, preview, targets: [], policy, warehouse: edit.id, ...(input.reason ? { reason: input.reason } : {}) })
 }
 
 export default plan
