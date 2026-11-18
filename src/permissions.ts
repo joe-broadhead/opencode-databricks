@@ -25,7 +25,7 @@ const rule = (action: string, effect: Effect): Rule => ({ action, resource: "*",
 
 /**
  * Broad first, narrow last. `databricks.*` gives every action the change effect, so an action this table does not
- * know (a tool added later) is treated like a change; then each read and `databricks.probe` is allowed, `databricks.start`
+ * know (a tool added later) is treated like a change; then each read, `databricks.probe` and `databricks.read` is allowed, `databricks.start`
  * gets its own effect, and each change gets the change effect.
  */
 export function defaultRules(access: Access = "all"): Rule[] {

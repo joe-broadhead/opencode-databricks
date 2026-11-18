@@ -14,12 +14,13 @@ describe("default rules", () => {
     for (const access of ACCESS_VALUES) expect(effectOf([BASE, ...defaultRules(access)], "databricks.never_seen"), access).toBe(changeEffect(access))
   })
 
-  it("allow every read and the probe; start is allow / ask / allow; changes follow the access", () => {
+  it("allow every read, the probe and a source's read; start is allow / ask / allow; changes follow the access", () => {
     const start = { all: "allow", "ask-changes": "ask", "read-only": "allow" } as const
     for (const access of ACCESS_VALUES) {
       const rules = [BASE, ...defaultRules(access)]
       for (const tool of TOOLS) expect(effectOf(rules, actionOf(tool.name)), `${access} ${tool.name}`).toBe(tool.readOnly ? "allow" : changeEffect(access))
       expect(effectOf(rules, "databricks.probe")).toBe("allow")
+      expect(effectOf(rules, "databricks.read")).toBe("allow")
       expect(effectOf(rules, "databricks.start")).toBe(start[access])
     }
   })

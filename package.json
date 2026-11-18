@@ -111,8 +111,8 @@
     "title": "Databricks",
     "summary": "Find, query and save your Databricks data, with every change planned first.",
     "icon": "assets/icon.svg",
-    "cost": "Queries run on a SQL warehouse your workspace bills by the hour while it runs (serverless list price about $0.70 per DBU, a 2X-Small uses 4 DBU an hour); starting a stopped one bills until it auto-stops. AI functions and jobs bill separately.",
-    "admin": "add an OAuth app connection (public client) with this plugin's redirect URLs in the account console, and give you Can use on a SQL warehouse and SELECT on the data you read",
+    "cost": "A SQL warehouse bills by the hour while it runs (serverless about $0.70 per DBU, 4 DBU an hour at 2X-Small); starting a stopped one bills until it auto-stops. Saved-query reads run only on a warehouse already running, which then stays up until it auto-stops. AI functions and jobs bill separately.",
+    "admin": "add an OAuth app connection (public client) with this plugin's redirect URLs, including Jelly's relay, in the account console, and give you Can use on a SQL warehouse and SELECT on the data you read",
     "tools": [
       {
         "name": "databricks.status",
@@ -269,6 +269,13 @@
         "permission": "databricks.probe",
         "effect": "allow",
         "readOnly": true
+      },
+      {
+        "name": "databricks.read",
+        "permission": "databricks.read",
+        "effect": "allow",
+        "readOnly": true,
+        "note": "Reads the Databricks data a source you bound names; never changes anything"
       }
     ],
     "skills": [
@@ -382,8 +389,7 @@
           ],
           "identity": [
             "scim.me.get"
-          ],
-          "readsIdentity": true
+          ]
         },
         "private": true,
         "cost": {
@@ -453,7 +459,7 @@
           "keys": [
             "queries"
           ],
-          "describe": "Which of your saved SQL queries to read, shown with their SQL",
+          "describe": "Which of your saved SQL queries to read, shown with their SQL. Each read runs only on a warehouse that is already running, which then stays up until it auto-stops.",
           "suggest": {
             "tool": "saved_list",
             "operations": [
@@ -482,9 +488,7 @@
           "units": [
             {
               "per": "dbu",
-              "usd": 0.7,
-              "min": 0.22,
-              "conditions": "Runs only on a warehouse that is already running, which then stays up until it auto-stops"
+              "usd": 0.7
             }
           ],
           "probe": {

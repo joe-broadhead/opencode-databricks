@@ -48,7 +48,7 @@ export const ERRORS = {
   STATEMENT_NOT_READ: { state: "refused", what: "A read tool got text that is not one query, has a semicolon, or has a refused construct.", next: "Plan it with databricks_plan({ sql })." },
   SQL_UNSUPPORTED: { state: "refused", what: "The pinned Spark grammar cannot parse this text, so it fails closed.", next: "Rewrite it in standard Spark SQL, or plan it with databricks_plan, where it is category run." },
   IDENTIFIER_REFUSED: { state: "refused", what: "A read used IDENTIFIER(…), a name chosen at run time.", next: "Write the table or function name literally, and pass values in params." },
-  SESSION_STATEMENT_REFUSED: { state: "refused", what: "SET, SET PATH, RESET, USE, DECLARE, temporary objects and other session statements are refused: the API keeps no session, and a changed path could redirect a function name.", next: "Pass catalog, schema and params on the call instead." },
+  SESSION_STATEMENT_REFUSED: { state: "refused", what: "SET, SET PATH, RESET, USE, DECLARE, temporary objects and other session statements are refused: the API keeps no session, and a changed path could redirect a function name.", next: "Pass catalog, schema and params on the call instead; for SET TAG, write ALTER … SET TAGS, which plans as run." },
   PATH_NOT_DEFAULT: { state: "refused", what: "The workspace's SQL path does not put system.builtin before every user schema, so a keyword-form built-in could resolve to a user function.", next: "Ask an admin to restore the default path, or write the function call form, which the plugin qualifies as system.builtin." },
   NEEDS_PLAN: { state: "refused", what: "A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read.", next: "Plan it with databricks_plan({ sql })." },
   FUNCTION_NAME_PARTIAL: { state: "refused", what: "A read calls a function that is not an allowlisted built-in by a one- or two-part name, which Databricks resolves along the SQL path, not where the plugin checks it.", next: "Write the function's full name, catalog.schema.function." },
@@ -66,6 +66,7 @@ export const ERRORS = {
   PLAN_EXPIRED: { state: "refused", what: "The plan is older than planTtlSeconds.", next: "Plan the change again with databricks_plan." },
   PLAN_CALLER_MISMATCH: { state: "refused", what: "The plan belongs to another session, agent or account.", next: "Plan the change again in this session." },
   PLAN_CHANGED: { state: "refused", what: "At commit, the category, the targets or the warehouse policy changed.", next: "Plan the change again with databricks_plan." },
+  ADMIN_DISABLED: { state: "refused", what: "Admin plans are turned off by this plugin's admin.enabled option.", next: "Set admin.enabled to true, or make the change in Databricks." },
   ADMIN_REASON_REQUIRED: { state: "refused", what: "An admin plan needs a reason.", next: "Plan again with reason." },
   // Runs and results.
   RATE_LIMITED: { state: "failed", what: "Databricks answered 429 or REQUEST_LIMIT_EXCEEDED after retries.", next: "Make the same call after retryAfterSec." },
@@ -100,6 +101,7 @@ export const WARNINGS = {
   STARTED_WAREHOUSE: "This call started a stopped warehouse, which bills until it auto-stops.",
   CLASSIFICATION_DRIFT: "Query History reported a different statement type, and it was recorded.",
   BUDGET_OVER: "An opt-in budget with action warn is exceeded; the estimate is in status.",
+  SPEND_UNAVAILABLE: "system.billing.usage could not be read for the reconciliation: no grant, no running default warehouse, or the statement failed.",
   PATH_READ: "A path read (format.`path`) cannot be checked against a fence or Unity Catalog.",
 } as const
 

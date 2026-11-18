@@ -9,13 +9,14 @@ tile, not Databricks' logo.
 
 ## Tools and permissions
 
-25 tools are declared (16 read-only): the 23 tools, each by its dotted action `databricks.<tool>`, and two
+26 tools are declared (17 read-only): the 23 tools, each by its dotted action `databricks.<tool>`, and three
 permission-only entries the plugin asserts that are not tools: `databricks.start` (a warehouse start; `effect: "ask"`,
-`readOnly: true`) and `databricks.probe` (a source's identity probe; `readOnly: true`). So a start is allowed at
-Allowed, asks at Ask before changes and runs at Read only; the probe and every read run at every level; the save, the
-six commit tools, cancel and stop follow the access choice as changes. `test/unit/jelly.test.ts` checks the
-declaration equals the registry plus those two entries, runs Jelly's access rules over every action the plugin
-asserts, and checks the plugin's own default rules agree.
+`readOnly: true`), `databricks.probe` (a source's identity probe; `readOnly: true`) and `databricks.read` (a bound
+source's content read; `readOnly: true`). So a start is allowed at Allowed, asks at Ask before changes and runs at Read
+only; the probe, a source's read and every read tool run at every level; the save, the six commit tools, cancel and
+stop follow the access choice as changes. `test/unit/jelly.test.ts` checks the declaration equals the registry plus
+those three entries, runs Jelly's access rules over every action the plugin asserts, and checks the plugin's own
+default rules agree.
 
 The family's shared rules, word for word from Jelly's guide:
 
@@ -52,8 +53,9 @@ None: `jelly.views` and `jelly.rpc` are empty.
 
 ## Cost
 
-`jelly.cost` says queries run on a warehouse billed by the hour while it runs, that a start bills until auto-stop, and
-that AI functions and jobs bill separately. See [Costs](costs.md).
+`jelly.cost` says a warehouse bills by the hour while it runs, that a start bills until auto-stop, that saved-query
+reads run only on a warehouse already running, which then stays up until it auto-stops, and that AI functions and jobs
+bill separately. See [Costs](costs.md).
 
 ## Sources
 

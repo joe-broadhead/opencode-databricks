@@ -22,3 +22,16 @@ All notable changes to this project are documented here. The format follows [Kee
 - The statement table that gives every change its plan category, `databricks_plan` for SQL, and single-use plans that
   commit only through their category's tool.
 - The local spend ledger, the `access` option's default rules, the `sources` declaration, and the status skeleton.
+
+### Changed
+
+- The `sources` declaration holds the source-contract v0.2.0 keys a v0.1.x consumer refuses: `readsIdentity` on the
+  queries source, and `min` and `conditions` on the saved source's price, which is `$0.70 per DBU` on its own. The
+  conditions sentence (each read runs only on a warehouse that is already running, which then stays up until it
+  auto-stops) moved to the saved source's scope description and the cost texts. These keys return once Jelly and
+  Memory are on source-contract v0.2.0.
+- The permission-only action `databricks.read`, allowed at every access, for a bound source's content reads.
+
+### Fixed
+
+- A job run's parameters are sent as run-now 2.2's documented `job_parameters`, not `notebook_params`.

@@ -5,9 +5,13 @@
  *
  * - The parser's category is final; the token rules (`EXECUTE IMMEDIATE`, `CALL`, `IDENTIFIER` anywhere) only raise it.
  * - Text the pinned grammar cannot parse is `run`, the strictest, with "not parsed" in the preview. That includes
- *   Delta's and Databricks' own statements (VACUUM, OPTIMIZE, RESTORE, COPY INTO, CREATE STREAMING TABLE, REORG, FSCK,
- *   GRANT … ON, DENY, ALTER … OWNER TO, SET ROW FILTER, SET MASK, SET TAGS): stricter than their row in §5.5's table
- *   until Delta's grammar is pinned (a v0.2.0 item).
+ *   Delta's and Databricks' own statements (VACUUM, OPTIMIZE, RESTORE, COPY INTO, CREATE OR REFRESH STREAMING TABLE,
+ *   REORG, FSCK, GRANT … ON, DENY, ALTER … OWNER TO, SET ROW FILTER, SET MASK, ALTER … SET TAGS, UNSET TAG ON …):
+ *   stricter than their row in §5.5's table until Delta's grammar is pinned (a v0.2.0 item).
+ * - Two forms the pinned grammar does parse (review of #7, ruling 4): `CREATE STREAMING TABLE … AS` is
+ *   `CreatePipelineDatasetContext`, so `write` (the write row's "streaming table"); `SET TAG ON …` reads as a session
+ *   `SET`, so it is refused (SESSION_STATEMENT_REFUSED), whose next step says to write `ALTER … SET TAGS`, which plans
+ *   as `run`. The `share` row's SET/UNSET TAGS therefore applies only from v0.2.0's Databricks grammar.
  * - A query is a read: CATEGORY_MISMATCH, unless it calls a function that needs a plan (§5.2's side-effecting reads).
  */
 import { type ParserRuleContext, TerminalNode } from "antlr4ng"

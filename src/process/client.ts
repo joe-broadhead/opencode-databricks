@@ -269,6 +269,16 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       }
     },
 
+    // Contract amendment for package D (review of #7, requests 1 and 2): the port has `editWarehouse` and `getJob`;
+    // package B builds both from their documented pages. Until then they refuse, and send nothing.
+    async editWarehouse(): Promise<void> {
+      throw new DatabricksError("NOT_IMPLEMENTED", "Editing a warehouse is not built yet (package B: sql.warehouses.edit).")
+    },
+
+    async getJob(): Promise<never> {
+      throw new DatabricksError("NOT_IMPLEMENTED", "Reading a job's settings is not built yet (package B: jobs.jobs.get).")
+    },
+
     async stopWarehouse(account: string, id: string, signal: AbortSignal): Promise<void> {
       try {
         await call(account, "sql.warehouses.stop", "POST", `/api/2.0/sql/warehouses/${encodeURIComponent(id)}/stop`, { body: {}, idempotent: true, signal })
@@ -538,7 +548,9 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       const answer = record(await call(account, "jobs.jobs.runNow", "POST", "/api/2.2/jobs/run-now", {
         body: {
           job_id: input.jobId,
-          ...(input.params ? { notebook_params: input.params } : {}),
+          // Jobs API 2.2 run-now documents `job_parameters` ("Job-level parameters used in the run"), and no
+          // `notebook_params`: https://docs.databricks.com/api/workspace/jobs/runnow (review of #7, M3).
+          ...(input.params ? { job_parameters: input.params } : {}),
           idempotency_token: input.idempotencyToken,
         },
         idempotent: false,

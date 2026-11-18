@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
 import type { FunctionInfo, HistoryQuery, RunInfo, TableInfo } from "../../../src/ports.js"
 import { createDatabricksClient } from "../../../src/process/client.js"
+import { DUMMY_TOKEN } from "../../fake/ports.js"
 import { fakeAuth, workspace } from "./support.js"
 
 const signal = () => new AbortController().signal
@@ -324,6 +325,12 @@ describe("the Databricks client: jobs", () => {
       const other = await client.runNow("work", { jobId: 10, idempotencyToken: "plan-2" }, signal())
       expect(replay.runId).toBe(first.runId)
       expect(other.runId).not.toBe(first.runId)
+      // Review of #7, M3: parameters go in run-now 2.2's documented `job_parameters`; the fake refuses `notebook_params`.
+      await client.runNow("work", { jobId: 10, params: { day: "2026-11-18" }, idempotencyToken: "plan-4" }, signal())
+      const runNow = fake.requests.filter((entry) => entry.path === "/api/2.2/jobs/run-now").at(-1)?.body as Record<string, unknown>
+      expect(runNow).toEqual({ job_id: 10, job_parameters: { day: "2026-11-18" }, idempotency_token: "plan-4" })
+      const old = await fetch(`${fake.origin}/api/2.2/jobs/run-now`, { method: "POST", headers: { authorization: `Bearer ${DUMMY_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ job_id: 10, notebook_params: { day: "x" }, idempotency_token: "plan-5" }) })
+      expect(old.status).toBe(400)
       const submitted = await client.submitRun("work", { notebookPath: "/Shared/example", idempotencyToken: "plan-3", timeoutSeconds: 3600 }, signal())
       expect(submitted.runId).toBeGreaterThan(0)
       const body = fake.requests.find((entry) => entry.path === "/api/2.2/jobs/runs/submit")?.body as Record<string, unknown>

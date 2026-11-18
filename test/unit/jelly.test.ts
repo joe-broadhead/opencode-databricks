@@ -2,7 +2,8 @@
  * The `jelly` section of package.json, which Jelly reads without loading the plugin. The shared kit checks it against
  * Jelly's plugin authors' standard; the tests below add what only Databricks declares:
  *
- * - declared equals the registry plus the two permission-only entries (`databricks.start`, `databricks.probe`), with
+ * - declared equals the registry plus the three permission-only entries (`databricks.start`, `databricks.probe`,
+ *   `databricks.read`), with
  *   each tool's readOnly and note from the one tool table;
  * - a port of Jelly's `accessRules` over every action the plugin can assert gives design §10.3's table at all three
  *   levels, and the plugin's own default rules agree with it;
@@ -40,10 +41,10 @@ describe("the jelly declaration", () => {
     expect(declarationProblems(ROOT, { effectOf, registered: DECLARED_ACTIONS, actionPermissions: true })).toEqual([])
   })
 
-  it("declares the registry's 23 tools and the two permission-only entries, 25 in all, 16 read-only", () => {
+  it("declares the registry's 23 tools and the three permission-only entries, 26 in all, 17 read-only", () => {
     expect(jelly.tools.map((tool) => tool.permission)).toEqual([...REGISTERED.map(actionOf), ...PERMISSION_ONLY.map((entry) => entry.action)])
-    expect(jelly.tools).toHaveLength(25)
-    expect(jelly.tools.filter((tool) => tool.readOnly)).toHaveLength(16)
+    expect(jelly.tools).toHaveLength(26)
+    expect(jelly.tools.filter((tool) => tool.readOnly)).toHaveLength(17)
     for (const tool of TOOLS) {
       const declared = jelly.tools.find((entry) => entry.permission === actionOf(tool.name))!
       expect(declared, tool.name).toEqual({ name: actionOf(tool.name), permission: actionOf(tool.name), effect: "allow", readOnly: tool.readOnly, ...("note" in tool ? { note: tool.note } : {}) })
@@ -123,11 +124,11 @@ const EXPECTED: Record<string, (action: string) => string> = {
   "ask-changes": (action) => (action === "databricks.start" ? "ask" : reads.has(action) ? "allow" : "ask"),
   "read-only": (action) => (reads.has(action) || action === "databricks.start" ? "allow" : "deny"),
 }
-const reads = new Set([...TOOLS.filter((tool) => tool.readOnly).map((tool) => actionOf(tool.name)), "databricks.probe"])
+const reads = new Set([...TOOLS.filter((tool) => tool.readOnly).map((tool) => actionOf(tool.name)), "databricks.probe", "databricks.read"])
 
 describe("Jelly's access rules, simulated over every action the plugin can assert (design §10.3)", () => {
   for (const access of ACCESS_VALUES) {
-    it(`at ${access}: reads and the probe allow; start is allow / ask / allow; save, commits, cancel and stop follow the choice`, () => {
+    it(`at ${access}: reads, the probe and a source's read allow; start is allow / ask / allow; save, commits, cancel and stop follow the choice`, () => {
       for (const action of DECLARED_ACTIONS) expect(jellyEffect(access, action), `${action} at ${access}`).toBe(EXPECTED[access]!(action))
     })
 

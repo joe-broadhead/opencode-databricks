@@ -180,6 +180,12 @@ export interface HistoryQuery {
   readonly resultFromCache?: boolean
   /** `cache_query_id`: the query whose cached result was returned (outside `metrics`). */
   readonly cacheQueryId?: string
+  /** `user_name`: who submitted it (review of #8, request 4). Untrusted text. */
+  readonly userName?: string
+  /** `executed_as_user_name`: whose identity it ran as. Untrusted text. */
+  readonly executedAsUserName?: string
+  /** `client_application`: the client that submitted it, such as a BI tool. Untrusted text; cut to 64 characters when shown. */
+  readonly clientApplication?: string
 }
 
 export interface TableInfo {
@@ -237,6 +243,30 @@ export interface RunInfo {
   readonly runType?: string
 }
 
+/** Where one task of a job runs (review of #7, request 1). `existing` is an all-purpose cluster. */
+export type JobCompute =
+  | { readonly kind: "serverless" }
+  | { readonly kind: "job-cluster"; readonly nodeTypeId?: string; readonly numWorkers?: number; readonly autoscale?: { readonly min: number; readonly max: number } }
+  | { readonly kind: "existing"; readonly clusterId: string }
+
+/** One job's settings, from `GET /api/2.2/jobs/get` (`jobs.jobs.get`). `timeoutSeconds` 0 means no timeout. */
+export interface JobInfo {
+  readonly jobId: number
+  readonly name: string
+  readonly creatorUserName?: string
+  readonly runAsUserName?: string
+  readonly timeoutSeconds?: number
+  readonly tasks: readonly { readonly taskKey: string; readonly compute: JobCompute; readonly timeoutSeconds?: number }[]
+}
+
+/** The fields a warehouse-edit plan may change (`sql.warehouses.edit`). Not `statement_timeout`: it is not in this body. */
+export interface WarehouseEdit {
+  readonly clusterSize?: string
+  readonly autoStopMins?: number
+  readonly minNumClusters?: number
+  readonly maxNumClusters?: number
+}
+
 export interface Identity {
   readonly id: string
   readonly userName: string
@@ -252,6 +282,11 @@ export interface DatabricksPort {
   getWarehouse(account: string, id: string, signal: AbortSignal): Promise<Warehouse>
   startWarehouse(account: string, id: string, signal: AbortSignal): Promise<void>
   stopWarehouse(account: string, id: string, signal: AbortSignal): Promise<void>
+  /**
+   * Edits a warehouse (`POST /api/2.0/sql/warehouses/{id}/edit`, `sql.warehouses.edit`). Package B cites the edit page;
+   * if it documents the body as a full replacement, B sends the read-back warehouse with only these fields changed.
+   */
+  editWarehouse(account: string, id: string, edit: WarehouseEdit, signal: AbortSignal): Promise<void>
   // Statements (warehouse). `submit` is never retried after it may have reached the server (design §9).
   submit(request: StatementRequest, signal: AbortSignal): Promise<StatementAnswer>
   getStatement(account: string, statementId: string, signal: AbortSignal): Promise<StatementAnswer>
@@ -291,6 +326,8 @@ export interface DatabricksPort {
   getQuery(account: string, id: string, signal: AbortSignal): Promise<{ readonly id: string; readonly name: string; readonly warehouseId?: string; readonly queryText: string }>
   // Jobs (free reads; runs bill separately). Runs always carry `idempotency_token` (design §9).
   listJobs(account: string, page: { readonly pageToken?: string; readonly limit?: number }, signal: AbortSignal): Promise<Page<{ readonly jobId: number; readonly name: string; readonly creatorUserName?: string }>>
+  /** One job's settings and each task's compute (`GET /api/2.2/jobs/get`, `jobs.jobs.get`). */
+  getJob(account: string, jobId: number, signal: AbortSignal): Promise<JobInfo>
   listRuns(account: string, filter: { readonly jobId?: number; readonly completedOnly?: boolean; readonly startTimeFrom?: number; readonly startTimeTo?: number; readonly pageToken?: string; readonly limit?: number }, signal: AbortSignal): Promise<Page<RunInfo>>
   getRun(account: string, runId: number, signal: AbortSignal): Promise<RunInfo & { readonly tasks: readonly { readonly taskKey: string; readonly state: string; readonly durationMs?: number; readonly error?: string }[] }>
   getRunOutput(account: string, runId: number, signal: AbortSignal): Promise<{ readonly output?: string; readonly truncated?: boolean }>
@@ -379,12 +416,18 @@ export interface LedgerPort {
   totals(account: string, sessionId?: string): Promise<SpendTotals>
   /** Records a charge unless a `refuse` budget would be exceeded; `exceeded` names the limit (BUDGET_REACHED). */
   charge(charge: Omit<Charge, "at">, budget?: Budget): Promise<{ readonly recorded: boolean; readonly exceeded?: string; readonly totals: SpendTotals }>
+  /**
+   * The warehouse starts this plugin charged for the account at or after `sinceMs`, oldest first: the ledger's own
+   * `start` lines, read back (review of #10, request 4). Package F scopes its context hook and cleanup suggestions to
+   * them. `sessionId` is empty for a start charged outside a session.
+   */
+  starts(account: string, sinceMs: number): Promise<readonly { readonly warehouseId: string; readonly atMs: number; readonly sessionId: string }[]>
 }
 
 // ── permissions and time ─────────────────────────────────────────────────
 
 export interface PermissionRequest {
-  /** The dotted action: `databricks.<tool>`, `databricks.start` or `databricks.probe`. */
+  /** The dotted action: `databricks.<tool>`, `databricks.start`, `databricks.probe` or `databricks.read`. */
   readonly action: string
   /** `<account>:<operation>`, `<account>:table:<c>.<s>.<t>` or `<account>:warehouse:<id>`. */
   readonly resource: string

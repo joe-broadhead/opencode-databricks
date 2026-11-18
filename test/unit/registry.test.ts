@@ -61,12 +61,13 @@ describe("the registry", () => {
       expect(callsBeforeFirstAssert, tool).toBe(0)
     }
     // Asserted equals declared: the tools assert their own actions; the RPC's probe asserts databricks.probe; a start
-    // asserts databricks.start (package C), checked by its own test there.
+    // asserts databricks.start (package C), checked by its own test there; a bound source's content read asserts
+    // databricks.read (package E, review of #8 H2), checked by E's tests.
     const fake = fakeDeps()
     const probe = methods(() => fake.deps, HANDLERS).find((method) => method.name === "probe")!
     await probe.run({}, call("call_probe") as never)
     for (const request of fake.permission.requests) seen.add(request.action)
-    expect([...seen, "databricks.start"].sort()).toEqual([...DECLARED_ACTIONS].sort())
+    expect([...new Set([...seen, "databricks.start", "databricks.read"])].sort()).toEqual([...DECLARED_ACTIONS].sort())
   })
 
   it("a denied assert stops the tool before anything else happens", async () => {

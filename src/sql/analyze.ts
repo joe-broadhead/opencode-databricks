@@ -235,9 +235,27 @@ export function nonAsciiKeyword(tokens: readonly Token[]): boolean {
   return tokens.some((token) => token.channel === 0 && token.type !== -1 && !FREE_TEXT.has(token.type) && NON_ASCII.test(token.text ?? ""))
 }
 
+/** What a change target is, from the statement form that names it (review of #7, contract request 5). */
+export type TargetKind = "table" | "schema" | "catalog" | "function" | "other"
+
+/**
+ * A statement-level name: the object a statement creates, changes or drops (DROP, DELETE, MERGE's target, INSERT's
+ * table, CREATE … AS, ALTER, DROP SCHEMA, DROP FUNCTION, RENAME's both names), never a table a query inside it reads
+ * (those are `tables`). `kind` comes from the statement form: `…Namespace…` is a schema, `…Func…` a function, a
+ * procedure, variable or flow is `other`, and every other form names a table or view. `catalog` is reserved for
+ * Databricks' own catalog statements, which the pinned grammar does not parse (they plan as `run`).
+ */
+export interface ChangeTarget {
+  /** Unquoted, lower-cased parts as written; **empty** when the name is chosen through `IDENTIFIER(…)`. */
+  readonly parts: readonly string[]
+  readonly kind: TargetKind
+}
+
 export interface Walk {
   readonly invocations: Invocation[]
   readonly tables: TableReference[]
+  /** The statement's own targets, in text order (contract request 5 of #7). `tables` is unchanged by them. */
+  readonly targets: ChangeTarget[]
   readonly keywordForms: string[]
   readonly refusals: Refusal[]
   readonly statement: string
@@ -245,7 +263,7 @@ export interface Walk {
 
 /** Walks every node of a parse tree once. Shared by the read path and the plan path. */
 export function walk(tree: ParserRuleContext): Walk {
-  const result: Walk = { invocations: [], tables: [], keywordForms: [], refusals: [], statement: "" }
+  const result: Walk = { invocations: [], tables: [], targets: statementTargets(tree), keywordForms: [], refusals: [], statement: "" }
   const ctes = new Set(descendants(tree, (node) => ruleName(node) === "namedQuery").map((node) => unquote(node.getChild(0)!.getText()).toLowerCase()))
   const visit = (node: ParseTree) => {
     if (isTerminal(node)) return
@@ -294,6 +312,47 @@ export function walk(tree: ParserRuleContext): Walk {
   }
   visit(tree)
   return result
+}
+
+/** Rules a statement's own targets are never inside: a query (CREATE … AS, INSERT … SELECT, a subquery) or a FROM relation. */
+const QUERY_RULES: ReadonlySet<string> = new Set(["query", "relation"])
+
+/** The kind of object an `identifierReference` names, from the statement form it sits in (its parent context). */
+export function targetKind(statementForm: string): TargetKind {
+  if (/Namespace|^(?:Use|ShowTables|ShowViews|ShowFunctions|ShowTableExtended|ShowProcedures)Context$/u.test(statementForm)) return "schema"
+  if (/Func/u.test(statementForm)) return "function"
+  if (/Procedure|^CallContext$|Variable|Cursor|PipelineFlow/u.test(statementForm)) return "other"
+  return "table"
+}
+
+/**
+ * Collects the statement-level `identifierReference` nodes (and a rename's new name), outside any query or FROM
+ * relation. A labelled `source` (MERGE … USING t, CREATE TABLE … LIKE t) is read, not changed, so it is not a target.
+ */
+function statementTargets(tree: ParserRuleContext): ChangeTarget[] {
+  const found: ChangeTarget[] = []
+  const visit = (node: ParseTree) => {
+    if (isTerminal(node)) return
+    const ctx = node as ParserRuleContext
+    const rule = ruleName(ctx)
+    if (QUERY_RULES.has(rule)) return
+    if (rule === "identifierReference") {
+      const parent = ctx.parent as (ParserRuleContext & { _source?: unknown }) | null
+      if (parent && parent._source === ctx) return
+      const named = ctx.children.length === 1 && !isTerminal(ctx.getChild(0)!) ? nameParts(ctx.getChild(0) as ParserRuleContext) : []
+      found.push({ parts: named, kind: targetKind(parent ? contextName(parent) : "") })
+      return
+    }
+    if (contextName(ctx) === "RenameTableContext") {
+      const to = (ctx as ParserRuleContext & { _to?: ParserRuleContext })._to
+      for (const child of ctx.children) visit(child)
+      if (to) found.push({ parts: nameParts(to), kind: "table" })
+      return
+    }
+    for (const child of ctx.children) visit(child)
+  }
+  visit(tree)
+  return found
 }
 
 /** The statement alternative under `singleStatement`: a context name such as `StatementDefaultContext`. */

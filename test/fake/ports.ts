@@ -5,6 +5,7 @@ import { loadOptions } from "../../src/options.js"
 import { createPlanStore } from "../../src/domain/plans.js"
 import { DatabricksError } from "../../src/domain/errors.js"
 import type { AccountInfo, AuthPort, Charge, Clock, DatabricksPort, LedgerPort, PermissionPort, PermissionRequest, PreparedRead, ReadGuardPort, ReadRequest, SpendTotals, Token, Warehouse } from "../../src/ports.js"
+import { startsOf } from "../../src/ledger.js"
 import { analyzeRead } from "../../src/sql/analyze.js"
 import type { Deps } from "../../src/registry.js"
 
@@ -88,6 +89,8 @@ export class FakeReads implements ReadGuardPort {
 
 export class MemoryLedger implements LedgerPort {
   readonly charges: Charge[] = []
+  /** The clock a charge is stamped with; epoch 0 unless a test passes one. */
+  constructor(readonly now: () => number = () => 0) {}
   async totals(account: string, sessionId?: string): Promise<SpendTotals> {
     const mine = this.charges.filter((charge) => charge.account === account)
     const session = mine.filter((charge) => sessionId !== undefined && charge.sessionId === sessionId)
@@ -95,8 +98,11 @@ export class MemoryLedger implements LedgerPort {
     return { startsToday: mine.filter((c) => c.kind === "start").length, dbuHoursToday: sum(mine), startsSession: session.filter((c) => c.kind === "start").length, dbuHoursSession: sum(session), estimate: true }
   }
   async charge(charge: Omit<Charge, "at">) {
-    this.charges.push({ ...charge, at: new Date(0).toISOString() })
+    this.charges.push({ ...charge, at: new Date(this.now()).toISOString() })
     return { recorded: true, totals: await this.totals(charge.account, charge.sessionId) }
+  }
+  async starts(account: string, sinceMs: number) {
+    return startsOf(this.charges, account, sinceMs)
   }
 }
 

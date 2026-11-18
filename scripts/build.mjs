@@ -27,8 +27,11 @@ const allowed = (path) =>
 // The plugin's version, for src/version.ts; no source file repeats it.
 const VERSION = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version
 const presets = [["babel-preset-solid", { moduleName: "@opentui/solid", generate: "universal" }], "@babel/preset-typescript"]
-// A minified bundle writes its imports without spaces (`from"x"`, `import{a}`). The TUI part must keep them plain.
-const MINIFIED_IMPORT = /\bfrom"|\bimport[{*]/
+// A minified bundle writes its imports without spaces (`from"x"`, `import{a}`, `import"x"`, `export*from"x"`). The TUI
+// part must keep them plain, because OpenCode's loader cannot resolve a minified import (review of boxd #31, LOW 1).
+// The lookbehind skips a quote, a word character, `$` or `.` before it, so a string such as `"from"` or `{from:"x"}`
+// is not a match; `import("x")` is not one either, and OpenTUI rewrites it.
+const MINIFIED_IMPORT = /(?<!["'`\w$.])(?:from|import)["']/
 
 /** Compiles .tsx with Babel's Solid preset as esbuild loads it; esbuild handles plain .ts itself. */
 const solid = {

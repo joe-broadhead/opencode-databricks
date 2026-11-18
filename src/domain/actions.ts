@@ -5,8 +5,10 @@
  * - The engine name is `databricks_<tool>`; the permission action each tool asserts is `databricks.<tool>` (dotted, the
  *   name Jelly declares and rules). Asserted equals declared: a test runs every tool against the fakes and records what
  *   it asserts.
- * - `databricks.start` and `databricks.probe` are permission-only: actions the plugin asserts that are not tools. They
- *   are declared in `jelly.tools` so Jelly's rules give them their intended effects (design §10.2).
+ * - `databricks.start`, `databricks.probe` and `databricks.read` are permission-only: actions the plugin asserts that
+ *   are not tools. They are declared in `jelly.tools` so Jelly's rules give them their intended effects (design §10.2).
+ *   `databricks.read` is what a source's content reads assert (`events_list`, `saved_read`; review of #8, request 3):
+ *   allowed at every access, so the namespace pattern never asks for or denies a bound source's read.
  * - Data tools also assert each resolved table as `<account>:table:<catalog>.<schema>.<table>` under their own action.
  */
 import { NAMESPACE } from "../constants.js"
@@ -74,12 +76,14 @@ export const actionOf = (tool: string) => `${NAMESPACE}.${tool}`
 export const PERMISSION_ONLY = [
   { action: "databricks.start", effect: "ask", readOnly: true, note: "Starts a stopped SQL warehouse, which bills until it auto-stops" },
   { action: "databricks.probe", effect: "allow", readOnly: true },
+  { action: "databricks.read", effect: "allow", readOnly: true, note: "Reads the Databricks data a source you bound names; never changes anything" },
 ] as const
 
 export const START_ACTION = "databricks.start"
 export const PROBE_ACTION = "databricks.probe"
+export const READ_ACTION = "databricks.read"
 
-/** Every action the plugin declares: the 23 tools and the two permission-only entries. */
+/** Every action the plugin declares: the 23 tools and the three permission-only entries. */
 export const DECLARED_ACTIONS: readonly string[] = [...TOOLS.map((tool) => actionOf(tool.name)), ...PERMISSION_ONLY.map((entry) => entry.action)]
 
 /** The tools RPC's methods: every read, plus `probe` and `saved_list` (the snapshot's scope.suggest). Never a change. */
@@ -108,6 +112,7 @@ export const OPERATIONS = [
   "sql.warehouses.get",
   "sql.warehouses.start",
   "sql.warehouses.stop",
+  "sql.warehouses.edit",
   "sql.history.queries.list",
   "sql.queries.list",
   "sql.queries.get",
@@ -124,6 +129,7 @@ export const OPERATIONS = [
   "unity-catalog.current-metastore-assignment.get",
   "unity-catalog.tag-assignments.list",
   "jobs.jobs.list",
+  "jobs.jobs.get",
   "jobs.runs.list",
   "jobs.runs.get",
   "jobs.runs.output.get",
