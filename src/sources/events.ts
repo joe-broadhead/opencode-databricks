@@ -26,7 +26,8 @@
  * Nothing is de-duplicated by a set of ids, so the volume of a window never shortens it: an item is listed once
  * because it has one end. A gap (`window-truncated`) is answered only when something is really dropped (a walk past
  * its cap behind the line, a millisecond with more starts than the jam cap, an item the full tracked set cannot take
- * and a walk cannot reach, or a tracked item proving a lag past `HOLD_MAX_MS`), once per read; `expired` when the cursor
+ * and a walk cannot reach, or, once per lag episode, a proven lag longer than the hold the line passed an untracked
+ * running item under), once per read; `expired` when the cursor
  * or `since` is older than the provider keeps. State is never dropped without one.
  *
  * **The line is held** at the oldest item still shown running that is not tracked by id (its final state may lag its
@@ -49,7 +50,7 @@ import type { HistoryQuery, RunInfo } from "../ports.js"
 import type { Deps } from "../registry.js"
 import type { Call } from "../tool-spec.js"
 import { assertRead } from "./assert.js"
-import { after, bindingOf, decodeState, encodeState, fits, hashOf, iso, packIds, unpackIds, type CursorState, type Tracked } from "./cursor.js"
+import { after, bindingOf, decodeState, encodeState, fits, hashOf, iso, packIds, parseRef, refOf, unpackIds, type CursorState, type Tracked } from "./cursor.js"
 import { sourceError, sourceErrorOf } from "./errors.js"
 import { hostName, ownerOf, workspaceOwner, type Owner } from "./owner.js"
 import { recordsOf, type IdentityRecord } from "./records.js"
@@ -70,6 +71,10 @@ export const LAG_MS = 5 * 60_000
  * tracked item is listed whatever its lag; a tracked item found to have lagged longer than this answers a gap.
  */
 export const HOLD_MAX_MS = 75 * 60_000
+/** A lag episode widens the hold to the lag it proves plus this margin… */
+export const HOLD_MARGIN_MS = 15 * 60_000
+/** …up to this; a lag longer still is answered with a gap for each release it can have cost. */
+export const HOLD_CAP_MS = 12 * HOUR
 /** An item shown running for longer than this is tracked by id, so it stops holding the line back past the horizon. */
 export const HOLD_SOFT_MS = LAG_MS
 /** The margin kept inside a provider's retention, so a restart is not expired again at once. */
@@ -110,6 +115,8 @@ interface Context {
   readonly scope?: Scope
   readonly identity?: IdentityRecord
   readonly now: number
+  /** Plain-language notes for the model's tool (`message`): the evidence behind a lag gap. */
+  readonly notes?: string[]
 }
 
 interface Adapter {
@@ -134,8 +141,10 @@ interface Adapter {
   readonly maxTracked: number
   readonly owner: (context: Context) => Owner
   readonly walk: (context: Context, from: number, to: number, capPages: number) => Promise<Walk>
-  /** The tracked items, read back by id; an id the provider no longer has is absent. */
-  readonly recheck: (context: Context, ids: readonly string[]) => Promise<readonly Item[]>
+  /** The key an item is tracked by: a run's id, a statement's reference (`refOf`). */
+  readonly keyOf: (item: Item) => string
+  /** The tracked items, read back by key (or, from a cursor written before references, by id); one gone is absent. */
+  readonly recheck: (context: Context, keys: readonly string[]) => Promise<readonly Item[]>
 }
 
 /** The page request every source's page needs. */
@@ -153,6 +162,8 @@ export interface PageRequest {
    * session answers `UNAVAILABLE` instead.
    */
   readonly mode?: "source" | "tool"
+  /** Collects plain-language notes for the model's tool, such as the evidence behind a lag gap. */
+  readonly notes?: string[]
 }
 
 /** The account a source's `events_list` is for, checked against the plugin's accounts. */
@@ -222,7 +233,7 @@ export async function eventsPage(deps: Deps, request: PageRequest): Promise<Even
   }
   const identity = request.source === "queries" ? await identityFor(deps, account, request) : undefined
   const now = deps.clock.now()
-  const context: Context = { deps, account, call: request.call, host: hostName(deps.auth.account(account).host), now, ...(scope ? { scope } : {}), ...(identity ? { identity } : {}) }
+  const context: Context = { deps, account, call: request.call, host: hostName(deps.auth.account(account).host), now, ...(scope ? { scope } : {}), ...(identity ? { identity } : {}), ...(request.notes ? { notes: request.notes } : {}) }
   const owner = adapter.owner(context)
   const page = (events: readonly SourceEvent[], next: CursorState, more: boolean, extras: { gap?: EventsListResult["gap"]; refused?: readonly RefusedEvent[] } = {}) =>
     pageResult({ source: request.source, account, owner, events, cursor: encodeState(binding, next), more, ...extras, ...(scope ? { scope: canonical(scope) } : {}) })
@@ -323,47 +334,80 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
   }
   seen.push(...fresh.items)
 
-  // 3. The tracked ids, read back by id. The rest are carried as they are (a final row does not change).
+  // 3. The tracked items: one this page's walks cover is decided from what they saw; the rest that are due are read
+  // back; the others are carried as they are (a final row does not change).
   const trackedAll = unpackIds(state.z, state.t ?? 0)
-  // Due: a finished one when its end is due, or on every page when the cursor had no room for its end.
   // A running one is read back on a full page at most once every `LAG_MS` (once a read): one skipped is still listed
-  // when it is next read, since a tracked item is listed wherever its end falls.
+  // when it is next read, since a tracked item is listed wherever its end falls. A finished one when its end is due,
+  // or on every page when the cursor had no room for its end.
   const checkRunning = full && (state.t === undefined || context.now - state.t >= LAG_MS)
-  const due = trackedAll.filter((entry) => (entry.end !== undefined ? entry.end <= top : entry.done === true || checkRunning))
-  // A tracked id this page's walks also saw is decided from what they saw (as tracked); the rest are carried as they are.
-  const seenIds = new Set(seen.map((item) => item.id))
-  const carriedTracked = trackedAll.filter((entry) => !due.includes(entry) && !seenIds.has(entry.id))
-  const trackedSeen = new Set(trackedAll.filter((entry) => !due.includes(entry) && seenIds.has(entry.id)).map((entry) => entry.id))
-  const tracked = due.length > 0 ? await adapter.recheck(context, due.map((entry) => entry.id)) : []
-  // A tracked item seen running at the last full page and final now, with an end more than `HOLD_MAX_MS` before that
-  // page, shows Databricks' final state lagging longer than the line waits: untracked items may have been passed.
-  if (state.t !== undefined) {
-    const wasRunning = new Set(due.filter((entry) => !entry.done).map((entry) => entry.id))
-    if (tracked.some((item) => wasRunning.has(item.id) && item.end !== undefined && item.end < state.t! - HOLD_MAX_MS)) lost ??= "window-truncated"
+  const keyOf = (item: Item) => adapter.keyOf(item)
+  const seenByKey = new Map<string, Item[]>()
+  for (const item of seen) seenByKey.set(keyOf(item), [...(seenByKey.get(keyOf(item)) ?? []), item])
+  // A statement tracked by its id (a cursor written before references) is matched by that id.
+  const named = (key: string, items: readonly Item[]) => items.filter((item) => keyOf(item) === key || item.id === key)
+  const coveredFrom = Math.min(floorAtLeast, state.e + 1)
+  /** A statement reference whose whole second this page's walks read: if they did not see it, it is gone. */
+  const covered = (key: string) => {
+    const ref = parseRef(key)
+    return ref !== undefined && ref.second * 1000 >= coveredFrom && ref.second * 1000 + 999 <= top
   }
+  const resolved: { readonly entry: Tracked; readonly item: Item }[] = []
+  const unresolved: Tracked[] = []
+  for (const entry of trackedAll) {
+    const matches = seenByKey.get(entry.id) ?? named(entry.id, seen)
+    if (matches.length === 1) resolved.push({ entry, item: matches[0]! })
+    else if (matches.length > 1) lost ??= "window-truncated" // a key that names two items: never guess which
+    else if (!covered(entry.id)) unresolved.push(entry)
+  }
+  const due = unresolved.filter((entry) => (entry.end !== undefined ? entry.end <= top : entry.done === true || checkRunning))
+  const carriedTracked = unresolved.filter((entry) => !due.includes(entry))
+  if (due.length > 0) {
+    const answers = await adapter.recheck(context, due.map((entry) => entry.id))
+    for (const entry of due) {
+      const matches = named(entry.id, answers)
+      if (matches.length === 1) resolved.push({ entry, item: matches[0]! })
+      else if (matches.length > 1) lost ??= "window-truncated"
+    }
+  }
+  const tracked = resolved.map((pair) => pair.item)
+  // A tracked item seen running at the last check and final now, with an end more than `HOLD_MAX_MS` before that check,
+  // shows Databricks' final state lagging at least that long (the evidence for step 8's lag episode).
+  let lag: number | undefined
+  if (state.t !== undefined) {
+    for (const { entry, item } of resolved) {
+      if (entry.done || item.end === undefined || item.end >= state.t - HOLD_MAX_MS) continue
+      lag = Math.max(lag ?? 0, state.t - item.end)
+    }
+  }
+  // The hold in force: the default, or one a lag episode widened (for a day after its last proof).
+  const widened = state.h !== undefined && context.now - state.h.seen <= DAY ? state.h.hold : undefined
+  const holdMax = Math.max(HOLD_MAX_MS, widened ?? 0, lag === undefined ? 0 : Math.min(HOLD_CAP_MS, lag + HOLD_MARGIN_MS))
 
   // 4. Hold the line: an item still shown running may already have ended (its final state can lag), so the line stops
-  // before the oldest one not tracked by id, at most `HOLD_MAX_MS` behind now. Items running longer than `HOLD_SOFT_MS`
-  // are tracked first (oldest first, while the cursor has room), so they stop holding it.
-  const trackedIds = new Set([...tracked.map((item) => item.id), ...trackedSeen])
-  const runningSeen = seen.filter((item) => item.end === undefined && item.start <= top && !trackedIds.has(item.id)).sort((a, b) => a.start - b.start)
-  let ids: Tracked[] = [...carriedTracked, ...[...trackedIds].map((id) => ({ id, done: true }))]
+  // before the oldest one not tracked, at most `HOLD_MAX_MS` behind now. Items running longer than `HOLD_SOFT_MS` are
+  // tracked first (oldest first, while the cursor has room), so they stop holding it.
+  const trackedItemIds = new Set(tracked.map((item) => item.id))
+  const runningSeen = seen.filter((item) => item.end === undefined && item.start <= top && !trackedItemIds.has(item.id)).sort((a, b) => a.start - b.start)
+  /** A key this page can track: one that names this item alone among what the walks saw. */
+  const trackable = (item: Item) => (seenByKey.get(keyOf(item))?.length ?? 0) <= 1
+  let ids: Tracked[] = [...carriedTracked, ...resolved.map((pair) => ({ id: pair.entry.id, done: true }))]
   const admitted = new Set<string>()
   for (const item of runningSeen) {
-    if (item.start >= context.now - HOLD_SOFT_MS || admitted.has(item.id)) continue
-    if (!fits([...ids, { id: item.id }])) break
-    ids = [...ids, { id: item.id }]
+    if (item.start >= context.now - HOLD_SOFT_MS || admitted.has(item.id) || !trackable(item)) continue
+    if (ids.length >= adapter.maxTracked || !fits([...ids, { id: keyOf(item) }])) break
+    ids = [...ids, { id: keyOf(item) }]
     admitted.add(item.id)
   }
   const holdStart = runningSeen.find((item) => !admitted.has(item.id))?.start
-  const holdCap = holdStart === undefined ? Number.POSITIVE_INFINITY : Math.max(context.now - HOLD_MAX_MS, holdStart - 1)
+  const holdCap = holdStart === undefined ? Number.POSITIVE_INFINITY : Math.max(context.now - holdMax, holdStart - 1)
   const listTop = Math.min(top, holdCap)
 
   // 5. What is listable now: final, at or before the held top, after the line (a tracked item is unlisted by
   // definition, so it is listed wherever its end is).
   type Entry = { readonly item: Item; readonly tracked: boolean; readonly hash: string }
   const entries = new Map<string, Entry>()
-  for (const item of seen) entries.set(item.id, { item, tracked: admitted.has(item.id) || trackedSeen.has(item.id), hash: hashOf(externalId(context, item)) })
+  for (const item of seen) entries.set(item.id, { item, tracked: admitted.has(item.id) || trackedItemIds.has(item.id), hash: hashOf(externalId(context, item)) })
   for (const item of tracked) entries.set(item.id, { item, tracked: true, hash: hashOf(externalId(context, item)) })
   const listable: Entry[] = []
   const waiting: Entry[] = []
@@ -408,7 +452,7 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
   // decides for everything behind the line; a partial page for what its walk saw (it read `[n, t]` whole).
   const starts = seen.map((item) => item.start).filter((start) => start <= line.e).sort((a, b) => a - b)
   const rowsFrom = (start: number) => starts.length - lowerBound(starts, start)
-  const trackedOf = (item: Item): Tracked => (item.end === undefined ? { id: item.id } : { id: item.id, done: true, end: item.end })
+  const trackedOf = (item: Item): Tracked => (item.end === undefined ? { id: keyOf(item) } : { id: keyOf(item), done: true, end: item.end })
   // The tracked set: what was carried, what was read back and is still unlisted, and what this page admitted.
   const stillTracked = waiting.filter((entry) => entry.tracked).map((entry) => trackedOf(entry.item))
   ids = [...carriedTracked, ...stillTracked]
@@ -428,7 +472,7 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
         break
       }
     }
-    if (ids.length < adapter.maxTracked && fits([...ids, trackedOf(entry.item)])) {
+    if (trackable(entry.item) && ids.length < adapter.maxTracked && fits([...ids, trackedOf(entry.item)])) {
       ids = [...ids, trackedOf(entry.item)]
       continue
     }
@@ -443,8 +487,18 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
   // Still running behind the line: on a full page, what it saw; on a partial one, also what the last full page saw.
   // (`l` past the old line means the last full page left nothing running behind it.)
   const carried = !full && state.l <= state.e ? state.l : line.e + 1
-  const running = Math.min(floorOf(floor, false) ?? line.e + 1, carried)
-  const finished = floorOf(floor, true)
+  let running = Math.min(floorOf(floor, false) ?? line.e + 1, carried)
+  let finished = floorOf(floor, true)
+  // A statement tracked by reference close behind the line (within `keepRows`) is found again by the walk, at no call
+  // of its own: the floors stay at its second.
+  for (const entry of ids) {
+    const ref = parseRef(entry.id)
+    if (ref === undefined) continue
+    const at = ref.second * 1000
+    if (at > line.e || at < floorAtLeast || rowsFrom(at) > adapter.keepRows) continue
+    if (entry.done) finished = Math.min(finished ?? at, at)
+    else running = Math.min(running, at)
+  }
   // Nothing still running at a full page can be final, visibly, before that page's held line.
   const visible = full ? Math.min(horizon, holdCap) : (state.m ?? horizon)
 
@@ -468,12 +522,35 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
     packed = packIds(ids, base)
     lost ??= "window-truncated"
   }
-  const gap = lost !== undefined && state.g !== 1 ? { reason: lost, since: iso(state.e) } : undefined
+  // 8. The lag episode. A release is the line passing an untracked item still shown running (the hold's bound let it
+  // go); `r` keeps the first release not yet answered and the shortest hold it was made under. Proof of a lag (step 3)
+  // longer than that hold means those releases can have lost items: one gap, from `r`. The hold then widens to the lag
+  // plus a margin (`h`), so the rest of the episode loses nothing and answers nothing. Proof with no such release lost
+  // nothing new: no gap. A release unproven for a day is let go.
+  const releasedNow = runningSeen.some((item) => !admitted.has(item.id) && item.start <= line.e)
+  let release = state.r
+  if (releasedNow) release = { at: Math.min(release?.at ?? state.e, state.e), hold: Math.min(release?.hold ?? holdMax, holdMax) }
+  let lagSince: number | undefined
+  if (lag !== undefined) {
+    const minutes = Math.round(lag / 60_000)
+    if (release !== undefined && release.hold < lag) {
+      lagSince = release.at
+      lost ??= "window-truncated"
+      context.notes?.push(`Databricks showed a final state about ${minutes} minutes after its end, longer than the ${Math.round(release.hold / 60_000)} minutes this source waited; items still running when the line passed them, from ${iso(release.at)}, may be missing. It now waits ${Math.round(holdMax / 60_000)} minutes.`)
+      release = undefined
+    } else {
+      context.notes?.push(`Databricks showed a final state about ${minutes} minutes after its end; this source waits ${Math.round(holdMax / 60_000)} minutes, and nothing it passed meanwhile can be missing.`)
+    }
+  } else if (release !== undefined && !releasedNow && context.now - release.at > DAY) release = undefined
+  const hold = lag !== undefined ? { hold: holdMax, seen: context.now } : widened !== undefined ? state.h : undefined
+  const gap = lost !== undefined && state.g !== 1 ? { reason: lost, since: iso(Math.min(state.e, lagSince ?? state.e)) } : undefined
   const next: CursorState = {
     ...line,
     l: Math.min(running, line.e + 1),
     ...(finished !== undefined ? { n: finished } : {}),
     m: visible,
+    ...(release !== undefined ? { r: release } : {}),
+    ...(hold !== undefined ? { h: hold } : {}),
     ...(packed ? { z: packed } : {}),
     ...(width !== undefined ? { d: width } : {}),
     ...(checkRunning ? { t: context.now } : state.t !== undefined ? { t: state.t } : {}),
@@ -609,7 +686,7 @@ const queries: Adapter = {
   sliceCap: 10,
   jamCap: 100,
   keepRows: 5000,
-  maxTracked: 40,
+  maxTracked: 400,
   owner: (context) => ownerOf({ id: context.identity!.userId, userName: context.identity!.userName, ...(context.identity!.displayName ? { displayName: context.identity!.displayName } : {}) }, context.deps.auth.account(context.account).host),
   async walk(context, from, to, capPages) {
     const warehouses = listOf(context.scope?.warehouses)
@@ -653,18 +730,36 @@ const queries: Adapter = {
     }
     return { items, truncated, ...(oldest === undefined ? {} : { oldest }), calls }
   },
-  async recheck(context, ids) {
-    // One call: the `statement_ids` filter, over the widest range the API takes (a statement ends within 48 h, so a
-    // tracked one is always inside it while it matters).
-    const wanted = new Set(ids)
-    const answer = await provider(() =>
-      context.deps.databricks.history(
-        context.account,
-        { userIds: [Number(context.identity!.userId)], statementIds: [...ids], startMs: context.now - QUERY_RETENTION_MS + 60_000, endMs: context.now, maxResults: 1000, includeMetrics: false },
-        context.call.signal,
-      ),
-    )
-    return answer.items.filter((query) => wanted.has(query.queryId)).map((query) => queryItem(query, context.host))
+  keyOf: (item) => refOf(item.id, item.start),
+  async recheck(context, keys) {
+    const found: Item[] = []
+    // A reference: the one second it names, read whole (a person starts a handful of statements in a second at most).
+    for (const key of keys) {
+      const ref = parseRef(key)
+      if (ref === undefined) continue
+      const answer = await provider(() =>
+        context.deps.databricks.history(
+          context.account,
+          { userIds: [Number(context.identity!.userId)], startMs: ref.second * 1000, endMs: ref.second * 1000 + 999, maxResults: 1000, includeMetrics: false },
+          context.call.signal,
+        ),
+      )
+      for (const query of answer.items) if (refOf(query.queryId, query.queryStartTimeMs) === key) found.push(queryItem(query, context.host))
+    }
+    // Ids (a cursor written before references): one call, the `statement_ids` filter over the widest range the API takes.
+    const ids = keys.filter((key) => parseRef(key) === undefined)
+    if (ids.length > 0) {
+      const wanted = new Set(ids)
+      const answer = await provider(() =>
+        context.deps.databricks.history(
+          context.account,
+          { userIds: [Number(context.identity!.userId)], statementIds: ids, startMs: context.now - QUERY_RETENTION_MS + 60_000, endMs: context.now, maxResults: 1000, includeMetrics: false },
+          context.call.signal,
+        ),
+      )
+      for (const query of answer.items) if (wanted.has(query.queryId)) found.push(queryItem(query, context.host))
+    }
+    return found
   },
 }
 
@@ -708,7 +803,7 @@ const runs: Adapter = {
   scopeKeys: ["jobs"],
   operations: ["jobs.runs.list", "jobs.runs.get"],
   pageRows: 25,
-  behindCap: 200,
+  behindCap: 600,
   sliceCap: 40,
   jamCap: 400,
   keepRows: 250,
@@ -750,6 +845,7 @@ const runs: Adapter = {
     }
     return { items, truncated, ...(oldest === undefined ? {} : { oldest }), calls }
   },
+  keyOf: (item) => item.id,
   async recheck(context, ids) {
     const found: Item[] = []
     for (const id of ids) {

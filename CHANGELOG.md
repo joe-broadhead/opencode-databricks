@@ -39,4 +39,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- `databricks.queries` tracks a statement by a 7-character reference (its start second and 12 bits of its id's hash,
+  unique within that second) instead of its 22-character id, so about 70 fit the cursor: at 300 statements an hour
+  with 5% running 1–6 hours, every statement is listed within 10 minutes of its end, where most waited up to 80.
+- A proven lag in Databricks' final states answers one gap per episode, and only when the line passed an untracked
+  running item under a shorter hold; the hold then widens to the lag (at most 12 hours), so the episode loses nothing
+  more. The model's tool says what was seen in its `message`.
+- `databricks.runs` re-walks up to 12,000 runs behind the line before it gives one up, so a workspace with hundreds of
+  day-long runs at once no longer gaps.
 - A job run's parameters are sent as run-now 2.2's documented `job_parameters`, not `notebook_params`.

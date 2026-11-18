@@ -310,10 +310,10 @@ describe("databricks.runs", () => {
   })
 
   test("more long runs than the cursor can track, and too many rows behind them to re-walk: one gap, once, never silent", async () => {
-    // 300 long runs with sparse ids (each about 8 characters to track) started 7 h back, then 6,000 short runs: the
+    // 300 long runs with sparse ids (each about 8 characters to track) started 7 h back, then 13,000 short runs: the
     // tracked set fills, and re-walking back to the rest would take more than a behind-walk reaches.
     const long = Array.from({ length: 300 }, (_, index) => ({ id: String(1_000_000_000_000 + index * 1_000_000_007), jobId: 1, start: NOW - 7 * HOUR + index * 1000, end: NOW + 3 * HOUR + index * 1000 }))
-    const short = Array.from({ length: 6000 }, (_, index) => ({ id: String(5_000_000_000_000 + index), jobId: 2, start: NOW - 6 * HOUR + index * 3000, end: NOW - 6 * HOUR + index * 3000 + 1000 }))
+    const short = Array.from({ length: 13_000 }, (_, index) => ({ id: String(5_000_000_000_000 + index), jobId: 2, start: NOW - 6 * HOUR + index * 1500, end: NOW - 6 * HOUR + index * 1500 + 1000 }))
     let now = () => NOW
     const fake = world(() => now())
     for (const item of [...long, ...short]) fake.add({ ...item })
@@ -361,10 +361,10 @@ describe("the cursor", () => {
   })
 
   test("the worst case fits the contract's 1,024 characters: the tracked ids at their budget, every field at its widest", () => {
-    // Query ids are UUIDs (22 characters packed); run ids up to int64's 13 base36 digits, spread so their deltas are
-    // wide; every end a 13-digit time. Admission keeps the set within budget with every entry finished; ends are kept
+    // Statement references spread a day apart; run ids up to int64's 13 base36 digits, spread so their deltas are wide;
+    // every end a 13-digit time. Admission keeps the set within budget with every entry finished; ends are kept
     // only where they fit, and never an id is dropped.
-    const uuids = Array.from({ length: 40 }, (_, index) => ({ id: `ffffffff-ffff-4fff-bfff-${String(index).padStart(12, "f")}`, done: true, end: 9_999_999_999_999 }))
+    const uuids = Array.from({ length: 200 }, (_, index) => ({ id: `${1_800_000_000 + index * 99_991}~_-`, done: true, end: 9_999_999_999_999 }))
     const runs = Array.from({ length: 200 }, (_, index) => ({ id: String(1_000_000_000_000_000_000n + BigInt(index) * 40_000_000_000_000_000n), done: true, end: 9_999_999_999_999 }))
     for (const [source, entries] of [["queries", uuids], ["runs", runs]] as const) {
       const admitted: { id: string; done: boolean; end: number }[] = []
@@ -374,9 +374,19 @@ describe("the cursor", () => {
       expect(unpackIds(z).map((entry) => entry.id).sort()).toEqual(admitted.map((entry) => entry.id).sort())
       expect(unpackIds(z).every((entry) => entry.done === true && (entry.end === undefined || entry.end === 9_999_999_999_999))).toBe(true)
       const binding = bindingOf(source, "a".repeat(320), { warehouses: ["x".repeat(200)], jobs: ["9".repeat(19)] })
-      const cursor = encodeState(binding, { e: 9_999_999_999_999, k: "ffffffffffff", l: 9_999_999_999_998, n: 9_999_999_999_997, m: 9_999_999_999_999, d: 9_999_999_999, t: 9_999_999_999_999, z, g: 1 })
+      const cursor = encodeState(binding, { e: 9_999_999_999_999, k: "ffffffffffff", l: 9_999_999_999_998, n: 9_999_999_999_997, m: 9_999_999_999_999, d: 9_999_999_999, t: 9_999_999_999_999, r: { at: 9_999_999_999_999, hold: 12 * HOUR }, h: { hold: 12 * HOUR, seen: 9_999_999_999_999 }, z, g: 1 })
       expect(cursor.length).toBeLessThanOrEqual(1024)
     }
+  })
+
+  test("statement references: about 70 fit, and every one comes back, with its end", () => {
+    const refs = Array.from({ length: 70 }, (_, index) => ({ id: `${1_800_000_000 + index * 300}~a${String.fromCharCode(65 + (index % 26))}`, done: true, end: NOW + index }))
+    expect(fits(refs)).toBe(true)
+    const back = unpackIds(packIds(refs, NOW), NOW)
+    // Every reference comes back finished; ends are kept where they fit, dropped from the latest-due first.
+    expect(back.map((entry) => entry.id)).toEqual(refs.map((entry) => entry.id))
+    expect(back.every((entry, index) => entry.done === true && (entry.end === undefined || entry.end === refs[index]!.end))).toBe(true)
+    expect(back.filter((entry) => entry.end !== undefined).length).toBeGreaterThan(40)
   })
 
   test("run ids are delta-encoded: 100 runs created close together fit, and every id comes back", () => {

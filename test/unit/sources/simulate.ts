@@ -33,6 +33,8 @@ export interface ConsumeOptions {
   readonly pagesPerRead?: number
   /** Start from this cursor instead of `since`. */
   readonly cursor?: string
+  /** Collects the notes the model's tool would show (`message`). */
+  readonly notes?: string[]
 }
 
 export async function consume(deps: Deps, options: ConsumeOptions): Promise<Consumed & { readonly cursor?: string }> {
@@ -58,6 +60,7 @@ export async function consume(deps: Deps, options: ConsumeOptions): Promise<Cons
         ...(cursor === undefined ? { since: iso(options.since) } : { cursor }),
         ...(options.limit === undefined ? {} : { limit: options.limit }),
         ...(options.scope === undefined ? {} : { scope: options.scope }),
+        ...(options.notes === undefined ? {} : { notes: options.notes }),
         call: call(`r${read}p${pagesThisRead}`),
       })
       pages += 1

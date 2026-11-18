@@ -23,10 +23,14 @@
  *   slice by slice, instead of re-reading everything behind the line for every page.
  * - `d`: the **slice width**: the next slice ends at `e + d`, sized to what a page took or to half a walk.
  * - `t`: when tracked running items were last read back: a tracked item seen running then and found final with an end more than
- *   `HOLD_MAX_MS` before it proves Databricks showed a final state later than the line waits, which is a gap.
+ *   `HOLD_MAX_MS` before it proves Databricks showed a final state later than the line waits.
+ * - `r`: where the line first passed an untracked item still shown running since the last lag gap, and the hold then:
+ *   a proven lag answers a gap only if such a release happened under a hold shorter than that lag.
+ * - `h`: a hold widened by a lag episode (to the lag seen plus a margin, at most `HOLD_CAP_MS`), and when the lag was
+ *   last seen: the line then waits that long, so the episode loses nothing more; it narrows a day after the last proof.
  * - `g`: 1 when this read (pages up to `more: false`) already answered a gap, so it is not answered again.
  *
- * Worst case: `Z_CHARS` (576) of tracked ids, plus the numbers, the tie hash and the binding, is 1,008 characters (see
+ * Worst case: `Z_CHARS` (540) of tracked items, plus the numbers, the tie hash, the lag state and the binding, is 1,006 characters (see
  * `test/unit/sources/cursor.test.ts`), under the contract's 1,024.
  */
 import { MAX_CURSOR_LENGTH, canonicalScope, decodeBoundCursor, encodeBoundCursor, type Scope } from "@we-the-rebel-alliance/source-contract/cursor"
@@ -34,7 +38,7 @@ import { NAMESPACE } from "../constants.js"
 import { sourceError } from "./errors.js"
 
 /** The tracked ids' budget, in characters of the packed string. */
-export const Z_CHARS = 576
+export const Z_CHARS = 540
 export const HASH_BYTES = 6
 
 export interface CursorState {
@@ -54,6 +58,10 @@ export interface CursorState {
   d?: number
   /** When the last full page read, ms (for the lag check). */
   t?: number
+  /** Where the line first passed an untracked running item since the last lag gap, and the hold then (ms). */
+  r?: { readonly at: number; readonly hold: number }
+  /** A hold widened by a lag episode, and when the lag was last seen (ms). */
+  h?: { readonly hold: number; readonly seen: number }
   /** This read already answered a gap. */
   g?: 1
 }
@@ -81,6 +89,9 @@ export function encodeState(binding: Binding, state: CursorState): string {
   if (state.z) plain.z = state.z
   if (state.d !== undefined) plain.d = state.d
   if (state.t !== undefined) plain.t = state.t
+  // Both pairs as one short string each: the cursor's budget is tight.
+  if (state.r !== undefined) plain.r = `${state.r.at.toString(36)}.${Math.round(state.r.hold / 60_000).toString(36)}`
+  if (state.h !== undefined) plain.h = `${Math.round(state.h.hold / 60_000).toString(36)}.${Math.round(state.h.seen / 1000).toString(36)}`
   if (state.g === 1) plain.g = 1
   try {
     return encodeBoundCursor(binding, plain)
@@ -91,6 +102,13 @@ export function encodeState(binding: Binding, state: CursorState): string {
 }
 
 export type Decoded = { readonly ok: true; readonly state: CursorState } | { readonly ok: false; readonly code: "CURSOR_INVALID"; readonly what: string }
+
+/** Two base36 numbers joined by `.`, scaled; undefined when the value is anything else. */
+const pairOf = (value: unknown, first: number, second: number): [number, number] | undefined => {
+  if (typeof value !== "string") return undefined
+  const match = /^([0-9a-z]{1,10})\.([0-9a-z]{1,8})$/u.exec(value)
+  return match ? [Number.parseInt(match[1]!, 36) * first, Number.parseInt(match[2]!, 36) * second] : undefined
+}
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)
 
@@ -123,6 +141,8 @@ export function decodeState(binding: Binding, cursor: string): Decoded {
       ...(typeof raw.z === "string" && raw.z.length > 0 && raw.z.length <= Z_CHARS ? { z: raw.z } : {}),
       ...(finite(raw.d) && raw.d >= 1 ? { d: raw.d } : {}),
       ...(finite(raw.t) ? { t: raw.t } : {}),
+      ...(pairOf(raw.r, 1, 60_000) ? { r: { at: pairOf(raw.r, 1, 60_000)![0], hold: pairOf(raw.r, 1, 60_000)![1] } } : {}),
+      ...(pairOf(raw.h, 60_000, 1000) ? { h: { hold: pairOf(raw.h, 60_000, 1000)![0], seen: pairOf(raw.h, 60_000, 1000)![1] } } : {}),
       ...(raw.g === 1 ? { g: 1 as const } : {}),
     },
   }
@@ -168,9 +188,14 @@ export function unpackId(packed: string): string | undefined {
 }
 
 /**
- * A tracked item: its id; `done` once it was seen finished, with its `end` when the cursor had room to keep it. A
+ * A tracked item: its key; `done` once it was seen finished, with its `end` when the cursor had room to keep it. A
  * running one is read back on every full page; a finished one with its end once it is due; a finished one without it
  * on every full page (the end is only a saving, never needed to list it).
+ *
+ * The key is a run's id, or a statement's **reference** `<start second>~<id hash>` (`refOf`): the second it started
+ * and 12 bits of its id's hash, about 7 characters where its UUID takes 22. A reference is admitted only when no other
+ * statement of that second has the same hash, and every statement of a second is shown within `LAG_MS` of it, so a
+ * reference names exactly one statement: it can neither lose one nor list one twice.
  */
 export interface Tracked {
   readonly id: string
@@ -179,15 +204,28 @@ export interface Tracked {
 }
 
 const NUMERIC = /^[1-9][0-9]{0,18}$/u
+const REF = /^(\d{1,13})~([A-Za-z0-9_-]{2})$/u
+
+/** A statement's reference: the second it started and two base64url characters (12 bits) of its id's hash. */
+export const refOf = (id: string, start: number): string => `${Math.floor(start / 1000)}~${Buffer.from(hashOf(id).slice(0, 4), "hex").toString("base64url").slice(0, 2)}`
+
+/** The second a reference names, and its hash; undefined for a key that is not a reference. */
+export function parseRef(key: string): { readonly second: number; readonly hash: string } | undefined {
+  const match = REF.exec(key)
+  return match ? { second: Number(match[1]), hash: match[2]! } : undefined
+}
 
 /**
  * Entries as the cursor keeps them, joined by `.`: numeric (run) ids sorted and delta-encoded (`+<base36 delta>` after
- * the first), other ids packed by `packId`; then `@` when finished, with the end in base36 after it when kept.
+ * the first); statement references sorted by second, as `!<hash><base36 seconds>` (the first relative to `base`, the
+ * rest to the one before); other ids packed by `packId`; then `@` when finished, with the end in base36 after it when
+ * kept.
  */
 function encodeEntries(tracked: readonly Tracked[], base = 0): string {
   const unique = [...new Map(tracked.map((entry) => [entry.id, entry])).values()]
   const numeric = unique.filter((entry) => NUMERIC.test(entry.id)).sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0))
-  const other = unique.filter((entry) => !NUMERIC.test(entry.id))
+  const refs = unique.filter((entry) => parseRef(entry.id) !== undefined).sort((a, b) => parseRef(a.id)!.second - parseRef(b.id)!.second)
+  const other = unique.filter((entry) => !NUMERIC.test(entry.id) && parseRef(entry.id) === undefined)
   const suffix = (entry: Tracked) => (entry.end !== undefined ? `@${(entry.end - base).toString(36)}` : entry.done ? "@" : "")
   const parts: string[] = []
   let previous: bigint | undefined
@@ -196,14 +234,21 @@ function encodeEntries(tracked: readonly Tracked[], base = 0): string {
     parts.push(`${previous === undefined ? value.toString(36) : `+${(value - previous).toString(36)}`}${suffix(entry)}`)
     previous = value
   }
+  let second = Math.floor(base / 1000)
+  for (const entry of refs) {
+    const ref = parseRef(entry.id)!
+    parts.push(`!${ref.hash}${(ref.second - second).toString(36)}${suffix(entry)}`)
+    second = ref.second
+  }
   for (const entry of other) parts.push(`${packId(entry.id)}${suffix(entry)}`)
   return parts.join(".")
 }
 
-/** The entries of a packed set; `base` is the time its ends are kept relative to (the state's `t`, else 0). */
+/** The entries of a packed set; `base` is the time its ends and first reference are kept relative to (the state's `t`, else 0). */
 export const unpackIds = (packed: string | undefined, base = 0): Tracked[] => {
   const out: Tracked[] = []
   let previous: bigint | undefined
+  let second = Math.floor(base / 1000)
   for (const part of (packed ?? "").split(".").filter(Boolean)) {
     const at = part.indexOf("@")
     const head = at < 0 ? part : part.slice(0, at)
@@ -214,6 +259,12 @@ export const unpackIds = (packed: string | undefined, base = 0): Tracked[] => {
       for (const character of head.slice(1)) delta = delta * 36n + BigInt(Number.parseInt(character, 36))
       previous += delta
       id = previous.toString()
+    } else if (head.startsWith("!")) {
+      const match = /^!([A-Za-z0-9_-]{2})(-?[0-9a-z]{1,9})$/u.exec(head)
+      if (!match) continue
+      second += Number.parseInt(match[2]!, 36)
+      if (!Number.isSafeInteger(second) || second < 0) continue
+      id = `${second}~${match[1]}`
     } else {
       id = unpackId(head)
       if (id !== undefined && NUMERIC.test(id)) previous = BigInt(id)
