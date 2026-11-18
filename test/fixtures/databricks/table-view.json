@@ -1,0 +1,57 @@
+{
+  "name": "v_orders",
+  "catalog_name": "main",
+  "schema_name": "sales",
+  "full_name": "main.sales.v_orders",
+  "table_type": "VIEW",
+  "view_definition": "SELECT order_id, email FROM main.sales.orders",
+  "owner": "owner@example.com",
+  "comment": "Orders, with the email masked",
+  "columns": [
+    {
+      "name": "order_id",
+      "type_text": "bigint",
+      "type_name": "LONG",
+      "position": 0,
+      "nullable": false
+    },
+    {
+      "name": "email",
+      "type_text": "string",
+      "type_name": "STRING",
+      "position": 1,
+      "nullable": true,
+      "mask": {
+        "function_name": "main.governance.mask_email",
+        "using_column_names": []
+      }
+    }
+  ],
+  "row_filter": {
+    "function_name": "main.governance.region_filter",
+    "input_column_names": [
+      "region"
+    ]
+  },
+  "view_dependencies": {
+    "dependencies": [
+      {
+        "table": {
+          "table_full_name": "main.sales.orders"
+        }
+      },
+      {
+        "function": {
+          "function_full_name": "system.ai.python_exec"
+        }
+      },
+      {
+        "connection": {
+          "connection_name": "warehouse_http"
+        }
+      }
+    ]
+  },
+  "updated_at": 1794398400000,
+  "table_id": "00000000-0000-4000-8000-0000000000aa"
+}

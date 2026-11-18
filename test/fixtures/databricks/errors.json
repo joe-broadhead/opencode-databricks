@@ -1,0 +1,18 @@
+{
+  "rate_limited": {
+    "error_code": "REQUEST_LIMIT_EXCEEDED",
+    "message": "Too many requests. Retry after 12 seconds."
+  },
+  "server_error": {
+    "error_code": "TEMPORARILY_UNAVAILABLE",
+    "message": "The workspace is temporarily unavailable."
+  },
+  "not_found": {
+    "error_code": "RESOURCE_DOES_NOT_EXIST",
+    "message": "Table main.sales.missing does not exist."
+  },
+  "permission_denied": {
+    "error_code": "PERMISSION_DENIED",
+    "message": "User does not have SELECT on main.sales.orders."
+  }
+}

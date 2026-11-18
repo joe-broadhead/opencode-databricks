@@ -1,0 +1,85 @@
+{
+  "captured": "Hand-written from the Databricks REST reference's own examples on 17 Nov 2026, and sanitised: every host is an example or a storage host, every person is @example.com, every id is a UUID or a round number and every token is a placeholder. `node scripts/capture-fixtures.mjs` replaces them with answers recorded in the live check (design \u00a715.2); until then a test replays them through the fake.",
+  "files": {
+    "statement-succeeded-inline.json": {
+      "api": "POST /api/2.0/sql/statements (StatementResponse)",
+      "reference": "https://docs.databricks.com/api/statement-execution/v1/execute-statement",
+      "covers": "An INLINE + JSON_ARRAY answer with one row of every type the plugin converts: BIGINT beyond 2^53, DECIMAL, a double NaN, TIMESTAMP, TIMESTAMP_NTZ, DATE, BOOLEAN, STRING with a comma, BINARY, ARRAY, MAP, STRUCT, VARIANT, INTERVAL, NULL."
+    },
+    "statement-pending.json": {
+      "api": "POST /api/2.0/sql/statements (asynchronous)",
+      "reference": "https://docs.databricks.com/api/statement-execution/v1/execute-statement",
+      "covers": "The asynchronous answer: a statement id and status.state PENDING, with no manifest."
+    },
+    "statement-failed-parse.json": {
+      "api": "StatementResponse, status.state FAILED",
+      "reference": "https://docs.databricks.com/api/statement-execution/v1/statement-execution/object",
+      "covers": "A parse failure: status.error.error_code and message, and status.sql_state."
+    },
+    "statement-failed-permission.json": {
+      "api": "StatementResponse, status.state FAILED",
+      "reference": "https://docs.databricks.com/api/statement-execution/v1/statement-execution/object",
+      "covers": "A permission failure on a table read."
+    },
+    "statement-canceled.json": {
+      "api": "StatementResponse, status.state CANCELED",
+      "reference": "https://docs.databricks.com/api/statement-execution/v1/statement-execution/object",
+      "covers": "A statement cancelled, as on_wait_timeout: CANCEL leaves it."
+    },
+    "statement-external-links.json": {
+      "api": "StatementResponse with disposition EXTERNAL_LINKS",
+      "reference": "https://docs.databricks.com/api/statement-execution/v1/get-result-data",
+      "covers": "Two chunks of an ARROW_STREAM result: result.external_links with external_link, expiration, row/byte counts and next_chunk_index."
+    },
+    "explain.json": {
+      "api": "StatementResponse for an EXPLAIN",
+      "reference": "https://docs.databricks.com/api/statement-execution/v1/execute-statement",
+      "covers": "An EXPLAIN's single `plan` column and its three rows."
+    },
+    "history-queries.json": {
+      "api": "GET /api/2.0/sql/history/queries",
+      "reference": "https://docs.databricks.com/api/query-history/v1/list-queries",
+      "covers": "A Query History page: res[], query_id, statement_type, warehouse_id, duration, rows_produced, metrics.read_bytes, metrics.result_from_cache, query_tags as key/value objects, query_text, is_final and next_page_token."
+    },
+    "runs-list.json": {
+      "api": "GET /api/2.2/jobs/runs/list",
+      "reference": "https://docs.databricks.com/api/jobs/v2/list-runs",
+      "covers": "A finished run and a running one, with state.life_cycle_state and state.result_state."
+    },
+    "table-view.json": {
+      "api": "GET /api/2.1/unity-catalog/tables/{full_name}",
+      "reference": "https://docs.databricks.com/api/uc-tables/v1/table/object",
+      "covers": "A view with view_definition, view_dependencies (a table, a function and a connection), a column mask and a row_filter."
+    },
+    "functions.json": {
+      "api": "GET /api/2.1/unity-catalog/functions (list)",
+      "reference": "https://docs.databricks.com/api/uc-functions/v1/function/object",
+      "covers": "A SQL function with routine_definition and dependencies, and an EXTERNAL (Python) one with external_language."
+    },
+    "warehouses.json": {
+      "api": "GET /api/2.0/sql/warehouses",
+      "reference": "https://docs.databricks.com/api/warehouses/v1/warehouse/object",
+      "covers": "A running serverless warehouse, a stopped classic one and a starting one, with cluster sizes, auto-stop, clusters and statement_timeout."
+    },
+    "errors.json": {
+      "api": "Any Databricks REST error body",
+      "reference": "https://docs.databricks.com/api/workspace/errors",
+      "covers": "A 429 (REQUEST_LIMIT_EXCEEDED), a 5xx (TEMPORARILY_UNAVAILABLE), a 404 (RESOURCE_DOES_NOT_EXIST) and a 403 (PERMISSION_DENIED)."
+    },
+    "token.json": {
+      "api": "POST /oidc/v1/token",
+      "reference": "https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m",
+      "covers": "A U2M token answer: access_token, token_type, expires_in, refresh_token and scope."
+    },
+    "statement-chunk-inline.json": {
+      "api": "GET /api/2.0/sql/statements/{statement_id}/result/chunks/{chunk_index}",
+      "reference": "https://docs.databricks.com/api/statement-execution/v1/get-result-data",
+      "covers": "An INLINE chunk's body: data_array, chunk_index, row_count, row_offset and next_chunk_index at the top level (the nested result element's shape, not a StatementResponse)."
+    },
+    "statement-chunk-external-links.json": {
+      "api": "GET /api/2.0/sql/statements/{statement_id}/result/chunks/{chunk_index}",
+      "reference": "https://docs.databricks.com/api/statement-execution/v1/get-result-data",
+      "covers": "An EXTERNAL_LINKS chunk's body: external_links with external_link, expiration, chunk/row/byte counts and next_chunk_index, again at the top level."
+    }
+  }
+}

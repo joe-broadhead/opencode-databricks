@@ -1,0 +1,11 @@
+{
+  "statement_id": "00000000-0000-4000-8000-000000000004",
+  "status": {
+    "state": "FAILED",
+    "error": {
+      "error_code": "UNAUTHORIZED_ACCESS",
+      "message": "User does not have permission to read table main.sales.orders."
+    },
+    "sql_state": "42501"
+  }
+}
