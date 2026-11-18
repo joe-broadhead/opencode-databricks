@@ -55,8 +55,9 @@ stays up until it auto-stops. Unity Catalog reads are free. AI functions and job
 
 ## Clean up
 
-`databricks_status` lists the statements this plugin started that are still running, and each running warehouse this
-plugin started with its estimated $ per hour and idle time, each with one call. `/databricks-cleanup`, typed by you,
+`databricks_status` lists the statements this plugin started that are still running, and the running warehouses this
+plugin started (at most ten, the biggest $ per hour first) with their estimated $ per hour and idle time, each with one
+call. `/databricks-cleanup`, typed by you,
 reports the same and then stops or cancels what it lists. At Allowed, typing the command is the confirmation and stops
 every listed warehouse and cancels every listed read; at Ask before changes each action asks first; at Read only it
 reports and takes no action. Your own deny rules still win, action by action, at every level. Nothing in this plugin ever
