@@ -42,10 +42,10 @@ import type { PlanClassification } from "../../domain/statements.js"
 import { quoted } from "../../guards/pattern.js"
 import type { DatabricksPort } from "../../ports.js"
 import { SqlBaseLexer } from "../../sql/generated/SqlBaseLexer.js"
-import { type Parsed, contextName, parseStatement } from "../../sql/parse.js"
+import { type Parsed, contextName, lex, parseStatement } from "../../sql/parse.js"
 
-/** What a target is: a table or view, a Unity Catalog function, or a schema. */
-export type TargetKind = "table" | "function" | "schema"
+/** What a target is: a table or view, a Unity Catalog function, a schema, or a catalog. */
+export type TargetKind = "table" | "function" | "schema" | "catalog"
 
 /** A target as the text names it, before resolution. */
 export interface ChangeTarget {
@@ -148,25 +148,55 @@ function topOf(sql: string): { parsed: Parsed; top: ParserRuleContext } | undefi
  */
 export function changeTargets(sql: string): readonly ChangeTarget[] {
   const parsed = topOf(sql)
-  if (!parsed) return []
+  if (!parsed) return catalogDropTarget(sql)
   const kindName = contextName(parsed.top)
   if (kindName === "StatementDefaultContext") return []
   const targetKind = FUNCTION_KINDS.has(kindName) ? "function" : NAMESPACE_KINDS.has(kindName) ? "schema" : "table"
   const cascade = targetKind === "schema" && hasToken(parsed.top, SqlBaseLexer.CASCADE)
   const found: ChangeTarget[] = []
   const seen = new Set<string>()
+  const add = (parts: readonly string[], kind: TargetKind) => {
+    if (parts.length === 0 || parts.some((part) => part.length === 0)) return
+    const key = `${kind}:${parts.join(".")}`
+    if (seen.has(key)) return
+    seen.add(key)
+    found.push({ parts, kind, cascade, pathRead: parts.some((part) => /[/:\\]/u.test(part)) })
+  }
   for (const node of descendants(parsed.top, (child) => contextName(child) === "IdentifierReferenceContext")) {
     const multipart = (node as unknown as { multipartIdentifier(): ParserRuleContext | null }).multipartIdentifier()
     if (!multipart) continue // IDENTIFIER(…): a name chosen at run time, which no assert can see.
-    const parts = namePartsOf(multipart)
-    if (parts.length === 0 || parts.some((part) => part.length === 0)) continue
-    const key = `${targetKind}:${parts.join(".")}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    found.push({ parts, kind: targetKind, cascade, pathRead: parts.some((part) => /[/:\\]/u.test(part)) })
+    add(namePartsOf(multipart), targetKind)
+  }
+  // A rename names its new object with a plain `multipartIdentifier` — `ALTER (TABLE | VIEW) from=identifierReference
+  // RENAME TO to=multipartIdentifier` — not an identifierReference, so the loop above cannot see it. The destination is
+  // a target too: moving a table into another schema must be checked against that schema's rules (review round 2,
+  // R2-M1). A function rename is not in the pinned grammar and plans as `run` (the strictest) instead.
+  if (kindName === "RenameTableContext") {
+    const to = (parsed.top as unknown as { _to?: ParserRuleContext })._to
+    if (to) add(namePartsOf(to), "table")
   }
   return found
 }
+
+/**
+ * `DROP CATALOG <name>` (with `IF EXISTS`, and `CASCADE` or not) is not in the pinned grammar — `namespace` is
+ * NAMESPACE, DATABASE or SCHEMA — so it plans as `run`, the strictest. Its object is still knowable from the leading
+ * tokens, so it is a target: the person's rule is asked about `<account>:table:<name>.*.*` before anything is sent
+ * (review round 2, LOW 3). No other unparsed text claims a target.
+ */
+function catalogDropTarget(sql: string): readonly ChangeTarget[] {
+  const visible = lex(sql).tokens.filter((token) => token.channel === 0)
+  const isWord = (token: { type: number } | undefined, word: number) => token?.type === word
+  if (!isWord(visible[0], SqlBaseLexer.DROP) || !isWord(visible[1], SqlBaseLexer.CATALOG)) return []
+  let index = 2
+  if (isWord(visible[index], SqlBaseLexer.IF) && isWord(visible[index + 1], SqlBaseLexer.EXISTS)) index += 2
+  const name = visible[index]
+  if (!name?.text) return []
+  const parts = [name.text.replaceAll("`", "").toLowerCase()]
+  return parts[0] ? [{ parts, kind: "catalog", cascade: hasWord(visible, SqlBaseLexer.CASCADE), pathRead: false }] : []
+}
+
+const hasWord = (tokens: readonly { readonly type: number }[], type: number): boolean => tokens.some((token) => token.type === type)
 
 /** The dot-separated parts of a multipartIdentifier, unquoted and lower-cased. */
 function namePartsOf(ctx: ParserRuleContext): string[] {
@@ -198,6 +228,11 @@ const unqualified = (parts: readonly string[], kind: TargetKind, defaults: NameD
  */
 export function qualifyName(target: ChangeTarget, defaults: NameDefaults): string {
   const parts = target.parts
+  if (target.kind === "catalog") {
+    // A catalog name is one part: `DROP CATALOG main`.
+    if (parts.length === 1) return parts[0]!
+    throw unqualified(parts, target.kind, defaults)
+  }
   if (target.kind === "schema") {
     if (parts.length === 2) return parts.join(".")
     if (parts.length === 1 && defaults.catalog) return `${defaults.catalog}.${parts[0]}`
@@ -255,6 +290,11 @@ export async function resolveTargets(deps: TargetDeps, input: ResolveInput): Pro
       targets.push({ name, kind: "function", cascade: false, type: "FUNCTION" })
       continue
     }
+    if (target.kind === "catalog") {
+      // A catalog's own objects are schemas; the assert is the catalog-wide wildcard, which covers them.
+      targets.push({ name, kind: "catalog", cascade: target.cascade, type: "CATALOG" })
+      continue
+    }
     if (target.kind === "schema") {
       if (!target.cascade) {
         targets.push({ name, kind: "schema", cascade: false, type: "SCHEMA" })
@@ -304,7 +344,8 @@ export function categoryFor(classified: PlanClassification, checked: CheckedTarg
 /** The resource a target is asserted as (design §10.1's table resource, and this plugin's for the other two kinds). */
 export function targetResource(account: string, target: { readonly name: string; readonly kind: TargetKind }): string {
   const prefix = target.kind === "function" ? "function" : "table"
-  return `${account}:${prefix}:${target.name}${target.kind === "schema" ? ".*" : ""}`
+  const suffix = target.kind === "schema" ? ".*" : target.kind === "catalog" ? ".*.*" : ""
+  return `${account}:${prefix}:${target.name}${suffix}`
 }
 
 /** What an assert needs: the permission port, the account and the commit's own dotted action. */
@@ -327,15 +368,16 @@ export interface AssertInput {
  * rule it can offer — and a CASCADE adds nothing per object: the rule that covers the schema covers what it drops.
  */
 export async function assertTargets(deps: AssertDeps, input: AssertInput): Promise<void> {
-  for (const target of input.targets) {
+  const ask = async (resource: string) => {
     await deps.permission.assert(
-      {
-        action: input.action,
-        resource: targetResource(input.account, target),
-        sessionID: input.sessionID,
-        ...(input.messageID && input.callID ? { messageID: input.messageID, callID: input.callID } : {}),
-      },
+      { action: input.action, resource, sessionID: input.sessionID, ...(input.messageID && input.callID ? { messageID: input.messageID, callID: input.callID } : {}) },
       input.signal,
     )
+  }
+  for (const target of input.targets) {
+    await ask(targetResource(input.account, target))
+    // A CASCADE drops every object the plan listed, so each is asked about by name as well as by the schema's wildcard:
+    // a rule that names one table has to reach it (review round 2, LOW 1). The list was bounded and read at plan time.
+    for (const child of target.children ?? []) await ask(targetResource(input.account, { name: child, kind: "table" }))
   }
 }

@@ -119,7 +119,71 @@ describe("M1: every target is resolved fully and asserted", () => {
   })
 })
 
+describe("R2-M1: a rename's destination is a target too", () => {
+  it("refuses moving a table into a schema the person denies, and asserts both names", async () => {
+    // An ALTER is a write, so the rule that governs it is databricks.write.
+    const harness = ruled([{ action: "databricks.write", resource: "work:table:*.hr.*", effect: "deny" }], { tables: { "main.s.a": { tableType: "MANAGED" } } })
+    const planned = await plan({ sql: "ALTER TABLE main.s.a RENAME TO main.hr.b" }, harness)
+    expect(planned).toMatchObject({ state: "planned", category: "write" })
+    expect(planned.preview!.targets.map((target) => target.name)).toEqual(["main.s.a", "main.hr.b"])
+    await expect(commit("write", harness, planned.planId!)).rejects.toThrow(/denied/)
+    const asked = harness.permission.requests.map((request) => request.resource)
+    expect(asked).toContain("work:table:main.s.a")
+    expect(asked).toContain("work:table:main.hr.b")
+    expect(harness.statements()).toEqual([])
+  })
+
+  it("resolves a one-part destination with the catalog first, then the schema", async () => {
+    const harness = ruled([{ action: "databricks.write", resource: "work:table:*.hr.*", effect: "deny" }], { tables: { "main.s.a": {} } })
+    const planned = await plan({ sql: "ALTER TABLE main.s.a RENAME TO b", catalog: "main", schema: "hr" }, harness)
+    expect(planned.preview!.targets.map((target) => target.name)).toEqual(["main.s.a", "main.hr.b"])
+    await expect(commit("write", harness, planned.planId!)).rejects.toThrow(/denied: databricks.write on work:table:main.hr.b/)
+    expect(harness.statements()).toEqual([])
+  })
+
+  it("does the same for a view", async () => {
+    const harness = ruled([{ action: "databricks.write", resource: "work:table:*.hr.*", effect: "deny" }], { tables: { "main.s.v": { tableType: "VIEW" } } })
+    const planned = await plan({ sql: "ALTER VIEW main.s.v RENAME TO main.hr.w" }, harness)
+    expect(planned.preview!.targets.map((target) => target.name)).toEqual(["main.s.v", "main.hr.w"])
+    await expect(commit("write", harness, planned.planId!)).rejects.toThrow(/denied/)
+    expect(harness.statements()).toEqual([])
+  })
+
+  it("plans a function rename as run, because the pinned grammar does not parse ALTER FUNCTION", async () => {
+    const harness = changeHarness()
+    const planned = await plan({ sql: "ALTER FUNCTION main.hr.f RENAME TO main.hr.g" }, harness)
+    expect(planned).toMatchObject({ state: "planned", category: "run", commitWith: "databricks_run", preview: { parsed: false } })
+    expect(planned.preview!.targets).toEqual([])
+    expect(planned.preview!.notes.join(" ")).toMatch(/Databricks checks it at commit/)
+  })
+})
+
 describe("the review's LOWs", () => {
+  it("LOW 1: a CASCADE reaches a rule that names one of its tables", async () => {
+    const harness = ruled([denyDelete("work:table:main.hr.salaries")], { schemas: { "main.hr": ["salaries", "people"] } })
+    const planned = await plan({ sql: "DROP SCHEMA main.hr CASCADE" }, harness)
+    expect(planned).toMatchObject({ state: "planned" })
+    await expect(commit("delete", harness, planned.planId!)).rejects.toThrow(/denied: databricks.delete on work:table:main.hr.salaries/)
+    expect(harness.statements()).toEqual([])
+  })
+
+  it("LOW 3: DROP CATALOG is a target even though it plans as run", async () => {
+    const harness = changeHarness()
+    const planned = await plan({ sql: "DROP CATALOG main CASCADE" }, harness)
+    expect(planned).toMatchObject({ state: "planned", category: "run", commitWith: "databricks_run" })
+    expect(planned.preview!.targets).toEqual([{ name: "main", type: "CATALOG" }])
+    await commit("run", harness, planned.planId!)
+    expect(harness.permission.requests.map((request) => request.resource)).toContain("work:table:main.*.*")
+    expect(harness.statements()).toHaveLength(1)
+  })
+
+  it("LOW 3: a person's catalog rule refuses it, and IF EXISTS parses too", async () => {
+    const denied = ruled([{ action: "databricks.run", resource: "work:table:main.*.*", effect: "deny" }])
+    const planned = await plan({ sql: "DROP CATALOG IF EXISTS main CASCADE" }, denied)
+    expect(planned.preview!.targets).toEqual([{ name: "main", type: "CATALOG" }])
+    await expect(commit("run", denied, planned.planId!)).rejects.toThrow(/denied: databricks.run on work:table:main.\*\.\*/)
+    expect(denied.statements()).toEqual([])
+  })
   it("LOW 2: another session's plan is refused before the person is asked anything", async () => {
     const harness = changeHarness()
     const planned = await plan({ sql: "DELETE FROM main.s.t WHERE id = 1" }, harness)
