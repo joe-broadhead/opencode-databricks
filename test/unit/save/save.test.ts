@@ -1,7 +1,7 @@
 // databricks_save (design §8.2): every format read back, the link rules, the inline fallback, the caps and the path
 // rules. Nothing reaches Databricks: the harness's fake answers the submit and the links, and the Arrow bytes are a
 // stream Apache Arrow's own writer produced from invented values (the Arrow IPC format, `format/Message.fbs`).
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, existsSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, existsSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Bool, Float64, Int64, Utf8, tableFromArrays, tableFromIPC, tableToIPC, vectorFromArray } from "apache-arrow"
@@ -206,10 +206,12 @@ describe("databricks_save", () => {
     expect(String(answer.message)).toContain("the partial file was removed")
   })
 
-  it("streams a million rows without holding them in memory", async () => {
-    // 40 chunks of 25,000 Arrow rows: the reader decodes one chunk and the writer consumes it before the next is
-    // fetched, so the heap grows by the chunk, not the result.
+  it("streams a million rows: each chunk is written before the next is fetched, so the result never sits in memory", async () => {
+    // 40 chunks of 25,000 Arrow rows. What "streaming" means, measured exactly rather than by the process's heap (which
+    // a collection can shift by more than the bound): when chunk k is fetched, the temporary file already holds the rows
+    // of the k chunks before it, so at most one chunk is ever held.
     const chunkRows = 25_000
+    const chunks = 40
     const chunk = tableToIPC(
       tableFromArrays({
         id: vectorFromArray(Array.from({ length: chunkRows }, (_, index) => BigInt(index)), new Int64()) as never,
@@ -218,22 +220,31 @@ describe("databricks_save", () => {
       }),
       "stream",
     )
-    const linkFor = (index: number) => ({ chunkIndex: index, url: `https://bucket.s3.amazonaws.com/chunk/${index}`, expiration: new Date(Date.now() + 600_000).toISOString(), rowCount: chunkRows, byteCount: chunk.length, ...(index < 39 ? { nextChunkIndex: index + 1 } : {}) })
+    const linkFor = (index: number) => ({ chunkIndex: index, url: `https://bucket.s3.amazonaws.com/chunk/${index}`, expiration: new Date(Date.now() + 600_000).toISOString(), rowCount: chunkRows, byteCount: chunk.length, ...(index < chunks - 1 ? { nextChunkIndex: index + 1 } : {}) })
+    const folder = mkdtempSync(join(root, "million-"))
+    const writtenAtFetch: number[] = []
+    const temporarySize = () => {
+      const temporary = readdirSync(folder).find((name) => name.startsWith("million.csv.") && name.endsWith(".tmp"))
+      return temporary === undefined ? 0 : statSync(join(folder, temporary)).size
+    }
     const test = harness({
       options: { resultsDir: root },
       answers: {
         getWarehouse: () => Promise.resolve(warehouse()),
         submit: () => ({ statementId: "st-big", state: "SUCCEEDED", manifest, links: [linkFor(0)], nextChunkIndex: 1 }),
-        getChunk: (_account: unknown, _id: unknown, index: unknown) => Promise.resolve({ chunkIndex: Number(index), links: [linkFor(Number(index))], ...(Number(index) < 39 ? { nextChunkIndex: Number(index) + 1 } : {}) }),
-        fetchLink: () => Promise.resolve(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(chunk); controller.close() } })),
+        getChunk: (_account: unknown, _id: unknown, index: unknown) => Promise.resolve({ chunkIndex: Number(index), links: [linkFor(Number(index))], ...(Number(index) < chunks - 1 ? { nextChunkIndex: Number(index) + 1 } : {}) }),
+        fetchLink: () => {
+          writtenAtFetch.push(temporarySize())
+          return Promise.resolve(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(chunk); controller.close() } }))
+        },
       } as never,
     })
-    const before = process.memoryUsage().heapUsed
-    const answer = await runTool("save", { sql: "select * from main.s.t", format: "csv", path: join(root, "million.csv") }, test.call("million"), test.deps, HANDLERS)
-    const growth = process.memoryUsage().heapUsed - before
+    const answer = await runTool("save", { sql: "select * from main.s.t", format: "csv", path: join(folder, "million.csv") }, test.call("million"), test.deps, HANDLERS)
     expect(answer.state).toBe("ok")
     expect(answer.rows).toBe(1_000_000)
-    expect(growth).toBeLessThan(64 * 1024 * 1024)
+    expect(writtenAtFetch).toHaveLength(chunks)
+    // Every CSV row here is at least 10 bytes ("0,row-0,0\n"), so k chunks written are at least k × 250,000 bytes.
+    for (const [index, bytes] of writtenAtFetch.entries()) expect(bytes, `bytes on disk when chunk ${index} was fetched`).toBeGreaterThanOrEqual(index * chunkRows * 10)
   }, 120_000)
 
   it("refuses a symlinked folder under a root that points outside every root (review S1), and a symlinked target", async () => {
