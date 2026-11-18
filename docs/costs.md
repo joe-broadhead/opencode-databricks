@@ -12,6 +12,8 @@ Unofficial plugin. Not affiliated with Databricks. Figures are list prices fetch
   3X-Large 272, 4X-Large 528. List price about $0.70 per DBU on AWS.
 - **Example:** a Small serverless warehouse is about $8.40 an hour; started for one 2-second query with a 10-minute
   auto-stop, it costs about $1.40.
+- **Saved-query reads:** the `databricks.saved` source runs each read only on a warehouse that is already running,
+  which then stays up until it auto-stops. It never starts one.
 - **Separately billed:** AI functions, Model Serving, and materialized views and streaming tables (pipeline rates).
 
 ## The ledger and budgets

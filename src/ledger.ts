@@ -36,6 +36,15 @@ export function localDay(at: Date): string {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** The `start` lines of one account at or after `sinceMs`, oldest first (`LedgerPort.starts`). */
+export function startsOf(entries: readonly Charge[], account: string, sinceMs: number): { warehouseId: string; atMs: number; sessionId: string }[] {
+  return entries
+    .filter((entry) => entry.kind === "start" && entry.account === account)
+    .map((entry) => ({ warehouseId: entry.warehouseId, atMs: Date.parse(entry.at), sessionId: entry.sessionId ?? "" }))
+    .filter((start) => Number.isFinite(start.atMs) && start.atMs >= sinceMs)
+    .sort((a, b) => a.atMs - b.atMs)
+}
+
 export function createLedger(options: LedgerOptions = {}): LedgerPort {
   const path = options.path ?? defaultLedgerPath()
   const now = options.now ?? (() => new Date())
@@ -126,6 +135,7 @@ export function createLedger(options: LedgerOptions = {}): LedgerPort {
 
   return {
     totals: async (account, sessionId) => totals(account, sessionId ?? options.sessionId),
+    starts: async (account, sinceMs) => startsOf(entries(), account, sinceMs),
     async charge(charge, budget) {
       return locked(() => {
         const current = totals(charge.account, charge.sessionId)

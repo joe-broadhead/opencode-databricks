@@ -868,6 +868,9 @@ export const startFakeDatabricks: StartFake = async (seed = {}) => {
       const request = record(body)
       const token = text(request.idempotency_token)
       if (path === "/api/2.2/jobs/run-now" && count(request.job_id) === undefined) return failure(res, 400, "BAD_REQUEST", "job_id is required.")
+      // Run-now 2.2 documents `job_parameters` and no `notebook_params` (review of #7, M3): a strict fake refuses the
+      // undocumented field, so the client can never send parameters a job may ignore.
+      if (path === "/api/2.2/jobs/run-now" && "notebook_params" in request) return failure(res, 400, "INVALID_PARAMETER_VALUE", "notebook_params is not a run-now 2.2 field; use job_parameters.")
       const replay = token === "" ? undefined : replayed.get(token)
       if (replay !== undefined) return json(res, 200, { run_id: replay, number_in_job: replay })
       const runId = nextRunId++

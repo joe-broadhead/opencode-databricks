@@ -151,6 +151,8 @@ export const Inputs = {
     account: AccountInput,
     source: z.enum(["queries", "runs"]),
     cursor: z.string().max(65536).optional(),
+    /** The contract input's `since` (review of #8, request 5): where a first read starts, with an offset. */
+    since: z.string().datetime({ offset: true }).optional(),
     limit: z.number().int().min(1).max(1000).optional(),
     scope: z.record(z.string(), z.array(z.string())).optional(),
   }),
@@ -192,9 +194,21 @@ const AccountStatus = z.object({
   warehouse: z.object({ id: WarehouseId, state: WarehouseState, type: WarehouseType, size: z.string(), autoStopMinutes: z.number(), usdPerHour: z.number() }).optional(),
 })
 
-const Spend = z.object({ startsToday: z.number(), dbuHoursToday: z.number(), dbuHoursSession: z.number(), estimate: z.literal(true), budget: z.object({ state: z.enum(["off", "ok", "warn", "reached"]), limit: z.number().optional() }) })
+/**
+ * `reconciled` (review of #10, request 3): today's billed DBUs for the default warehouse from `system.billing.usage`.
+ * `complete` is always false: billing records arrive up to 12 hours late, and `usageDate` is a UTC date.
+ */
+const Spend = z.object({
+  startsToday: z.number(),
+  dbuHoursToday: z.number(),
+  dbuHoursSession: z.number(),
+  estimate: z.literal(true),
+  budget: z.object({ state: z.enum(["off", "ok", "warn", "reached"]), limit: z.number().optional() }),
+  reconciled: z.object({ warehouse: WarehouseId, usageDate: z.string(), dbu: z.number(), complete: z.literal(false) }).optional(),
+})
 
-const Running = z.object({ kind: z.enum(["statement", "run"]), id: z.string(), warehouse: z.string().optional(), startedAt: z.string(), tool: z.string() })
+/** Something this plugin started that is still running. `id` is the bare statement id or run id; `account` is its alias (review of #10, request 3). */
+const Running = z.object({ kind: z.enum(["statement", "run"]), account: z.string(), id: z.string(), warehouse: z.string().optional(), startedAt: z.string(), tool: z.string() })
 
 export const Outputs = {
   status: z.object({
@@ -285,7 +299,22 @@ export const Outputs = {
       reason: z.string().optional(),
     }).optional(),
   }),
-  events_list: z.object({ ...Base, ...Untrusted, events: z.array(z.unknown()), cursor: z.string().optional(), gap: z.object({ reason: z.enum(["window-truncated", "expired"]) }).optional(), failed: z.array(z.unknown()).optional(), refused: z.array(z.unknown()).optional() }),
+  /** The source contract's events page, as the RPC method answers it (review of #8: the widened output). */
+  events_list: z.object({
+    ...Base,
+    ...Untrusted,
+    source: z.enum(["queries", "runs"]).optional(),
+    account: z.string().optional(),
+    owner: z.object({ id: z.string(), label: z.string() }).optional(),
+    events: z.array(z.unknown()),
+    cursor: z.string().optional(),
+    more: z.boolean().optional(),
+    scope: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
+    gap: z.object({ reason: z.enum(["window-truncated", "expired"]), since: z.string() }).optional(),
+    failed: z.array(z.unknown()).optional(),
+    refused: z.array(z.unknown()).optional(),
+    plugin: z.string().optional(),
+  }),
   saved_read: z.object({ ...Base, ...Untrusted, table: z.object({ columns: z.array(z.string()).max(8), rows: z.array(z.array(z.unknown())).max(100) }).optional() }),
   save: z.object({ ...Base, path: z.string().optional(), format: z.enum(["csv", "jsonl", "parquet", "arrow"]).optional(), rows: z.number().optional(), bytes: z.number().optional(), sha256: z.string().optional(), statementId: z.string().optional(), charts: z.object({ path: z.string(), format: z.string(), rows: z.number(), fitsCharts: z.boolean() }).optional() }),
   write: z.object({ ...Base, statementId: z.string().optional(), rowsAffected: z.number().optional(), durationMs: z.number().optional() }),

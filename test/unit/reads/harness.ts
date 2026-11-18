@@ -4,7 +4,7 @@ import { DatabricksError } from "../../../src/domain/errors.js"
 import { createPlanStore } from "../../../src/domain/plans.js"
 import { loadOptions } from "../../../src/options.js"
 import type { Deps } from "../../../src/registry.js"
-import type { DatabricksPort, StatementAnswer, TableInfo, Warehouse } from "../../../src/ports.js"
+import type { AuthPort, DatabricksPort, StatementAnswer, TableInfo, Warehouse } from "../../../src/ports.js"
 import { FakeAuth, FakeReads, MemoryLedger, RecordingPermission, call, fakeClock, fakeDatabricks } from "../../fake/ports.js"
 
 /** A serverless `Small` warehouse that is running: what most tests are allowed to use. */
@@ -48,7 +48,8 @@ export interface HarnessInput {
   readonly options?: Record<string, unknown>
   readonly answers?: Partial<Record<keyof DatabricksPort, (...args: unknown[]) => unknown>>
   readonly permission?: RecordingPermission
-  readonly auth?: FakeAuth
+  /** Any auth port (review of #10, request 7); a `FakeAuth` when not given. */
+  readonly auth?: AuthPort
 }
 
 export interface Harness {
@@ -57,7 +58,7 @@ export interface Harness {
   readonly databricks: ReturnType<typeof fakeDatabricks>
   readonly ledger: MemoryLedger
   readonly clock: ReturnType<typeof fakeClock>
-  readonly auth: FakeAuth
+  readonly auth: AuthPort
   /** What a read tool's `call` looks like. */
   readonly call: (id?: string) => ReturnType<typeof call>
 }

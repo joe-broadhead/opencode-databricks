@@ -78,6 +78,29 @@ describe("the ledger", () => {
   })
 })
 
+describe("the ledger's start record (review of #10, request 4)", () => {
+  it("reads back this account's start lines since a time, oldest first, from what charge already writes", async () => {
+    const path = join(temp(), "spend.jsonl")
+    let now = Date.parse("2026-11-18T10:00:00Z")
+    const ledger = createLedger({ path, now: () => new Date(now) })
+    await ledger.charge({ account: "work", sessionId: "s1", warehouseId: "wh-a", kind: "start", dbuHours: 2 })
+    now += 60_000
+    await ledger.charge({ account: "work", sessionId: "s1", warehouseId: "wh-a", kind: "statement", dbuHours: 0.1, statementId: "st-1" })
+    await ledger.charge({ account: "other", sessionId: "s1", warehouseId: "wh-x", kind: "start", dbuHours: 2 })
+    now += 60_000
+    await ledger.charge({ account: "work", warehouseId: "wh-b", kind: "start", dbuHours: 1 })
+    const at = Date.parse("2026-11-18T10:00:00Z")
+    expect(await ledger.starts("work", 0)).toEqual([
+      { warehouseId: "wh-a", atMs: at, sessionId: "s1" },
+      { warehouseId: "wh-b", atMs: at + 120_000, sessionId: "" },
+    ])
+    expect(await ledger.starts("work", at + 1)).toEqual([{ warehouseId: "wh-b", atMs: at + 120_000, sessionId: "" }])
+    expect(await ledger.starts("nobody", 0)).toEqual([])
+    // It reads the lines another process wrote too: the ledger is the shared file, not this object's memory.
+    expect(await createLedger({ path }).starts("other", 0)).toEqual([{ warehouseId: "wh-x", atMs: at + 60_000, sessionId: "s1" }])
+  })
+})
+
 describe("the plan store", () => {
   it("binds a plan to its caller, uses it once, expires it, and bounds memory", () => {
     let now = 0

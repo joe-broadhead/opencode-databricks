@@ -46,7 +46,8 @@ serverless warehouse that bills until it auto-stops.
 ## Cost
 
 Queries run on a SQL warehouse your workspace bills by the hour while it runs. Starting a stopped one bills until it
-auto-stops. Unity Catalog reads are free. AI functions and jobs bill separately. [Costs](docs/costs.md) has the
+auto-stops. A saved-query source (`databricks.saved`) reads only on a warehouse that is already running, which then
+stays up until it auto-stops. Unity Catalog reads are free. AI functions and jobs bill separately. [Costs](docs/costs.md) has the
 numbers and their sources.
 
 ## Known limits
@@ -73,6 +74,7 @@ Every error has the form `CODE: What happened. Next step: What to do.`
 <!-- errors:start -->
 | Code | State | What happened | Next step |
 |---|---|---|---|
+| `ADMIN_DISABLED` | refused | Admin plans are turned off by this plugin's admin.enabled option. | Set admin.enabled to true, or make the change in Databricks. |
 | `ADMIN_REASON_REQUIRED` | refused | An admin plan needs a reason. | Plan again with reason. |
 | `AUTH_CLIENT_INVALID` | refused | Databricks refused the OAuth client, its scopes or its redirect URL. | Check the client ID; for invalid_scope choose the other scope set on the form; app changes can take 30 minutes. |
 | `AUTH_REQUIRED` | refused | No usable Databricks credential: none stored, a refresh failed, or the configured role differs from the one bound at sign-in. | Run /connect and choose Databricks, or run opencode auth login databricks-<alias>. |
@@ -113,7 +115,7 @@ Every error has the form `CODE: What happened. Next step: What to do.`
 | `SAVE_LIMIT` | refused | The result is larger than maxSaveRows or maxSaveBytes; the partial file was removed. | Filter or aggregate the query, or raise the limit. |
 | `SAVE_PATH_REFUSED` | refused | The save path is outside the project and allowedRoots. | Save under resultsDir, or add the folder to allowedRoots. |
 | `SECRET_FUNCTION_REFUSED` | refused | secret, try_secret and list_secrets are refused. | Do not read secrets through the agent. |
-| `SESSION_STATEMENT_REFUSED` | refused | SET, SET PATH, RESET, USE, DECLARE, temporary objects and other session statements are refused: the API keeps no session, and a changed path could redirect a function name. | Pass catalog, schema and params on the call instead. |
+| `SESSION_STATEMENT_REFUSED` | refused | SET, SET PATH, RESET, USE, DECLARE, temporary objects and other session statements are refused: the API keeps no session, and a changed path could redirect a function name. | Pass catalog, schema and params on the call instead; for SET TAG, write ALTER … SET TAGS, which plans as run. |
 | `SKILLS_INVALID` | refused | A packaged skill is missing or malformed. | Reinstall the plugin. |
 | `SQL_INVALID` | refused | The plugin's parser or Databricks rejected the SQL. | Fix it; databricks_table lists columns, and databricks_explain checks a read. |
 | `SQL_UNSUPPORTED` | refused | The pinned Spark grammar cannot parse this text, so it fails closed. | Rewrite it in standard Spark SQL, or plan it with databricks_plan, where it is category run. |
