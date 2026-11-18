@@ -24,7 +24,7 @@
  * 8. compares Query History's `statement_type` with the category (`src/drift.ts`) and reports a mismatch as a warning —
  *    the change has already run, so a bookkeeping difference never hides its statement id.
  */
-import { actionOf, COMMIT_TOOL, type Operation, type ToolName } from "../../domain/actions.js"
+import { actionOf, COMMIT_TOOL, type Operation, type ToolName, warehouseResource } from "../../domain/actions.js"
 import { DatabricksError } from "../../domain/errors.js"
 import type { Plan } from "../../domain/plans.js"
 import { classifyPlan } from "../../domain/statements.js"
@@ -56,7 +56,7 @@ function operationFor(payload: Plan["payload"]["kind"], fallback: Operation): Op
 function plannedTargets(plan: Plan): readonly ResolvedTarget[] {
   const policy = decodePolicy(plan.fingerprint.policy)
   if (policy?.targets) {
-    return policy.targets.map((target) => ({ name: target.name, kind: target.kind as TargetKind, cascade: false, ...(target.type ? { type: target.type } : {}), ...(target.children ? { children: target.children.map((child) => ({ name: child.name, kind: child.kind as "schema" | "table" })) } : {}) }))
+    return policy.targets.map((target) => ({ name: target.name, kind: target.kind as TargetKind, cascade: false, ...(target.type ? { type: target.type } : {}), ...(target.children ? { children: target.children.map((child) => ({ name: child.name, kind: child.kind as "schema" | "table" | "function" | "volume" })) } : {}) }))
   }
   return plan.fingerprint.targets.map((name) => ({ name, kind: "table" as const, cascade: false }))
 }
@@ -203,6 +203,12 @@ async function commitWarehouse(plan: Plan, call: Call, deps: CommitDeps): Promis
   if (plan.payload.kind !== "warehouse") throw new DatabricksError("PLAN_CHANGED", "The plan's payload is not a warehouse edit.")
   const payload = plan.payload
   const policy = decodePolicy(plan.fingerprint.policy)
+  // The warehouse is this change's target, so the person's rules are asked about it — the same resource a start uses
+  // (design §6.2) — after the tool's own assert and before any call (review of #7, R4-M2).
+  await deps.permission.assert(
+    { action: actionOf("admin"), resource: warehouseResource(plan.account, payload.id), sessionID: call.sessionID, ...(call.messageID && call.id ? { messageID: call.messageID, callID: call.id } : {}) },
+    call.signal,
+  )
   const current = await deps.databricks.getWarehouse(plan.account, payload.id, call.signal)
   if (policy?.warehouse) {
     const planned = policy.warehouse

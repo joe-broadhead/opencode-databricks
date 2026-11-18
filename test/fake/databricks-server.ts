@@ -669,6 +669,35 @@ export const startFakeDatabricks: StartFake = async (seed = {}) => {
       state.warehouses.set(id, { ...warehouse, state: warehouseAction[2] === "start" ? "RUNNING" : "STOPPED" })
       return json(res, 200, {})
     }
+    const warehouseEdit = /^\/api\/2\.0\/sql\/warehouses\/([^/]+)\/edit$/u.exec(path)
+    if (warehouseEdit && method === "POST") {
+      // `POST /api/2.0/sql/warehouses/{id}/edit` documents these optional fields and no others
+      // (https://docs.databricks.com/api/warehouses/v1/edit-warehouse.md); the fake refuses an undocumented one.
+      const id = decodeURIComponent(warehouseEdit[1] ?? "")
+      const warehouse = state.warehouses.get(id)
+      if (!warehouse) return notFound(res, "The warehouse")
+      const request = record(body)
+      const documented = ["name", "cluster_size", "min_num_clusters", "max_num_clusters", "auto_stop_mins", "creator_name", "instance_profile_arn", "tags", "spot_instance_policy", "enable_photon", "channel", "enable_serverless_compute", "warehouse_type", "statement_timeout"]
+      const unknown = Object.keys(request).find((field) => !documented.includes(field))
+      if (unknown) return failure(res, 400, "INVALID_PARAMETER_VALUE", `The edit body has no field ${unknown}.`)
+      const size = text(request.cluster_size)
+      const autoStop = count(request.auto_stop_mins)
+      const min = count(request.min_num_clusters)
+      const max = count(request.max_num_clusters)
+      const type = text(request.warehouse_type).toUpperCase()
+      state.warehouses.set(id, {
+        ...warehouse,
+        ...(text(request.name) ? { name: text(request.name) } : {}),
+        ...(size ? { clusterSize: size } : {}),
+        ...(autoStop !== undefined ? { autoStopMins: autoStop } : {}),
+        ...(min !== undefined ? { minNumClusters: min } : {}),
+        ...(max !== undefined ? { maxNumClusters: max } : {}),
+        ...(request.enable_serverless_compute !== undefined ? { serverless: request.enable_serverless_compute === true } : {}),
+        ...(type === "PRO" || type === "CLASSIC" ? { warehouseType: type } : {}),
+        ...(count(request.statement_timeout) !== undefined ? { statementTimeoutSeconds: count(request.statement_timeout) } : {}),
+      })
+      return json(res, 200, {})
+    }
 
     // Statement Execution.
     if (path === "/api/2.0/sql/statements" && method === "POST") return submit(res, body)
@@ -832,6 +861,25 @@ export const startFakeDatabricks: StartFake = async (seed = {}) => {
       const jobs = new Map<number, { name: string; creatorUserName?: string }>(state.jobs)
       for (const run of state.runs) if (run.jobId !== undefined && !jobs.has(run.jobId)) jobs.set(run.jobId, { name: run.runName ?? `Job ${run.jobId}` })
       return json(res, 200, { jobs: [...jobs.entries()].map(([jobId, job]) => ({ job_id: jobId, settings: { name: job.name }, creator_user_name: job.creatorUserName ?? state.identity.userName })), has_more: false })
+    }
+    if (path === "/api/2.2/jobs/get" && method === "GET") {
+      // `GET /api/2.2/jobs/get?job_id=` (https://docs.databricks.com/api/jobs/v2/get-job.md): `job_id` is required and
+      // the settings carry `name`, `timeout_seconds` and each task's `task_key`, cluster and `timeout_seconds`.
+      const jobId = Number(url.searchParams.get("job_id") ?? Number.NaN)
+      if (Number.isNaN(jobId)) return failure(res, 400, "BAD_REQUEST", "job_id is required.")
+      const seeded = state.jobs.get(jobId)
+      const run = state.runs.find((entry) => entry.jobId === jobId)
+      if (!seeded && !run) return notFound(res, "The job")
+      return json(res, 200, {
+        job_id: jobId,
+        creator_user_name: seeded?.creatorUserName ?? state.identity.userName,
+        run_as_user_name: state.identity.userName,
+        settings: {
+          name: seeded?.name ?? run?.runName ?? `Job ${jobId}`,
+          timeout_seconds: 3600,
+          tasks: [{ task_key: "main", new_cluster: { node_type_id: "Standard_DS3_v2", num_workers: 2 }, timeout_seconds: 1800 }],
+        },
+      })
     }
     if (path === "/api/2.2/jobs/runs/list" && method === "GET") {
       const jobParam = url.searchParams.get("job_id")

@@ -6,7 +6,14 @@ import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import type { StatementRequest } from "../../../src/ports.js"
 import { createDatabricksClient } from "../../../src/process/client.js"
-import { FakeAuth } from "../../fake/ports.js"
+import { call as fakeCall, FakeAuth, FakeReads, MemoryLedger, RecordingPermission } from "../../fake/ports.js"
+import { createPlanStore } from "../../../src/domain/plans.js"
+import { loadOptions } from "../../../src/options.js"
+import type { Deps } from "../../../src/registry.js"
+import { HANDLERS } from "../../../src/registry.js"
+import { runTool } from "../../../src/tool-spec.js"
+import { accountOf, fakeAuth } from "../runtime/support.js"
+import { startFakeDatabricks } from "../../fake/databricks-server.js"
 import { DocumentedApi, historyRecord } from "./fixtures/api.js"
 import { STATEMENT_SUCCEEDED_NO_RESULT } from "./fixtures/workspace.js"
 
@@ -119,4 +126,68 @@ describe("the real client against the documented fake", () => {
     api.mustNotReject()
   })
 
+})
+
+/**
+ * The whole change path over package B's loopback fake: a job **plan** (which needs the client's `getJob`) and a
+ * warehouse edit's **commit** (which needs `editWarehouse`). Nothing leaves the machine: the fake answers the
+ * documented `GET /api/2.2/jobs/get` and `POST /api/2.0/sql/warehouses/{id}/edit`.
+ */
+describe("the real client's getJob and editWarehouse, end to end", () => {
+  const depsOver = async (features: readonly ("jobs" | "workspace" | "files")[] = ["jobs"]) => {
+    const fake = await startFakeDatabricks({ jobs: new Map([[10, { name: "nightly", creatorUserName: "user@example.com" }]]) })
+    const account = accountOf(fake, { features: [...features], warehouse: "wh-small" })
+    const auth = fakeAuth(account)
+    const client = createDatabricksClient({ auth })
+    const options = loadOptions({ accounts: { work: { warehouse: "wh-small", features: [...features] } } })
+    const clock = { now: Date.now, uuid: () => "00000000-0000-4000-8000-000000000001" }
+    const deps: Deps = {
+      options,
+      access: options.access,
+      auth,
+      databricks: client,
+      reads: new FakeReads(),
+      ledger: new MemoryLedger(),
+      plans: createPlanStore({ ttlSeconds: 300, now: clock.now }),
+      permission: new RecordingPermission(),
+      clock,
+    }
+    return { fake, client, deps, signal: new AbortController().signal }
+  }
+
+  it("plans a job run from the job's own settings", async () => {
+    const { fake, deps, signal } = await depsOver()
+    try {
+      const planned = (await runTool("plan", { job: { jobId: 10 } }, fakeCall(), deps, HANDLERS)) as Record<string, unknown>
+      expect(planned).toMatchObject({ state: "planned", category: "run", commitWith: "databricks_run", preview: { kind: "job" } })
+      const notes = ((planned.preview as { notes: string[] }).notes).join(" ")
+      expect(notes).toMatch(/`nightly`/)
+      expect(notes).toMatch(/`main` on a job cluster of `Standard_DS3_v2` with 2 workers/)
+      expect(notes).toMatch(/timeout_seconds 3600, which stops it/)
+      expect(fake.requests.filter((request: { path: string }) => request.path === "/api/2.2/jobs/get")).toHaveLength(1)
+      expect(signal.aborted).toBe(false)
+    } finally {
+      await fake.close()
+    }
+  })
+
+  it("commits a warehouse edit through the documented body, read back with the change applied", async () => {
+    const { fake, client, deps, signal } = await depsOver()
+    try {
+      const planned = (await runTool("plan", { warehouse: { id: "wh-small", edit: { size: "Medium", autoStopMinutes: 0 } }, reason: "the nightly load needs more" }, fakeCall(), deps, HANDLERS)) as Record<string, unknown>
+      expect(planned).toMatchObject({ state: "planned", category: "admin" })
+      const answer = (await runTool("admin", { planId: planned.planId }, fakeCall("call_admin"), deps, HANDLERS)) as Record<string, unknown>
+      expect(answer).toMatchObject({ state: "ok" })
+      const edit = fake.requests.find((request: { path: string }) => request.path === "/api/2.0/sql/warehouses/wh-small/edit")
+      expect(edit).toBeDefined()
+      expect(edit!.body).toMatchObject({ cluster_size: "Medium", auto_stop_mins: 0 })
+      // The body is the warehouse read back, not a partial one: the fields the plan did not change are echoed.
+      expect(edit!.body).toMatchObject({ name: expect.any(String) })
+      // The read-back keeps the fields the edit did not name, and the change is visible afterwards.
+      const after = await client.getWarehouse("work", "wh-small", signal)
+      expect(after).toMatchObject({ clusterSize: "Medium", autoStopMins: 0 })
+    } finally {
+      await fake.close()
+    }
+  })
 })

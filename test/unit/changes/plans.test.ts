@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest"
 import type { Output } from "../../../src/domain/contract.js"
 import { HANDLERS } from "../../../src/registry.js"
 import { runTool } from "../../../src/tool-spec.js"
+import { defaultRules, effectOf } from "../../../src/permissions.js"
+import { RecordingPermission } from "../../fake/ports.js"
 import { changeHarness, NOTEBOOK_PATH, recorded, RUNNING_WAREHOUSE, type ChangeHarness } from "./harness.js"
 
 const plan = async (input: Record<string, unknown>, harness: ChangeHarness = changeHarness()): Promise<Output<"plan">> =>
@@ -139,8 +141,8 @@ describe("a warehouse edit plan", () => {
     const edits = harness.calls.filter((entry) => entry.method === "editWarehouse")
     expect(edits).toHaveLength(1)
     expect(edits[0]!.args.slice(0, 3)).toEqual(["work", "wh-small", { clusterSize: "Medium", autoStopMins: 5 }])
-    // The commit asserts its own action on the operation it uses (design §10.1).
-    expect(harness.permission.requests.filter((request) => request.action === "databricks.admin")).toEqual([expect.objectContaining({ resource: "work:sql.warehouses.edit" })])
+    // The commit asserts its own action on the operation it uses, then the warehouse itself (design §10.1, R4-M2).
+    expect(harness.permission.requests.filter((request) => request.action === "databricks.admin").map((request) => request.resource)).toEqual(["work:sql.warehouses.edit", "work:warehouse:wh-small"])
     expect(harness.statements()).toEqual([])
   })
 
@@ -150,6 +152,22 @@ describe("a warehouse edit plan", () => {
     harness.setWarehouse({ ...RUNNING_WAREHOUSE, clusterSize: "Large" })
     expect(await commit("admin", harness, planned.planId!)).toMatchObject({ error: "PLAN_CHANGED", message: expect.stringContaining("changed since the plan was made") })
     expect(harness.calls.filter((entry) => entry.method === "editWarehouse")).toEqual([])
+  })
+
+  it("R4-M2 (W1): a person's rule on the warehouse refuses the edit, and nothing is sent", async () => {
+    const rules = [{ action: "*", resource: "*", effect: "allow" as const }, ...defaultRules("all"), { action: "databricks.admin", resource: "work:warehouse:wh-small", effect: "deny" as const }]
+    const permission = new RecordingPermission((request) => (effectOf(rules, request.action, request.resource) === "deny" ? "deny" : "allow"))
+    const harness = changeHarness({ permission })
+    const planned = await plan({ warehouse: { id: "wh-small", edit: { size: "4X-Large" } }, reason: "grow" }, harness)
+    await expect(commit("admin", harness, planned.planId!)).rejects.toThrow(/denied: databricks.admin on work:warehouse:wh-small/)
+    expect(harness.calls.filter((entry) => entry.method === "editWarehouse")).toEqual([])
+    expect(harness.calls.filter((entry) => entry.method === "getWarehouse")).toHaveLength(1) // the plan's own read only
+  })
+
+  it("LOW 2: autoStopMinutes 0 is previewed as never auto-stopping", async () => {
+    const harness = changeHarness()
+    const planned = await plan({ warehouse: { id: "wh-small", edit: { autoStopMinutes: 0 } }, reason: "keep it warm" }, harness)
+    expect(planned.preview!.notes.join(" ")).toMatch(/never auto-stops: it bills until someone stops it/)
   })
 
   it("refuses a statement_timeout in an edit, which the edit body cannot carry", async () => {

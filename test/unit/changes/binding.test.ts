@@ -80,7 +80,7 @@ describe("M1: every target is resolved fully and asserted", () => {
     const harness = changeHarness({ schemas: { "main.hr": ["salaries", "people", "payroll"] } })
     const planned = await plan({ sql: "DROP SCHEMA main.hr CASCADE" }, harness)
     expect(planned).toMatchObject({ state: "planned", category: "delete" })
-    expect(planned.preview!.notes.join(" ")).toMatch(/CASCADE: its 3 objects go with it/)
+    expect(planned.preview!.notes.join(" ")).toMatch(/CASCADE: 3 objects will be checked against your rules/)
     expect(harness.calls.filter((entry) => entry.method === "listTables")).toHaveLength(1)
     // The commit re-lists the contents and asserts the schema-level rule.
     await commit("delete", harness, planned.planId!)
@@ -182,7 +182,7 @@ describe("the review's LOWs", () => {
     const harness = ruled([{ action: "databricks.run", resource: "work:table:*.hr.*", effect: "deny" }], { catalogs: { main: ["hr", "s"] }, schemas: { "main.hr": ["salaries", "people"], "main.s": ["one"] } })
     const planned = await plan({ sql: "DROP CATALOG main CASCADE" }, harness)
     expect(planned).toMatchObject({ state: "planned", category: "run", commitWith: "databricks_run" })
-    expect(planned.preview!.notes.join(" ")).toMatch(/2 schemas and 3 objects go with it/)
+    expect(planned.preview!.notes.join(" ")).toMatch(/CASCADE: 2 schemas and 3 objects will be checked against your rules/)
     await expect(commit("run", harness, planned.planId!)).rejects.toThrow(/denied: databricks.run on work:table:main.hr.\*/)
     const asked = harness.permission.requests.map((request) => request.resource)
     expect(asked).toContain("work:table:main.*.*")
@@ -197,6 +197,37 @@ describe("the review's LOWs", () => {
     const asked = harness.permission.requests.map((request) => request.resource).filter((resource) => resource.startsWith("work:table:main"))
     expect(asked).toEqual(["work:table:main.*.*", "work:table:main.hr.*", "work:table:main.hr.people", "work:table:main.hr.salaries", "work:table:main.s.*", "work:table:main.s.one"])
     expect(harness.statements()).toHaveLength(1)
+  })
+
+  it("round 4 (LOW 3): a CASCADE lists functions and volumes, and a function rule refuses it", async () => {
+    const harness = ruled([{ action: "databricks.delete", resource: "work:function:*.hr.*", effect: "deny" }], { schemas: { "main.hr": ["salaries"] }, functionNames: { "main.hr": ["f"] }, volumeNames: { "main.hr": ["v"] } })
+    const planned = await plan({ sql: "DROP SCHEMA main.hr CASCADE" }, harness)
+    expect(planned.preview!.notes.join(" ")).toMatch(/CASCADE: 3 objects will be checked against your rules/)
+    await expect(commit("delete", harness, planned.planId!)).rejects.toThrow(/denied: databricks.delete on work:function:main.hr.f/)
+    const asked = harness.permission.requests.map((request) => request.resource)
+    expect(asked).toContain("work:table:main.hr.*")
+    expect(asked).toContain("work:table:main.hr.salaries")
+    expect(asked).toContain("work:function:main.hr.f")
+    expect(harness.statements()).toEqual([])
+  })
+
+  it("round 4 (LOW 3): a volume is asserted under its own resource", async () => {
+    const harness = changeHarness({ schemas: { "main.hr": [] }, functionNames: { "main.hr": [] }, volumeNames: { "main.hr": ["v"] } })
+    const planned = await plan({ sql: "DROP SCHEMA main.hr CASCADE" }, harness)
+    await commit("delete", harness, planned.planId!)
+    expect(harness.permission.requests.map((request) => request.resource)).toContain("work:volume:main.hr.v")
+  })
+
+  it("round 4 (LOW 3): refuses a CASCADE whose function list cannot be read", async () => {
+    const harness = changeHarness()
+    const broken = new Proxy(harness.deps.databricks, {
+      get(target, name, receiver) {
+        if (name === "listFunctions") return async () => Promise.reject(new Error("the list failed"))
+        return Reflect.get(target, name, receiver)
+      },
+    })
+    const planned = (await runTool("plan", { sql: "DROP SCHEMA main.hr CASCADE" }, harness.call(), { ...harness.deps, databricks: broken }, HANDLERS)) as Output<"plan">
+    expect(planned).toMatchObject({ error: "FENCED", next: expect.stringContaining("SQL editor") })
   })
 
   it("round 3: refuses a catalog CASCADE whose schema list cannot be read, with a next step", async () => {
@@ -223,7 +254,7 @@ describe("the review's LOWs", () => {
   it("round 3: an empty catalog asserts only the catalog itself", async () => {
     const harness = changeHarness({ catalogs: { main: [] } })
     const planned = await plan({ sql: "DROP CATALOG main CASCADE" }, harness)
-    expect(planned.preview!.notes.join(" ")).toMatch(/0 schemas and 0 objects/)
+    expect(planned.preview!.notes.join(" ")).toMatch(/CASCADE: 0 schemas and 0 objects will be checked against your rules/)
     await commit("run", harness, planned.planId!)
     const asked = harness.permission.requests.map((request) => request.resource)
     expect(asked).toContain("work:table:main.*.*")

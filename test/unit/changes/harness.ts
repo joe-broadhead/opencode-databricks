@@ -37,6 +37,10 @@ export interface ChangeHarnessInput {
   readonly schemas?: Readonly<Record<string, readonly string[]>>
   /** Schemas per catalog, for `schemas.list` (a `DROP CATALOG … CASCADE`). */
   readonly catalogs?: Readonly<Record<string, readonly string[]>>
+  /** Functions per `<catalog>.<schema>`, for `functions.list` (a CASCADE's functions). */
+  readonly functionNames?: Readonly<Record<string, readonly string[]>>
+  /** Volumes per `<catalog>.<schema>`, for `volumes.list` (a CASCADE's volumes). */
+  readonly volumeNames?: Readonly<Record<string, readonly string[]>>
   readonly runs?: readonly RunInfo[]
   /** The statement answer for every submit, in the documented shape. */
   readonly statement?: (statement: string) => Record<string, unknown>
@@ -54,6 +58,10 @@ export interface ChangeHarness {
   readonly schemas: Map<string, string[]>
   /** `schemas.list`'s answer per catalog, for a `DROP CATALOG … CASCADE`. */
   readonly catalogs: Map<string, string[]>
+  /** `functions.list`'s answer per `<catalog>.<schema>`. */
+  readonly functions: Map<string, string[]>
+  /** `volumes.list`'s answer per `<catalog>.<schema>`. */
+  readonly volumes: Map<string, string[]>
   /** `getJob`'s answer per job: change it to move a job between plan and commit. */
   readonly jobSettings: Map<number, JobInfo>
   /** Moves the warehouse under a plan or a commit, for the policy's TOCTOU and PLAN_CHANGED cases. */
@@ -104,6 +112,8 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
   )
   const schemas = new Map(Object.entries(input.schemas ?? { "main.hr": ["salaries", "people"] }).map(([name, names]) => [name, [...names]]))
   const catalogs = new Map(Object.entries(input.catalogs ?? { main: ["hr", "s"] }).map(([name, names]) => [name, [...names]]))
+  const functions = new Map(Object.entries(input.functionNames ?? {}).map(([name, names]) => [name, [...names]]))
+  const volumes = new Map(Object.entries(input.volumeNames ?? {}).map(([name, names]) => [name, [...names]]))
   const base = fakeDatabricks({
     getWarehouse: () => Promise.resolve(warehouse),
     startWarehouse: () => {
@@ -112,6 +122,20 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
     },
     stopWarehouse: () => Promise.resolve(undefined),
     me: () => ({ id: "42", userName: "user@example.com", displayName: "User" }),
+    listFunctions: (_account, catalog, schema, page) => {
+      const paging = page as { readonly pageToken?: string } | undefined
+      const names = functions.get(`${String(catalog)}.${String(schema)}`) ?? []
+      const start = paging?.pageToken ? Number(paging.pageToken) : 0
+      const items = names.slice(start, start + 100).map((name) => ({ name, routineBody: "SQL" }))
+      return Promise.resolve({ items, ...(start + 100 < names.length ? { nextPageToken: String(start + 100) } : {}) })
+    },
+    listVolumes: (_account, catalog, schema, page) => {
+      const paging = page as { readonly pageToken?: string } | undefined
+      const names = volumes.get(`${String(catalog)}.${String(schema)}`) ?? []
+      const start = paging?.pageToken ? Number(paging.pageToken) : 0
+      const items = names.slice(start, start + 100).map((name) => ({ name, volumeType: "MANAGED" }))
+      return Promise.resolve({ items, ...(start + 100 < names.length ? { nextPageToken: String(start + 100) } : {}) })
+    },
     getJob: (_account, jobId) => {
       const settings = jobSettings.get(Number(jobId))
       if (!settings) return Promise.reject(new DatabricksError("NOT_FOUND"))
@@ -162,6 +186,8 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
     auth,
     schemas,
     catalogs,
+    functions,
+    volumes,
     jobSettings,
     setWarehouse: (next) => {
       warehouse = next

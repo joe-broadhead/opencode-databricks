@@ -260,10 +260,12 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
   }
   const before = usdPerHour(current, deps.options)
   const after = edit.edit.size === undefined ? before : usdPerHour({ ...current, clusterSize: String(edit.edit.size) }, deps.options)
+  const resultingAutoStop = typeof edit.edit.autoStopMinutes === "number" ? edit.edit.autoStopMinutes : current.autoStopMins
   const notes = [
     `A warehouse edit of ${describeWarehouse(current, deps.options)}: an administrative change through the control plane, free by itself.`,
     `Changes: ${changes.map((change) => `${change.field} ${change.from} → ${change.to}`).join("; ")}.`,
     `The rate is about $${before.toFixed(2)}/hour now and about $${after.toFixed(2)}/hour after, while the warehouse runs (a list-price estimate).`,
+    ...(resultingAutoStop === 0 ? ["It never auto-stops: it bills until someone stops it, as an idle warehouse accumulates DBU charges until it is stopped."] : []),
     "Committing re-reads the warehouse first: a size or cluster bound that changed since this preview is PLAN_CHANGED.",
   ]
   const preview: Preview = { kind: "warehouse", parsed: false, targets: [], tables: [], functions: [], notes, ...(input.reason ? { reason: input.reason } : {}) }

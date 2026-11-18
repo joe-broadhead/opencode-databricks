@@ -29,12 +29,15 @@ import type {
   FunctionInfo,
   HistoryQuery,
   Identity,
+  JobCompute,
+  JobInfo,
   Page,
   RunInfo,
   StatementAnswer,
   StatementRequest,
   TableInfo,
   Warehouse,
+  WarehouseEdit,
   WarehouseState,
 } from "../ports.js"
 import { type Fetch, type QueryValue, Statements, WorkspaceHttp } from "./http.js"
@@ -171,6 +174,61 @@ export function toRun(value: unknown): RunInfo {
   }
 }
 
+/**
+ * Where one task of a job runs, from `GET /api/2.2/jobs/get`'s task settings: `existing_cluster_id` is an all-purpose
+ * cluster, `new_cluster` is a job cluster (its `node_type_id`, `num_workers` or `autoscale`), and a task with neither is
+ * serverless — the documented serverless task carries an `environment_key` and no cluster
+ * (https://docs.databricks.com/api/jobs/v2/get-job.md, `TaskSettings`).
+ */
+export function toJobCompute(value: unknown): JobCompute {
+  const task = record(value)
+  const existing = maybeText(task.existing_cluster_id)
+  if (existing) return { kind: "existing", clusterId: existing }
+  const cluster = record(task.new_cluster)
+  const nodeTypeId = maybeText(cluster.node_type_id)
+  const numWorkers = count(cluster.num_workers)
+  const autoscale = record(cluster.autoscale)
+  const min = count(autoscale.min_workers)
+  const max = count(autoscale.max_workers)
+  if (nodeTypeId || numWorkers !== undefined || (min !== undefined && max !== undefined)) {
+    return {
+      kind: "job-cluster",
+      ...(nodeTypeId ? { nodeTypeId } : {}),
+      ...(numWorkers !== undefined ? { numWorkers } : {}),
+      ...(min !== undefined && max !== undefined ? { autoscale: { min, max } } : {}),
+    }
+  }
+  return { kind: "serverless" }
+}
+
+/** One job's settings (`GET /api/2.2/jobs/get`); `timeout_seconds` 0 is documented as "no timeout". */
+export function toJobInfo(value: unknown): JobInfo {
+  const job = record(value)
+  const settings = record(job.settings)
+  const timeout = count(settings.timeout_seconds)
+  return {
+    jobId: count(job.job_id) ?? 0,
+    name: text(settings.name),
+    ...(maybeText(job.creator_user_name) ? { creatorUserName: maybeText(job.creator_user_name) } : {}),
+    ...(maybeText(job.run_as_user_name) ? { runAsUserName: maybeText(job.run_as_user_name) } : {}),
+    ...(timeout !== undefined ? { timeoutSeconds: timeout } : {}),
+    tasks: list(settings.tasks)
+      .map(record)
+      .map((task) => {
+        const taskTimeout = count(task.timeout_seconds)
+        return { taskKey: text(task.task_key), compute: toJobCompute(task), ...(taskTimeout !== undefined ? { timeoutSeconds: taskTimeout } : {}) }
+      }),
+  }
+}
+
+/**
+ * The fields `POST /api/2.0/sql/warehouses/{id}/edit` documents
+ * (https://docs.databricks.com/api/warehouses/v1/edit-warehouse.md). The body is a set of optional fields whose omitted
+ * ones take documented defaults (`auto_stop_mins` defaults to 120, `enable_photon` to true, …), so the client sends the
+ * warehouse read back with only the changed fields replaced: a partial body would silently reset the rest.
+ */
+const WAREHOUSE_EDIT_FIELDS = ["name", "cluster_size", "min_num_clusters", "max_num_clusters", "auto_stop_mins", "creator_name", "instance_profile_arn", "tags", "spot_instance_policy", "enable_photon", "channel", "enable_serverless_compute", "warehouse_type", "statement_timeout"] as const
+
 /** Base64 → text, for `workspace/export`'s `content`. */
 function decodeBase64(value: string): string {
   try {
@@ -269,14 +327,25 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       }
     },
 
-    // Contract amendment for package D (review of #7, requests 1 and 2): the port has `editWarehouse` and `getJob`;
-    // package B builds both from their documented pages. Until then they refuse, and send nothing.
-    async editWarehouse(): Promise<void> {
-      throw new DatabricksError("NOT_IMPLEMENTED", "Editing a warehouse is not built yet (package B: sql.warehouses.edit).")
+    /**
+     * `POST /api/2.0/sql/warehouses/{id}/edit` (`sql.warehouses.edit`): the warehouse read back with the plan's fields
+     * replaced, because the body's omitted fields take documented defaults (see `WAREHOUSE_EDIT_FIELDS`). A 404 is
+     * `NOT_FOUND` and a 403 `PERMISSION_DENIED`, as everywhere else in this client.
+     */
+    async editWarehouse(account: string, id: string, edit: WarehouseEdit, signal: AbortSignal): Promise<void> {
+      const current = record(await call(account, "sql.warehouses.get", "GET", `/api/2.0/sql/warehouses/${encodeURIComponent(id)}`, { idempotent: true, signal }))
+      const body: Record<string, unknown> = {}
+      for (const field of WAREHOUSE_EDIT_FIELDS) if (current[field] !== undefined) body[field] = current[field]
+      if (edit.clusterSize !== undefined) body.cluster_size = edit.clusterSize
+      if (edit.autoStopMins !== undefined) body.auto_stop_mins = edit.autoStopMins
+      if (edit.minNumClusters !== undefined) body.min_num_clusters = edit.minNumClusters
+      if (edit.maxNumClusters !== undefined) body.max_num_clusters = edit.maxNumClusters
+      await call(account, "sql.warehouses.edit", "POST", `/api/2.0/sql/warehouses/${encodeURIComponent(id)}/edit`, { body, idempotent: true, signal })
     },
 
-    async getJob(): Promise<never> {
-      throw new DatabricksError("NOT_IMPLEMENTED", "Reading a job's settings is not built yet (package B: jobs.jobs.get).")
+    /** `GET /api/2.2/jobs/get` (`jobs.jobs.get`): one job's settings and each task's compute. */
+    async getJob(account: string, jobId: number, signal: AbortSignal): Promise<JobInfo> {
+      return toJobInfo(await call(account, "jobs.jobs.get", "GET", "/api/2.2/jobs/get", { query: { job_id: jobId }, idempotent: true, signal }))
     },
 
     async stopWarehouse(account: string, id: string, signal: AbortSignal): Promise<void> {
