@@ -38,13 +38,15 @@ const eventsList: Handler<"events_list"> = async (input, call, deps) => {
       account: accountFor(input, deps),
       source: input.source,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+      // `since` is on the tool's input once the contract keeper's change (#13) adds it; the RPC method takes it already.
+      ...(typeof (input as { since?: unknown }).since === "string" ? { since: (input as { since?: unknown }).since as string } : {}),
       ...(input.limit === undefined ? {} : { limit: input.limit }),
       ...(input.scope === undefined ? {} : { scope: input.scope }),
       call,
       // The model's own tool: the family's asserts, and it reads the identity itself when no probe has recorded it.
       mode: "tool",
     })
-    return { state: "ok", ...page }
+    return { state: "ok", ...page, source: input.source }
   } catch (error) {
     return asToolError(error)
   }

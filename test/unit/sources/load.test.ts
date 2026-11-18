@@ -2,12 +2,15 @@
 // the review's table, then realistic loads — hundreds of statements an hour, statements and runs running 1–6 hours,
 // backlogs, busy polling, visibility lags — each asserting **no gap, no repeat and nothing lost**, a bounded number of
 // provider calls, and that an item is listed by the first read at least `LAG_MS` after it ended. No network.
-import { describe, expect, test } from "vitest"
-import { LAG_MS } from "../../../src/sources/events.js"
+import { describe, expect, test, vi } from "vitest"
+import { HOLD_MAX_MS, LAG_MS } from "../../../src/sources/events.js"
 import { fakeRest, historyQuery, jobRun } from "./fake-rest.js"
 import { depsFor, NOW } from "./harness.js"
 import { consume, missing, repeats, seeded } from "./simulate.js"
 import { world, type WorldItem } from "./world.js"
+
+// These simulations run whole days of reads: an explicit timeout, so a loaded machine does not fail them (review R2-M3).
+vi.setConfig({ testTimeout: 300_000 })
 
 const HOUR = 3_600_000
 const MINUTE = 60_000
@@ -40,16 +43,19 @@ function worldOf(items: readonly WorldItem[], lags: { visibleAfter?: number; fin
   return { fake, deps }
 }
 
-/** The review's assertion for every load: nothing lost, nothing repeated, no gap, every item listed promptly. */
-function expectClean(result: Awaited<ReturnType<typeof consume>>, items: readonly WorldItem[], since: number, every: number) {
+/**
+ * The review's assertion for every load: nothing lost, nothing repeated, no gap, every item listed promptly — by the
+ * first read at least `LAG_MS` after it ended, or, where more items run at once than the cursor tracks by id (the line
+ * then waits for the oldest untracked one), at least `HOLD_MAX_MS` after.
+ */
+function expectClean(result: Awaited<ReturnType<typeof consume>>, items: readonly WorldItem[], since: number, every: number, wait: number = LAG_MS) {
   expect(result.gaps).toEqual([])
   expect(repeats(result)).toEqual([])
-  expect(missing(result, items, since)).toEqual([])
-  // M2: listed by the first read at least LAG_MS after it ended, never a whole polling interval later.
+  expect(missing(result, items, since, wait)).toEqual([])
   for (const item of items) {
     const at = result.listedAt.get(item.id)
     if (at === undefined || item.end === undefined) continue
-    expect(at, `${item.id} ended ${item.end - NOW} ms after NOW`).toBeLessThan(item.end + LAG_MS + every)
+    expect(at, `${item.id} ended ${item.end - NOW} ms after NOW`).toBeLessThan(item.end + wait + every)
   }
 }
 
@@ -163,8 +169,9 @@ describe("realistic load (H1), on a moving world: rows run, then become final at
     const items = load("queries", { perHour: 300, hours: 30, start: NOW, longShare: 0.05 })
     const { fake, deps } = worldOf(items)
     const result = await consume(deps, { source: "queries", since: NOW, reads: 37, every: HOUR })
-    expectClean(result, items, NOW, HOUR)
-    expect(result.listed.size).toBe(items.filter((item) => item.end! <= result.lastRead - LAG_MS).length)
+    // About 50 of your statements run longer than 5 minutes at once, more than the 23 the cursor tracks by id: the line
+    // waits for the oldest untracked one, at most HOLD_MAX_MS.
+    expectClean(result, items, NOW, HOUR, HOLD_MAX_MS)
     // History calls: the rows behind the line (≤ 6 h of 300/h) and the new slice, about 3 a page.
     expect(fake.count("history") / result.pages).toBeLessThan(5)
   })
@@ -173,8 +180,8 @@ describe("realistic load (H1), on a moving world: rows run, then become final at
     const items = load("queries", { perHour: 300, hours: 12, start: NOW, longShare: 0.05, seed: 11 })
     const { deps } = worldOf(items)
     const result = await consume(deps, { source: "queries", since: NOW, reads: 12 * 12 + 80, every: 5 * MINUTE })
-    expectClean(result, items, NOW, 5 * MINUTE)
-  })
+    expectClean(result, items, NOW, 5 * MINUTE, HOLD_MAX_MS)
+  }, 120_000)
 
   test("queries: 600 an hour with statements of 20–47 h, which go to the tracked ids, read hourly for 60 h", async () => {
     const items = load("queries", { perHour: 600, hours: 12, start: NOW, longShare: 0.01, seed: 3 })
@@ -184,7 +191,7 @@ describe("realistic load (H1), on a moving world: rows run, then become final at
     }
     const { deps } = worldOf(items)
     const result = await consume(deps, { source: "queries", since: NOW, reads: 61, every: HOUR })
-    expectClean(result, items, NOW, HOUR)
+    expectClean(result, items, NOW, HOUR, HOLD_MAX_MS)
     for (let index = 0; index < 8; index++) expect(result.listed.get(`00000000-0000-4000-9000-${String(index).padStart(12, "0")}`)).toBe(1)
     expect(result.maxCursor).toBeLessThanOrEqual(1024)
   })
@@ -218,8 +225,8 @@ describe("realistic load (H1), on a moving world: rows run, then become final at
     const items = load("queries", { perHour: 200, hours: 10, start: NOW, longShare: 0.05, seed: 13 })
     const { deps } = worldOf(items, { visibleAfter: 2 * MINUTE, finalAfter: 2 * MINUTE })
     const result = await consume(deps, { source: "queries", since: NOW, reads: 12 * 10 + 80, every: 5 * MINUTE })
-    expectClean(result, items, NOW, 5 * MINUTE)
-  })
+    expectClean(result, items, NOW, 5 * MINUTE, HOLD_MAX_MS)
+  }, 120_000)
 
   test("a backlog: the first read asks for 7 days at 300 statements an hour (50,400), and drains in slices without a gap", async () => {
     const items = load("queries", { perHour: 300, hours: 7 * 24, start: NOW - 7 * 24 * HOUR, longShare: 0.02, seed: 17 })
@@ -227,7 +234,7 @@ describe("realistic load (H1), on a moving world: rows run, then become final at
     const result = await consume(deps, { source: "queries", since: NOW - 7 * 24 * HOUR, reads: 1, every: HOUR, limit: 500 })
     expect(result.gaps).toEqual([])
     expect(repeats(result)).toEqual([])
-    expect(missing(result, items, NOW - 7 * 24 * HOUR)).toEqual([])
+    expect(missing(result, items, NOW - 7 * 24 * HOUR, HOLD_MAX_MS)).toEqual([])
     // Each row is read about once: a page reads its own slice (`[n, t]`, one or two calls), never the whole window again.
     // (A page holds about 123 events under the contract's byte cap, so this read takes about 410 pages.)
     expect(fake.count("history")).toBeLessThan(result.pages * 3)
@@ -240,8 +247,58 @@ describe("realistic load (H1), on a moving world: rows run, then become final at
     const result = await consume(deps, { source: "runs", since: NOW - 24 * HOUR, reads: 1, every: HOUR, limit: 500 })
     expect(result.gaps).toEqual([])
     expect(repeats(result)).toEqual([])
-    expect(missing(result, items, NOW - 24 * HOUR)).toEqual([])
+    expect(missing(result, items, NOW - 24 * HOUR, HOLD_MAX_MS)).toEqual([])
     // runs/list answers 25 a page, so 288 calls is the least that lists 7,200 runs; this read stays within 3.5 times that.
     expect(fake.count("listRuns") + fake.count("getRun")).toBeLessThan((items.length / 25) * 3.5)
   }, 120_000)
 })
+
+describe("round 2 of the review: the tracked ids, a busy workspace, and final states that lag", () => {
+  for (const limit of [50, 100]) {
+    test(`R2-H1: 500 runs started a second apart and ending in one millisecond 2 h later, read hourly at limit ${limit}: all 500 listed, no gap`, async () => {
+      const items: WorldItem[] = Array.from({ length: 500 }, (_, index) => ({ id: String(2_000_000 + index), jobId: 1, start: NOW + index * 1000, end: NOW + 2 * HOUR }))
+      const { deps } = worldOf(items)
+      const result = await consume(deps, { source: "runs", since: NOW - HOUR, reads: 5, every: HOUR, limit })
+      expect(result.gaps).toEqual([])
+      expect(repeats(result)).toEqual([])
+      expect(result.listed.size).toBe(500)
+      expect(result.maxCursor).toBeLessThanOrEqual(1024)
+    }, 120_000)
+  }
+
+  test("R2-M1: runs at 600 an hour, 5% running 1–6 h, read hourly for 48 h — no gap, none lost, bounded calls", async () => {
+    const items = load("runs", { perHour: 600, hours: 48, start: NOW, longShare: 0.05, seed: 23 })
+    const { fake, deps } = worldOf(items)
+    const result = await consume(deps, { source: "runs", since: NOW, reads: 55, every: HOUR })
+    // About 100 runs at once run longer than 5 minutes, near what the cursor tracks by id: when it is full, the line
+    // waits for the oldest untracked one (at most HOLD_MAX_MS) instead of gapping.
+    expectClean(result, items, NOW, HOUR, HOLD_MAX_MS)
+    // About 24 runs/list calls a read for the new runs, the re-walk behind the line and one runs/get per tracked run.
+    expect((fake.count("listRuns") + fake.count("getRun")) / result.reads).toBeLessThan(250)
+    expect(result.maxCursor).toBeLessThanOrEqual(1024)
+  }, 300_000)
+
+  for (const lag of [1, 5, 15, 60]) {
+    for (const source of ["queries", "runs"] as const) {
+      test(`R2-M2: ${source} whose final state shows ${lag} min after the end are all listed, once, with no gap`, async () => {
+        const items = load(source, { perHour: 60, hours: 8, start: NOW, longShare: 0.05, seed: 29 + lag })
+        const { deps } = worldOf(items, { finalAfter: lag * MINUTE })
+        const result = await consume(deps, { source, since: NOW, reads: 8 * 4 + 12, every: 15 * MINUTE })
+        expect(result.gaps).toEqual([])
+        expect(repeats(result)).toEqual([])
+        expect(missing(result, items, NOW, lag * MINUTE + HOLD_MAX_MS)).toEqual([])
+      }, 120_000)
+    }
+  }
+
+  test("R2-M2: a final state shown 2 h after the end, beyond the stated maximum, answers an honest gap", async () => {
+    const items = load("queries", { perHour: 60, hours: 6, start: NOW, longShare: 0, seed: 31 })
+    const { deps } = worldOf(items, { finalAfter: 2 * HOUR })
+    const result = await consume(deps, { source: "queries", since: NOW, reads: 12, every: HOUR })
+    expect(repeats(result)).toEqual([])
+    const lost = missing(result, items, NOW, 2 * HOUR + LAG_MS)
+    // Whatever was passed while its final state lagged is covered by a gap; nothing is lost without one.
+    if (lost.length > 0) expect(result.gaps.length).toBeGreaterThan(0)
+  }, 120_000)
+})
+

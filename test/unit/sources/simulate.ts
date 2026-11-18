@@ -77,9 +77,12 @@ export async function consume(deps: Deps, options: ConsumeOptions): Promise<Cons
   return { listed, listedAt, gaps, pages, reads: options.reads, maxCursor, lastRead, maxPagesPerRead, ...(cursor === undefined ? {} : { cursor }) }
 }
 
-/** The ids that ended early enough to be owed by the last read, and that were not listed. */
-export function missing(consumed: Consumed, items: readonly { readonly id: string; readonly end?: number }[], since: number): string[] {
-  return items.filter((item) => item.end !== undefined && item.end >= since && item.end <= consumed.lastRead - LAG_MS && !consumed.listed.has(item.id)).map((item) => item.id)
+/**
+ * The ids that ended early enough to be owed by the last read, and that were not listed. `slack` is how long after its
+ * end an item may wait: `LAG_MS`, or the hold's maximum where more items run at once than the cursor tracks.
+ */
+export function missing(consumed: Consumed, items: readonly { readonly id: string; readonly end?: number }[], since: number, slack: number = LAG_MS): string[] {
+  return items.filter((item) => item.end !== undefined && item.end >= since && item.end <= consumed.lastRead - slack && !consumed.listed.has(item.id)).map((item) => item.id)
 }
 
 export const repeats = (consumed: Consumed): string[] => [...consumed.listed].filter(([, count]) => count > 1).map(([id]) => id)

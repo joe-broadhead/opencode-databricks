@@ -25,13 +25,18 @@
  *
  * Nothing is de-duplicated by a set of ids, so the volume of a window never shortens it: an item is listed once
  * because it has one end. A gap (`window-truncated`) is answered only when something is really dropped (a walk past
- * its cap behind the line, a millisecond with more starts than the jam cap, or more long-running items than the cursor
- * can track), once per read; `expired` when the cursor or `since` is older than the provider keeps.
+ * its cap behind the line, a millisecond with more starts than the jam cap, an item the full tracked set cannot take
+ * and a walk cannot reach, or a tracked item proving a lag past `HOLD_MAX_MS`), once per read; `expired` when the cursor
+ * or `since` is older than the provider keeps. State is never dropped without one.
  *
- * **Assumptions** (README "Known limits"): an item appears in the list within `LAG_MS` of starting, and shows final with
- * its end time within `LAG_MS` of ending; the host's clock is within that of Databricks'. An item is listed by the
- * first read that starts at least `LAG_MS` after it ended. Both APIs page by token over a fixed start range, which new
- * starts (always later than the range) cannot shift.
+ * **The line is held** at the oldest item still shown running that is not tracked by id (its final state may lag its
+ * end), at most `HOLD_MAX_MS` behind now; items running longer than `HOLD_SOFT_MS` are tracked first, and a tracked
+ * item is listed whenever it is final, wherever its end falls.
+ *
+ * **Assumptions** (`docs/sources.md`, Known limits): a new row appears within `LAG_MS` of its start, and the host's
+ * clock is within that of Databricks'; an untracked item's final state shows within `HOLD_MAX_MS` of its end (a
+ * tracked item that shows otherwise answers a gap). Both APIs page by token over a fixed start range, which new starts
+ * (always later than the range) cannot shift.
  *
  * Every provider call either succeeds or fails the whole page (no item fails on its own: a tracked run that is gone is
  * dropped), so no page carries `failed[]`. The event's title is the plugin's own wording; `text` is empty, because SQL
@@ -44,7 +49,7 @@ import type { HistoryQuery, RunInfo } from "../ports.js"
 import type { Deps } from "../registry.js"
 import type { Call } from "../tool-spec.js"
 import { assertRead, assertToolRead } from "./assert.js"
-import { after, bindingOf, decodeState, encodeState, hashOf, iso, packIds, unpackIds, type CursorState, type Tracked } from "./cursor.js"
+import { after, bindingOf, decodeState, encodeState, fits, hashOf, iso, packIds, unpackIds, type CursorState, type Tracked } from "./cursor.js"
 import { sourceError, sourceErrorOf } from "./errors.js"
 import { hostName, ownerOf, workspaceOwner, type Owner } from "./owner.js"
 import { recordsOf, type IdentityRecord } from "./records.js"
@@ -59,6 +64,14 @@ const DAY = 24 * HOUR
 
 /** How long after its end (or start) an item may take to show in the list: the horizon's hold-back. */
 export const LAG_MS = 5 * 60_000
+/**
+ * The longest the listing line waits behind now for an untracked item still shown running: the most a final state may
+ * lag its end. An item still running after `HOLD_SOFT_MS` is tracked by id instead (if the cursor has room), and a
+ * tracked item is listed whatever its lag; a tracked item found to have lagged longer than this answers a gap.
+ */
+export const HOLD_MAX_MS = 75 * 60_000
+/** An item shown running for longer than this is tracked by id, so it stops holding the line back past the horizon. */
+export const HOLD_SOFT_MS = LAG_MS
 /** The margin kept inside a provider's retention, so a restart is not expired again at once. */
 export const EDGE_MARGIN_MS = HOUR
 /** 30 days: one Query History range's limit, and the age past which this source assumes history is gone. */
@@ -310,23 +323,53 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
   }
   seen.push(...fresh.items)
 
-  // 3. The tracked ids, read back by id: a running one on a full page, a finished one once it is due. The rest are
-  // carried as they are (a final row does not change).
-  const trackedAll = unpackIds(state.z)
-  const due = trackedAll.filter((entry) => (entry.end === undefined ? full : entry.end <= top))
-  const carriedTracked = trackedAll.filter((entry) => !due.includes(entry))
+  // 3. The tracked ids, read back by id. The rest are carried as they are (a final row does not change).
+  const trackedAll = unpackIds(state.z, state.t ?? 0)
+  // Due: a finished one when its end is due, or on every page when the cursor had no room for its end.
+  // A running one is read back on a full page at most once every `LAG_MS` (once a read): one skipped is still listed
+  // when it is next read, since a tracked item is listed wherever its end falls.
+  const checkRunning = full && (state.t === undefined || context.now - state.t >= LAG_MS)
+  const due = trackedAll.filter((entry) => (entry.end !== undefined ? entry.end <= top : entry.done === true || checkRunning))
+  // A tracked id this page's walks also saw is decided from what they saw (as tracked); the rest are carried as they are.
+  const seenIds = new Set(seen.map((item) => item.id))
+  const carriedTracked = trackedAll.filter((entry) => !due.includes(entry) && !seenIds.has(entry.id))
+  const trackedSeen = new Set(trackedAll.filter((entry) => !due.includes(entry) && seenIds.has(entry.id)).map((entry) => entry.id))
   const tracked = due.length > 0 ? await adapter.recheck(context, due.map((entry) => entry.id)) : []
+  // A tracked item seen running at the last full page and final now, with an end more than `HOLD_MAX_MS` before that
+  // page, shows Databricks' final state lagging longer than the line waits: untracked items may have been passed.
+  if (state.t !== undefined) {
+    const wasRunning = new Set(due.filter((entry) => !entry.done).map((entry) => entry.id))
+    if (tracked.some((item) => wasRunning.has(item.id) && item.end !== undefined && item.end < state.t! - HOLD_MAX_MS)) lost ??= "window-truncated"
+  }
 
-  // 4. What is listable now: final, at or before the horizon, after the line (a tracked item is unlisted by definition).
+  // 4. Hold the line: an item still shown running may already have ended (its final state can lag), so the line stops
+  // before the oldest one not tracked by id, at most `HOLD_MAX_MS` behind now. Items running longer than `HOLD_SOFT_MS`
+  // are tracked first (oldest first, while the cursor has room), so they stop holding it.
+  const trackedIds = new Set([...tracked.map((item) => item.id), ...trackedSeen])
+  const runningSeen = seen.filter((item) => item.end === undefined && item.start <= top && !trackedIds.has(item.id)).sort((a, b) => a.start - b.start)
+  let ids: Tracked[] = [...carriedTracked, ...[...trackedIds].map((id) => ({ id, done: true }))]
+  const admitted = new Set<string>()
+  for (const item of runningSeen) {
+    if (item.start >= context.now - HOLD_SOFT_MS || admitted.has(item.id)) continue
+    if (!fits([...ids, { id: item.id }])) break
+    ids = [...ids, { id: item.id }]
+    admitted.add(item.id)
+  }
+  const holdStart = runningSeen.find((item) => !admitted.has(item.id))?.start
+  const holdCap = holdStart === undefined ? Number.POSITIVE_INFINITY : Math.max(context.now - HOLD_MAX_MS, holdStart - 1)
+  const listTop = Math.min(top, holdCap)
+
+  // 5. What is listable now: final, at or before the held top, after the line (a tracked item is unlisted by
+  // definition, so it is listed wherever its end is).
   type Entry = { readonly item: Item; readonly tracked: boolean; readonly hash: string }
   const entries = new Map<string, Entry>()
-  for (const item of seen) entries.set(item.id, { item, tracked: false, hash: hashOf(externalId(context, item)) })
+  for (const item of seen) entries.set(item.id, { item, tracked: admitted.has(item.id) || trackedSeen.has(item.id), hash: hashOf(externalId(context, item)) })
   for (const item of tracked) entries.set(item.id, { item, tracked: true, hash: hashOf(externalId(context, item)) })
   const listable: Entry[] = []
   const waiting: Entry[] = []
   for (const entry of entries.values()) {
     const end = entry.item.end
-    if (end === undefined || end > top) waiting.push(entry)
+    if (end === undefined || end > listTop) waiting.push(entry)
     else if (entry.tracked || after(end, entry.hash, state.e, state.k)) listable.push(entry)
   }
   listable.sort((left, right) => left.item.end! - right.item.end! || (left.hash < right.hash ? -1 : left.hash > right.hash ? 1 : 0))
@@ -347,7 +390,9 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
   const cut = consumed < listable.length
   for (const entry of listable.slice(consumed)) waiting.push(entry)
   const last = consumed > 0 ? listable[consumed - 1] : undefined
-  const line = cut ? (last ? { e: last.item.end!, k: last.hash } : { e: state.e, ...(state.k ? { k: state.k } : {}) }) : { e: top }
+  const held = { e: state.e, ...(state.k ? { k: state.k } : {}) }
+  const reached = (position: { readonly e: number; readonly k?: string }) => (position.e > state.e || (position.e === state.e && after(position.e, position.k ?? "~", state.e, state.k)) ? position : held)
+  const line: { readonly e: number; readonly k?: string } = cut ? (last ? reached({ e: last.item.end!, k: last.hash }) : held) : listTop > state.e ? { e: listTop } : held
   /** The oldest start, at or after `floor`, of the untracked items behind the new line that are finished (or running). */
   const floorOf = (floor: number, finished: boolean) => {
     let oldest: number | undefined
@@ -358,13 +403,15 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
     return oldest
   }
 
-  // 5. The floor: the oldest unlisted item behind the new line, unless re-walking back to it costs more than `keepRows`
+  // 6. The floor: the oldest unlisted item behind the new line, unless re-walking back to it costs more than `keepRows`
   // (then it is tracked by id), or the cursor cannot track it (then it is lost, and the gap says so). A full page
   // decides for everything behind the line; a partial page for what its walk saw (it read `[n, t]` whole).
   const starts = seen.map((item) => item.start).filter((start) => start <= line.e).sort((a, b) => a - b)
   const rowsFrom = (start: number) => starts.length - lowerBound(starts, start)
-  const trackedOf = (item: Item): Tracked => (item.end === undefined ? { id: item.id } : { id: item.id, end: item.end })
-  let ids: Tracked[] = [...carriedTracked, ...waiting.filter((entry) => entry.tracked).map((entry) => trackedOf(entry.item))]
+  const trackedOf = (item: Item): Tracked => (item.end === undefined ? { id: item.id } : { id: item.id, done: true, end: item.end })
+  // The tracked set: what was carried, what was read back and is still unlisted, and what this page admitted.
+  const stillTracked = waiting.filter((entry) => entry.tracked).map((entry) => trackedOf(entry.item))
+  ids = [...carriedTracked, ...stillTracked]
   const behindLine = waiting.filter((entry) => !entry.tracked && entry.item.start <= line.e).sort((a, b) => a.item.start - b.item.start)
   const jamFloor = jam !== undefined && !cut ? jam + 1 : undefined
   let floor = line.e + 1
@@ -381,12 +428,12 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
         break
       }
     }
-    const packed = ids.length < adapter.maxTracked ? packIds([...ids, trackedOf(entry.item)]) : undefined
-    if (packed !== undefined) {
+    if (ids.length < adapter.maxTracked && fits([...ids, trackedOf(entry.item)])) {
       ids = [...ids, trackedOf(entry.item)]
       continue
     }
-    if ((jamFloor === undefined || start >= jamFloor) && rows <= (adapter.behindCap * adapter.pageRows) / 2) {
+    // No room to track it: keep re-walking back to it while a behind-walk reaches (no gap); only past that is it lost.
+    if ((jamFloor === undefined || start >= jamFloor) && rows <= adapter.behindCap * adapter.pageRows * 0.8) {
       floor = start
       break
     }
@@ -398,10 +445,10 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
   const carried = !full && state.l <= state.e ? state.l : line.e + 1
   const running = Math.min(floorOf(floor, false) ?? line.e + 1, carried)
   const finished = floorOf(floor, true)
-  // Nothing still running at a full page can be final, visibly, before that page's horizon.
-  const visible = full ? horizon : (state.m ?? horizon)
+  // Nothing still running at a full page can be final, visibly, before that page's held line.
+  const visible = full ? Math.min(horizon, holdCap) : (state.m ?? horizon)
 
-  // 6. The slice width: about a page and a quarter after a cut page, else widened towards half a walk's rows.
+  // 7. The slice width: about a page and a quarter after a cut page, else widened towards half a walk's rows.
   let width = narrowed ? top - state.e : state.d
   if (cut) width = Math.max(1, Math.ceil((line.e - state.e) * 1.25))
   else if (!narrowed && width !== undefined) {
@@ -410,9 +457,18 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
     if (width >= adapter.retentionMs) width = undefined
   }
 
-  const more = cut || top < horizon
+  // A held line ends the read; a slice that stopped short of the horizon by its width does not.
+  const more = cut || (top < horizon && listTop >= top)
+  // Admission keeps the set within its budget even once every entry is finished, so it always packs. Should it not,
+  // the ids that cannot be kept are lost, and the gap says so: state is never dropped without one.
+  const base = checkRunning ? context.now : (state.t ?? 0)
+  let packed = packIds(ids, base)
+  while (packed === undefined && ids.length > 0) {
+    ids = ids.slice(0, -1)
+    packed = packIds(ids, base)
+    lost ??= "window-truncated"
+  }
   const gap = lost !== undefined && state.g !== 1 ? { reason: lost, since: iso(state.e) } : undefined
-  const packed = packIds(ids)
   const next: CursorState = {
     ...line,
     l: Math.min(running, line.e + 1),
@@ -420,6 +476,7 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
     m: visible,
     ...(packed ? { z: packed } : {}),
     ...(width !== undefined ? { d: width } : {}),
+    ...(checkRunning ? { t: context.now } : state.t !== undefined ? { t: state.t } : {}),
     ...(more && (state.g === 1 || gap !== undefined) ? { g: 1 as const } : {}),
   }
   return { result: [events, next, more, { ...(gap ? { gap } : {}), ...(refused.length ? { refused } : {}) }] }
@@ -547,7 +604,7 @@ const queries: Adapter = {
   sliceCap: 10,
   jamCap: 100,
   keepRows: 5000,
-  maxTracked: 20,
+  maxTracked: 40,
   owner: (context) => ownerOf({ id: context.identity!.userId, userName: context.identity!.userName, ...(context.identity!.displayName ? { displayName: context.identity!.displayName } : {}) }, context.deps.auth.account(context.account).host),
   async walk(context, from, to, capPages) {
     const warehouses = listOf(context.scope?.warehouses)
@@ -647,11 +704,11 @@ const runs: Adapter = {
   scopeKeys: ["jobs"],
   operations: ["jobs.runs.list", "jobs.runs.get"],
   pageRows: 25,
-  behindCap: 120,
+  behindCap: 200,
   sliceCap: 40,
   jamCap: 400,
   keepRows: 250,
-  maxTracked: 40,
+  maxTracked: 400,
   // A run source is a workspace's, not one person's: the page names the workspace account, and probe the identity.
   owner: (context) => workspaceOwner(context.deps.auth.account(context.account).host, context.account),
   async walk(context, from, to, capPages) {

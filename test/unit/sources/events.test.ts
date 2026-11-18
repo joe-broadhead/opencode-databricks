@@ -2,9 +2,9 @@
 // jam, and a gap repeated within a read — plus ordering ties, pages that shift during a read, the probe record, the
 // grants each read asserts, and the cursor's size. Strict REST fakes, no Databricks call; the loads are in load.test.ts.
 import { encodeBoundCursor } from "@we-the-rebel-alliance/source-contract/cursor"
-import { describe, expect, test } from "vitest"
+import { describe, expect, test, vi } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
-import { bindingOf, decodeState, encodeState, packIds, unpackIds, Z_CHARS } from "../../../src/sources/cursor.js"
+import { bindingOf, decodeState, encodeState, fits, packIds, unpackIds, Z_CHARS } from "../../../src/sources/cursor.js"
 import { eventsPage, LAG_MS } from "../../../src/sources/events.js"
 import { memoryRecords } from "../../../src/sources/records.js"
 import { RecordingPermission } from "../../fake/ports.js"
@@ -12,6 +12,9 @@ import { fakeRest, historyQuery, jobRun } from "./fake-rest.js"
 import { call, DAY, depsFor, NOW } from "./harness.js"
 import { consume, missing, repeats } from "./simulate.js"
 import { world } from "./world.js"
+
+// These simulations run whole days of reads: an explicit timeout, so a loaded machine does not fail them (review R2-M3).
+vi.setConfig({ testTimeout: 120_000 })
 
 const iso = (ms: number) => new Date(ms).toISOString()
 const HOUR = 3_600_000
@@ -273,8 +276,7 @@ describe("databricks.runs", () => {
     expect(repeats(result)).toEqual([])
   }, 120_000)
 
-  test("more long runs than the cursor can track: one gap, the tracked ones are listed when they end, none twice", async () => {
-    // 60 runs start 6 h back and run on; 2,000 short runs after them make re-walking back to them cost more than a walk.
+  test("60 long runs and 2,000 short ones: the long ones are tracked by id and listed when they end, with no gap", async () => {
     const long = Array.from({ length: 60 }, (_, index) => ({ id: String(800_000 + index), jobId: 1, start: NOW - 6 * HOUR + index * 1000, end: NOW + 2 * HOUR + index * 1000 }))
     const short = Array.from({ length: 2000 }, (_, index) => ({ id: String(900_000 + index), jobId: 2, start: NOW - 5 * HOUR + index * 9000, end: NOW - 5 * HOUR + index * 9000 + 1000 }))
     let now = () => NOW
@@ -283,13 +285,30 @@ describe("databricks.runs", () => {
     const deps = depsFor({ answers: fake.answers }, open)
     now = deps.clock.now
     const result = await consume(deps, { source: "runs", since: NOW - 7 * HOUR, reads: 5, every: HOUR })
+    expect(result.gaps).toEqual([])
+    expect(repeats(result)).toEqual([])
+    expect([...long, ...short].filter((item) => !result.listed.has(item.id))).toEqual([])
+    expect(result.maxCursor).toBeLessThanOrEqual(1024)
+  })
+
+  test("more long runs than the cursor can track, and too many rows behind them to re-walk: one gap, once, never silent", async () => {
+    // 300 long runs with sparse ids (each about 8 characters to track) started 7 h back, then 6,000 short runs: the
+    // tracked set fills, and re-walking back to the rest would take more than a behind-walk reaches.
+    const long = Array.from({ length: 300 }, (_, index) => ({ id: String(1_000_000_000_000 + index * 1_000_000_007), jobId: 1, start: NOW - 7 * HOUR + index * 1000, end: NOW + 3 * HOUR + index * 1000 }))
+    const short = Array.from({ length: 6000 }, (_, index) => ({ id: String(5_000_000_000_000 + index), jobId: 2, start: NOW - 6 * HOUR + index * 3000, end: NOW - 6 * HOUR + index * 3000 + 1000 }))
+    let now = () => NOW
+    const fake = world(() => now())
+    for (const item of [...long, ...short]) fake.add({ ...item })
+    const deps = depsFor({ answers: fake.answers }, open)
+    now = deps.clock.now
+    const result = await consume(deps, { source: "runs", since: NOW - 8 * HOUR, reads: 6, every: HOUR, limit: 500 })
     expect(result.gaps).toHaveLength(1)
     expect(repeats(result)).toEqual([])
-    const listedLong = long.filter((item) => result.listed.has(item.id)).length
-    expect(listedLong).toBeGreaterThanOrEqual(30)
     expect(short.filter((item) => !result.listed.has(item.id))).toEqual([])
+    // Every long run is either listed or behind that one gap.
+    expect(long.filter((item) => result.listed.has(item.id)).length).toBeGreaterThan(0)
     expect(result.maxCursor).toBeLessThanOrEqual(1024)
-  }, 60_000)
+  })
 
   test("a tracked run that is gone is dropped; a failing runs/get fails the page whole (no failed[])", async () => {
     const deps = runDeps([jobRun({ id: 1, ago: HOUR })])
@@ -324,18 +343,27 @@ describe("the cursor", () => {
   })
 
   test("the worst case fits the contract's 1,024 characters: the tracked ids at their budget, every field at its widest", () => {
-    // Query ids are UUIDs (22 characters packed); run ids up to int64's 13 base36 digits; every end a 13-digit time.
-    const uuids = Array.from({ length: 40 }, (_, index) => ({ id: `ffffffff-ffff-4fff-bfff-${String(index).padStart(12, "f")}`, end: 9_999_999_999_999 }))
-    const runs = Array.from({ length: 60 }, (_, index) => ({ id: String(9_223_372_036_854_775_807n - BigInt(index)), end: 9_999_999_999_999 }))
+    // Query ids are UUIDs (22 characters packed); run ids up to int64's 13 base36 digits, spread so their deltas are
+    // wide; every end a 13-digit time. Admission keeps the set within budget with every entry finished; ends are kept
+    // only where they fit, and never an id is dropped.
+    const uuids = Array.from({ length: 40 }, (_, index) => ({ id: `ffffffff-ffff-4fff-bfff-${String(index).padStart(12, "f")}`, done: true, end: 9_999_999_999_999 }))
+    const runs = Array.from({ length: 200 }, (_, index) => ({ id: String(1_000_000_000_000_000_000n + BigInt(index) * 40_000_000_000_000_000n), done: true, end: 9_999_999_999_999 }))
     for (const [source, entries] of [["queries", uuids], ["runs", runs]] as const) {
-      const fitting: { id: string; end: number }[] = []
-      for (const entry of entries) if (packIds([...fitting, entry]) !== undefined) fitting.push(entry)
-      const z = packIds(fitting)!
+      const admitted: { id: string; done: boolean; end: number }[] = []
+      for (const entry of entries) if (fits([...admitted, entry])) admitted.push(entry)
+      const z = packIds(admitted)!
       expect(z.length).toBeLessThanOrEqual(Z_CHARS)
-      expect(unpackIds(z)).toEqual(fitting)
+      expect(unpackIds(z).map((entry) => entry.id).sort()).toEqual(admitted.map((entry) => entry.id).sort())
+      expect(unpackIds(z).every((entry) => entry.done === true && (entry.end === undefined || entry.end === 9_999_999_999_999))).toBe(true)
       const binding = bindingOf(source, "a".repeat(320), { warehouses: ["x".repeat(200)], jobs: ["9".repeat(19)] })
-      const cursor = encodeState(binding, { e: 9_999_999_999_999, k: "ffffffffffff", l: 9_999_999_999_998, n: 9_999_999_999_997, m: 9_999_999_999_999, d: 9_999_999_999, z, g: 1 })
+      const cursor = encodeState(binding, { e: 9_999_999_999_999, k: "ffffffffffff", l: 9_999_999_999_998, n: 9_999_999_999_997, m: 9_999_999_999_999, d: 9_999_999_999, t: 9_999_999_999_999, z, g: 1 })
       expect(cursor.length).toBeLessThanOrEqual(1024)
     }
+  })
+
+  test("run ids are delta-encoded: 100 runs created close together fit, and every id comes back", () => {
+    const runs = Array.from({ length: 100 }, (_, index) => ({ id: String(1_093_491_742_912_345 + index * 37) }))
+    expect(fits(runs)).toBe(true)
+    expect(unpackIds(packIds(runs)).map((entry) => entry.id)).toEqual(runs.map((entry) => entry.id))
   })
 })

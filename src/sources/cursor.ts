@@ -10,19 +10,23 @@
  * - `l`: the **running floor**. Every item still running at the last full page, behind the line and not in `z`,
  *   started at or after `l`. A statement or run that started long before it finished is found again by scanning from
  *   `l` by start time, the only filter both APIs have.
- * - `z`: the **tracked ids**: items not yet listed whose start fell so far behind that scanning back to it would cost
- *   too much, read back by id (Query History's `statement_ids` filter, Jobs' `runs/get`): a running one on every full
- *   page, a finished one, whose end is kept with it (`@` and base36), once it is due. Statement ids as 16 bytes of
- *   base64url, run ids in base36, joined by `.`; at most `Z_CHARS` characters.
+ * - `z`: the **tracked ids**: items not yet listed that would otherwise hold the line back or cost too much to re-walk
+ *   to, read back by id (Query History's `statement_ids` filter, Jobs' `runs/get`): a running one on every full page,
+ *   a finished one whose end is kept (`@` and base36, relative to `t`) once it is due. Statement ids as 16 bytes of base64url, run ids
+ *   sorted and delta-encoded in base36, joined by `.`; at most `Z_CHARS` characters. An id is admitted only if the set
+ *   still fits with every entry marked finished, so the set never has to shrink: an end that no longer fits is dropped
+ *   (the item is then read back on every full page), never the id.
  * - `n`: the **finished floor**: every finished item not yet listed (and not in `z`) started at or after `n`. A page
  *   cut by `limit` leaves a few of them just behind the line.
  * - `m`: the **visibility line** of the last full page: nothing that was still running behind the line then can be
  *   final, visibly, before `m`. A page whose slice ends before `m` reads `[n, t]` alone, so a backlog is read once,
  *   slice by slice, instead of re-reading everything behind the line for every page.
  * - `d`: the **slice width**: the next slice ends at `e + d`, sized to what a page took or to half a walk.
+ * - `t`: when tracked running items were last read back: a tracked item seen running then and found final with an end more than
+ *   `HOLD_MAX_MS` before it proves Databricks showed a final state later than the line waits, which is a gap.
  * - `g`: 1 when this read (pages up to `more: false`) already answered a gap, so it is not answered again.
  *
- * Worst case: `Z_CHARS` (560) of tracked ids, plus the numbers, the tie hash and the binding, is 964 characters (see
+ * Worst case: `Z_CHARS` (576) of tracked ids, plus the numbers, the tie hash and the binding, is 1,008 characters (see
  * `test/unit/sources/cursor.test.ts`), under the contract's 1,024.
  */
 import { MAX_CURSOR_LENGTH, canonicalScope, decodeBoundCursor, encodeBoundCursor, type Scope } from "@we-the-rebel-alliance/source-contract/cursor"
@@ -30,7 +34,7 @@ import { NAMESPACE } from "../constants.js"
 import { sourceError } from "./errors.js"
 
 /** The tracked ids' budget, in characters of the packed string. */
-export const Z_CHARS = 560
+export const Z_CHARS = 576
 export const HASH_BYTES = 6
 
 export interface CursorState {
@@ -48,6 +52,8 @@ export interface CursorState {
   z?: string
   /** The slice width, ms. */
   d?: number
+  /** When the last full page read, ms (for the lag check). */
+  t?: number
   /** This read already answered a gap. */
   g?: 1
 }
@@ -74,6 +80,7 @@ export function encodeState(binding: Binding, state: CursorState): string {
   if (state.m !== undefined) plain.m = state.m
   if (state.z) plain.z = state.z
   if (state.d !== undefined) plain.d = state.d
+  if (state.t !== undefined) plain.t = state.t
   if (state.g === 1) plain.g = 1
   try {
     return encodeBoundCursor(binding, plain)
@@ -115,6 +122,7 @@ export function decodeState(binding: Binding, cursor: string): Decoded {
       ...(typeof raw.k === "string" && /^[0-9a-f]{12}$/u.test(raw.k) ? { k: raw.k } : {}),
       ...(typeof raw.z === "string" && raw.z.length > 0 && raw.z.length <= Z_CHARS ? { z: raw.z } : {}),
       ...(finite(raw.d) && raw.d >= 1 ? { d: raw.d } : {}),
+      ...(finite(raw.t) ? { t: raw.t } : {}),
       ...(raw.g === 1 ? { g: 1 as const } : {}),
     },
   }
@@ -159,34 +167,87 @@ export function unpackId(packed: string): string | undefined {
   return value.toString()
 }
 
-/** A tracked item: its id, and its end once it is known to be finished. */
+/**
+ * A tracked item: its id; `done` once it was seen finished, with its `end` when the cursor had room to keep it. A
+ * running one is read back on every full page; a finished one with its end once it is due; a finished one without it
+ * on every full page (the end is only a saving, never needed to list it).
+ */
 export interface Tracked {
   readonly id: string
+  readonly done?: boolean
   readonly end?: number
 }
 
-export const unpackIds = (packed: string | undefined): Tracked[] =>
-  (packed ?? "")
-    .split(".")
-    .filter(Boolean)
-    .flatMap((entry) => {
-      const at = entry.indexOf("@")
-      const id = unpackId(at < 0 ? entry : entry.slice(0, at))
-      if (id === undefined) return []
-      if (at < 0) return [{ id }]
-      const end = Number.parseInt(entry.slice(at + 1), 36)
-      return [Number.isSafeInteger(end) ? { id, end } : { id }]
-    })
+const NUMERIC = /^[1-9][0-9]{0,18}$/u
 
-/** The packed form of `tracked`, or undefined when it would be longer than `Z_CHARS`. */
-export function packIds(tracked: readonly Tracked[]): string | undefined {
-  const seen = new Set<string>()
+/**
+ * Entries as the cursor keeps them, joined by `.`: numeric (run) ids sorted and delta-encoded (`+<base36 delta>` after
+ * the first), other ids packed by `packId`; then `@` when finished, with the end in base36 after it when kept.
+ */
+function encodeEntries(tracked: readonly Tracked[], base = 0): string {
+  const unique = [...new Map(tracked.map((entry) => [entry.id, entry])).values()]
+  const numeric = unique.filter((entry) => NUMERIC.test(entry.id)).sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0))
+  const other = unique.filter((entry) => !NUMERIC.test(entry.id))
+  const suffix = (entry: Tracked) => (entry.end !== undefined ? `@${(entry.end - base).toString(36)}` : entry.done ? "@" : "")
   const parts: string[] = []
-  for (const entry of tracked) {
-    if (seen.has(entry.id)) continue
-    seen.add(entry.id)
-    parts.push(entry.end === undefined ? packId(entry.id) : `${packId(entry.id)}@${entry.end.toString(36)}`)
+  let previous: bigint | undefined
+  for (const entry of numeric) {
+    const value = BigInt(entry.id)
+    parts.push(`${previous === undefined ? value.toString(36) : `+${(value - previous).toString(36)}`}${suffix(entry)}`)
+    previous = value
   }
-  const packed = parts.join(".")
-  return packed.length <= Z_CHARS ? packed : undefined
+  for (const entry of other) parts.push(`${packId(entry.id)}${suffix(entry)}`)
+  return parts.join(".")
+}
+
+/** The entries of a packed set; `base` is the time its ends are kept relative to (the state's `t`, else 0). */
+export const unpackIds = (packed: string | undefined, base = 0): Tracked[] => {
+  const out: Tracked[] = []
+  let previous: bigint | undefined
+  for (const part of (packed ?? "").split(".").filter(Boolean)) {
+    const at = part.indexOf("@")
+    const head = at < 0 ? part : part.slice(0, at)
+    let id: string | undefined
+    if (head.startsWith("+")) {
+      if (previous === undefined || !/^\+[0-9a-z]{1,13}$/u.test(head)) continue
+      let delta = 0n
+      for (const character of head.slice(1)) delta = delta * 36n + BigInt(Number.parseInt(character, 36))
+      previous += delta
+      id = previous.toString()
+    } else {
+      id = unpackId(head)
+      if (id !== undefined && NUMERIC.test(id)) previous = BigInt(id)
+    }
+    if (id === undefined) continue
+    if (at < 0) out.push({ id })
+    else {
+      const offset = part.slice(at + 1)
+      const end = /^-?[0-9a-z]{1,11}$/u.test(offset) ? base + Number.parseInt(offset, 36) : Number.NaN
+      out.push(Number.isSafeInteger(end) ? { id, done: true, end } : { id, done: true })
+    }
+  }
+  return out
+}
+
+/** The size the entries take with every one marked finished and no end kept: what admitting one must fit within. */
+export const reservedSize = (tracked: readonly Tracked[]): number => encodeEntries(tracked.map((entry) => ({ id: entry.id, done: true }))).length
+
+/** True when `tracked` fits the budget even once every entry is finished: removals and marks never grow it past that. */
+export const fits = (tracked: readonly Tracked[]): boolean => reservedSize(tracked) <= Z_CHARS
+
+/**
+ * The packed form of `tracked`, keeping as many ends as fit (the latest-due ends are dropped first). Undefined only
+ * when the entries do not fit even without ends, which `fits` at admission rules out.
+ */
+export function packIds(tracked: readonly Tracked[], base = 0): string | undefined {
+  let entries = [...tracked]
+  let packed = encodeEntries(entries, base)
+  if (packed.length <= Z_CHARS) return packed
+  const withEnds = entries.filter((entry) => entry.end !== undefined).sort((a, b) => b.end! - a.end!)
+  for (const entry of withEnds) {
+    entries = entries.map((candidate) => (candidate.id === entry.id ? { id: entry.id, done: true } : candidate))
+    packed = encodeEntries(entries, base)
+    if (packed.length <= Z_CHARS) return packed
+  }
+  return undefined
 }
