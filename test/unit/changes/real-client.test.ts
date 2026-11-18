@@ -162,7 +162,7 @@ describe("the real client's getJob and editWarehouse, end to end", () => {
       expect(planned).toMatchObject({ state: "planned", category: "run", commitWith: "databricks_run", preview: { kind: "job" } })
       const notes = ((planned.preview as { notes: string[] }).notes).join(" ")
       expect(notes).toMatch(/`nightly`/)
-      expect(notes).toMatch(/`main` on a job cluster of `Standard_DS3_v2` with 2 workers/)
+      expect(notes).toMatch(/`main` on a job cluster shared as `shared_big` of `i3.8xlarge` with 40 workers/)
       expect(notes).toMatch(/timeout_seconds 3600, which stops it/)
       expect(fake.requests.filter((request: { path: string }) => request.path === "/api/2.2/jobs/get")).toHaveLength(1)
       expect(signal.aborted).toBe(false)

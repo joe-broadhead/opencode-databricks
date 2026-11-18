@@ -246,8 +246,16 @@ export interface RunInfo {
 /** Where one task of a job runs (review of #7, request 1). `existing` is an all-purpose cluster. */
 export type JobCompute =
   | { readonly kind: "serverless" }
-  | { readonly kind: "job-cluster"; readonly nodeTypeId?: string; readonly numWorkers?: number; readonly autoscale?: { readonly min: number; readonly max: number } }
+  /**
+   * A job cluster: `new_cluster` inline, or `job_cluster_key` resolved from the job's `settings.job_clusters` (then the
+   * key is kept, so the preview can say it is shared).
+   */
+  | { readonly kind: "job-cluster"; readonly jobClusterKey?: string; readonly nodeTypeId?: string; readonly numWorkers?: number; readonly autoscale?: { readonly min: number; readonly max: number } }
   | { readonly kind: "existing"; readonly clusterId: string }
+  /** A SQL warehouse task (`sql_task.warehouse_id`, `dbt_task.warehouse_id`, a notebook's `warehouse_id`). */
+  | { readonly kind: "warehouse"; readonly warehouseId: string }
+  /** The task's compute cannot be determined from its settings; the preview says so rather than guessing. */
+  | { readonly kind: "unknown"; readonly reason: string }
 
 /** One job's settings, from `GET /api/2.2/jobs/get` (`jobs.jobs.get`). `timeoutSeconds` 0 means no timeout. */
 export interface JobInfo {

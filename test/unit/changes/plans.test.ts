@@ -71,6 +71,35 @@ describe("a job run", () => {
     harness.settle()
   })
 
+  it("R5-M1: previews every documented kind of task compute, and never calls an unknown one serverless", async () => {
+    const harness = changeHarness({
+      jobSettings: {
+        100: {
+          jobId: 100,
+          name: "nightly",
+          creatorUserName: "user@example.com",
+          timeoutSeconds: 3600,
+          tasks: [
+            { taskKey: "inline", compute: { kind: "job-cluster", nodeTypeId: "Standard_DS3_v2", numWorkers: 2 } },
+            { taskKey: "shared", compute: { kind: "job-cluster", jobClusterKey: "shared_big", nodeTypeId: "i3.8xlarge", numWorkers: 40 } },
+            { taskKey: "existing", compute: { kind: "existing", clusterId: "0923-164208-meows279" } },
+            { taskKey: "sql", compute: { kind: "warehouse", warehouseId: "wh-small" } },
+            { taskKey: "serverless", compute: { kind: "serverless" } },
+            { taskKey: "mystery", compute: { kind: "unknown", reason: "a pipeline task runs on its pipeline's compute" } },
+          ],
+        },
+      },
+    })
+    const notes = (await plan({ job: { jobId: 100 } }, harness)).preview!.notes.join(" ")
+    expect(notes).toMatch(/`inline` on a job cluster of `Standard_DS3_v2` with 2 workers/)
+    expect(notes).toMatch(/`shared` on a job cluster shared as `shared_big` of `i3.8xlarge` with 40 workers/)
+    expect(notes).toMatch(/`existing` on the all-purpose cluster `0923-164208-meows279`/)
+    expect(notes).toMatch(/`sql` on the SQL warehouse a Small serverless warehouse `bi-small` at about \$8\.40\/hour/)
+    expect(notes).toMatch(/`serverless` on serverless compute/)
+    expect(notes).toMatch(/`mystery` on compute not determined \(a pipeline task runs on its pipeline's compute\)/)
+    expect(notes).not.toMatch(/`mystery` on serverless/)
+  })
+
   it("says a job with no timeout has none, and names an all-purpose cluster", async () => {
     const harness = changeHarness({
       jobSettings: { 100: { jobId: 100, name: "nightly", timeoutSeconds: 0, tasks: [{ taskKey: "one", compute: { kind: "existing", clusterId: "0923-164208-meows279" } }] } },

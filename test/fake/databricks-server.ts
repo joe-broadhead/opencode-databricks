@@ -895,7 +895,10 @@ export const startFakeDatabricks: StartFake = async (seed = {}) => {
         settings: {
           name: seeded?.name ?? run?.runName ?? `Job ${jobId}`,
           timeout_seconds: 3600,
-          tasks: [{ task_key: "main", new_cluster: { node_type_id: "Standard_DS3_v2", num_workers: 2 }, timeout_seconds: 1800 }],
+          // The usual multi-task shape: a task reusing a cluster from `job_clusters` by key
+          // (`JobTaskSettings.job_cluster_key`, https://docs.databricks.com/api/jobs/v2/get-job.md).
+          job_clusters: [{ job_cluster_key: "shared_big", new_cluster: { node_type_id: "i3.8xlarge", num_workers: 40 } }],
+          tasks: [{ task_key: "main", job_cluster_key: "shared_big", timeout_seconds: 1800 }],
         },
       })
     }

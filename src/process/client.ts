@@ -174,31 +174,63 @@ export function toRun(value: unknown): RunInfo {
   }
 }
 
-/**
- * Where one task of a job runs, from `GET /api/2.2/jobs/get`'s task settings: `existing_cluster_id` is an all-purpose
- * cluster, `new_cluster` is a job cluster (its `node_type_id`, `num_workers` or `autoscale`), and a task with neither is
- * serverless — the documented serverless task carries an `environment_key` and no cluster
- * (https://docs.databricks.com/api/jobs/v2/get-job.md, `TaskSettings`).
- */
-export function toJobCompute(value: unknown): JobCompute {
-  const task = record(value)
-  const existing = maybeText(task.existing_cluster_id)
-  if (existing) return { kind: "existing", clusterId: existing }
-  const cluster = record(task.new_cluster)
+/** A cluster's documented compute fields: `node_type_id`, `num_workers`, or `autoscale`'s min and max. */
+function clusterCompute(cluster: Record<string, unknown>): { nodeTypeId?: string; numWorkers?: number; autoscale?: { min: number; max: number } } | undefined {
   const nodeTypeId = maybeText(cluster.node_type_id)
   const numWorkers = count(cluster.num_workers)
   const autoscale = record(cluster.autoscale)
   const min = count(autoscale.min_workers)
   const max = count(autoscale.max_workers)
-  if (nodeTypeId || numWorkers !== undefined || (min !== undefined && max !== undefined)) {
-    return {
-      kind: "job-cluster",
-      ...(nodeTypeId ? { nodeTypeId } : {}),
-      ...(numWorkers !== undefined ? { numWorkers } : {}),
-      ...(min !== undefined && max !== undefined ? { autoscale: { min, max } } : {}),
-    }
+  if (nodeTypeId === undefined && numWorkers === undefined && !(min !== undefined && max !== undefined)) return undefined
+  return { ...(nodeTypeId ? { nodeTypeId } : {}), ...(numWorkers !== undefined ? { numWorkers } : {}), ...(min !== undefined && max !== undefined ? { autoscale: { min, max } } : {}) }
+}
+
+/** The SQL warehouse a task runs on, from the documented `warehouse_id` of a SQL, dbt or notebook task. */
+function taskWarehouse(task: Record<string, unknown>): string | undefined {
+  for (const key of ["sql_task", "dbt_task", "notebook_task"]) {
+    const warehouse = maybeText(record(task[key]).warehouse_id)
+    if (warehouse) return warehouse
   }
-  return { kind: "serverless" }
+  return undefined
+}
+
+/**
+ * Where one task of a job runs, from `GET /api/2.2/jobs/get`'s `JobTaskSettings`
+ * (https://docs.databricks.com/api/jobs/v2/get-job.md):
+ *
+ * - `existing_cluster_id` → that all-purpose cluster;
+ * - `new_cluster` → a job cluster, with its `node_type_id` and `num_workers` or `autoscale`;
+ * - `job_cluster_key` → "this task is executed reusing the cluster specified in `job.settings.job_clusters`", so the
+ *   matching entry's `new_cluster` is the compute (a key the settings do not hold is not guessed at);
+ * - a SQL warehouse task (`sql_task.warehouse_id`, `dbt_task.warehouse_id`, a notebook's `warehouse_id`) → that
+ *   warehouse;
+ * - `environment_key`, or a task that names no compute on a serverless job (one with `environments` or a
+ *   `performance_target`) → serverless;
+ * - anything else, including a pipeline task whose compute belongs to its pipeline → `unknown`, which the preview states
+ *   plainly: it never calls an unrecognised task serverless.
+ */
+export function toJobCompute(value: unknown, jobSettings: unknown = {}): JobCompute {
+  const task = record(value)
+  const existing = maybeText(task.existing_cluster_id)
+  if (existing) return { kind: "existing", clusterId: existing }
+  const inline = clusterCompute(record(task.new_cluster))
+  if (inline) return { kind: "job-cluster", ...inline }
+  const key = maybeText(task.job_cluster_key)
+  if (key) {
+    const shared = list(record(jobSettings).job_clusters)
+      .map(record)
+      .find((cluster) => maybeText(cluster.job_cluster_key) === key)
+    const sharedCompute = shared === undefined ? undefined : clusterCompute(record(shared.new_cluster))
+    if (sharedCompute) return { kind: "job-cluster", jobClusterKey: key, ...sharedCompute }
+    return { kind: "unknown", reason: `its job cluster ${key} is not in the job's settings` }
+  }
+  const warehouse = taskWarehouse(task)
+  if (warehouse) return { kind: "warehouse", warehouseId: warehouse }
+  if (maybeText(task.environment_key)) return { kind: "serverless" }
+  if (task.pipeline_task !== undefined) return { kind: "unknown", reason: "a pipeline task runs on its pipeline's compute" }
+  const job = record(jobSettings)
+  const serverlessJob = list(job.environments).length > 0 || maybeText(job.performance_target) !== undefined
+  return serverlessJob ? { kind: "serverless" } : { kind: "unknown", reason: "the task names no compute this version can read" }
 }
 
 /** One job's settings (`GET /api/2.2/jobs/get`); `timeout_seconds` 0 is documented as "no timeout". */
@@ -216,7 +248,7 @@ export function toJobInfo(value: unknown): JobInfo {
       .map(record)
       .map((task) => {
         const taskTimeout = count(task.timeout_seconds)
-        return { taskKey: text(task.task_key), compute: toJobCompute(task), ...(taskTimeout !== undefined ? { timeoutSeconds: taskTimeout } : {}) }
+        return { taskKey: text(task.task_key), compute: toJobCompute(task, settings), ...(taskTimeout !== undefined ? { timeoutSeconds: taskTimeout } : {}) }
       }),
   }
 }
@@ -227,6 +259,9 @@ export function toJobInfo(value: unknown): JobInfo {
  * ones take documented defaults (`auto_stop_mins` defaults to 120, `enable_photon` to true, …), so the client sends the
  * warehouse read back with only the changed fields replaced: a partial body would silently reset the rest.
  */
+/** How many `jobs/get` array pages one call reads: 10 pages of 100 tasks is far beyond a job this plugin should run. */
+const JOB_PAGES_MAX = 10
+
 /** One page of `models` asks for the documented maximum (its `max_results` is at most 100). */
 const MODEL_PAGE = 100
 /** How many pages one `listModels` reads before it gives up: 10,000 models in one schema is more than a CASCADE should drop. */
@@ -348,9 +383,36 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       await call(account, "sql.warehouses.edit", "POST", `/api/2.0/sql/warehouses/${encodeURIComponent(id)}/edit`, { body, idempotent: true, signal })
     },
 
-    /** `GET /api/2.2/jobs/get` (`jobs.jobs.get`): one job's settings and each task's compute. */
+    /**
+     * `GET /api/2.2/jobs/get` (`jobs.jobs.get`): one job's settings and each task's compute. The reference paginates
+     * the array properties — "a request for a single job will return … the first 100 elements of array properties
+     * (`tasks`, `job_clusters`, …); use the `next_page_token` field … and pass its value as the `page_token`" — so every
+     * page is read and the arrays merged (https://docs.databricks.com/api/jobs/v2/get-job.md).
+     */
     async getJob(account: string, jobId: number, signal: AbortSignal): Promise<JobInfo> {
-      return toJobInfo(await call(account, "jobs.jobs.get", "GET", "/api/2.2/jobs/get", { query: { job_id: jobId }, idempotent: true, signal }))
+      const pages: Record<string, unknown>[] = []
+      let pageToken: string | undefined
+      for (let page = 0; page < JOB_PAGES_MAX; page++) {
+        const answer = record(
+          await call(account, "jobs.jobs.get", "GET", "/api/2.2/jobs/get", { query: { job_id: jobId, ...(pageToken === undefined ? {} : { page_token: pageToken }) }, idempotent: true, signal }),
+        )
+        pages.push(answer)
+        const next = maybeText(answer.next_page_token)
+        if (next === undefined) break
+        pageToken = next
+        if (page === JOB_PAGES_MAX - 1) throw new DatabricksError("UNAVAILABLE", `Job ${jobId} has more array pages than this client reads in one call.`, "Read it in Databricks, or split its tasks into fewer jobs.")
+      }
+      const first = pages[0] ?? {}
+      const settings = pages.reduce<Record<string, unknown>>((merged, page) => {
+        const current = record(page.settings)
+        return {
+          ...merged,
+          ...current,
+          tasks: [...list(merged.tasks), ...list(current.tasks)],
+          job_clusters: [...list(merged.job_clusters), ...list(current.job_clusters)],
+        }
+      }, {})
+      return toJobInfo({ ...first, settings })
     },
 
     async stopWarehouse(account: string, id: string, signal: AbortSignal): Promise<void> {

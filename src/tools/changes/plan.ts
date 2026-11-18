@@ -36,7 +36,7 @@ import type { PlanPayload } from "../../domain/plans.js"
 import { classifyPlan } from "../../domain/statements.js"
 import { quoted } from "../../guards/pattern.js"
 import { describe as describeWarehouse, usdPerHour } from "../../guards/warehouse.js"
-import type { Warehouse } from "../../ports.js"
+import type { JobCompute, Warehouse } from "../../ports.js"
 import { assertTool } from "../../registry.js"
 import type { Call, Handler } from "../../tool-spec.js"
 import { accountOf, encodePolicy, planWarehouse, requireFeature, warehouseNote, warehouseUseOf, type PlanPolicy, type WarehouseIntent } from "./context.js"
@@ -44,12 +44,21 @@ import { categoryFor, changeTargets, resolveTargets } from "./targets.js"
 
 type Preview = NonNullable<Output<"plan">["preview"]>
 
-/** One task's compute, in the plugin's own words (design §5.5's job-run preview; `JobCompute` in src/ports.ts). */
-function computeNote(compute: { readonly kind: string; readonly nodeTypeId?: string; readonly numWorkers?: number; readonly autoscale?: { readonly min: number; readonly max: number }; readonly clusterId?: string }): string {
+/**
+ * One task's compute, in the plugin's own words (design §5.5's job-run preview; `JobCompute` in src/ports.ts). A SQL
+ * warehouse task is described and priced as a warehouse start is (`describe`, guards/warehouse.ts); a task whose compute
+ * this version cannot read says so, and is never called serverless.
+ */
+function computeNote(compute: JobCompute, warehouses: ReadonlyMap<string, string | undefined>): string {
   if (compute.kind === "serverless") return "serverless compute"
-  if (compute.kind === "existing") return `the all-purpose cluster ${quoted(compute.clusterId ?? "unknown")}`
+  if (compute.kind === "existing") return `the all-purpose cluster ${quoted(compute.clusterId)}`
+  if (compute.kind === "warehouse") {
+    const described = warehouses.get(compute.warehouseId)
+    return described === undefined ? `the SQL warehouse ${quoted(compute.warehouseId)}, which this identity cannot read` : `the SQL warehouse ${described}`
+  }
+  if (compute.kind === "unknown") return `compute not determined (${compute.reason})`
   const workers = compute.autoscale ? `${compute.autoscale.min}–${compute.autoscale.max} workers (autoscale)` : `${compute.numWorkers ?? 1} worker${compute.numWorkers === 1 ? "" : "s"}`
-  return `a job cluster${compute.nodeTypeId ? ` of ${quoted(compute.nodeTypeId)}` : ""} with ${workers}`
+  return `a job cluster${compute.jobClusterKey ? ` shared as ${quoted(compute.jobClusterKey)}` : ""}${compute.nodeTypeId ? ` of ${quoted(compute.nodeTypeId)}` : ""} with ${workers}`
 }
 
 /** The job's settings as one string, for the plan's fingerprint: a job that changed since the preview is PLAN_CHANGED. */
@@ -202,7 +211,18 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
     })
     const creator = job.creatorUserName === undefined ? "" : ` by ${quoted(job.creatorUserName)}`
     const timeout = job.timeoutSeconds === undefined ? "the job's own timeout" : job.timeoutSeconds === 0 ? "no timeout (timeout_seconds 0)" : `timeout_seconds ${job.timeoutSeconds}, which stops it`
-    const tasks = job.tasks.map((task) => `${quoted(task.taskKey)} on ${computeNote(task.compute)}${task.timeoutSeconds === undefined ? "" : `, task timeout ${task.timeoutSeconds}s`}`)
+    // A SQL warehouse task's price is the warehouse's own: read each one (free) so the preview names it as a start does.
+    const warehouses = new Map<string, string | undefined>()
+    for (const task of job.tasks) {
+      if (task.compute.kind !== "warehouse" || warehouses.has(task.compute.warehouseId)) continue
+      try {
+        warehouses.set(task.compute.warehouseId, describeWarehouse(await deps.databricks.getWarehouse(account, task.compute.warehouseId, call.signal), deps.options))
+      } catch (error) {
+        if (error instanceof DatabricksError && (error.code === "NOT_FOUND" || error.code === "PERMISSION_DENIED")) warehouses.set(task.compute.warehouseId, undefined)
+        else throw error
+      }
+    }
+    const tasks = job.tasks.map((task) => `${quoted(task.taskKey)} on ${computeNote(task.compute, warehouses)}${task.timeoutSeconds === undefined ? "" : `, task timeout ${task.timeoutSeconds}s`}`)
     const notes = [
       "A job run: its effects are not known until it runs.",
       `The job ${quoted(job.name)}${creator} runs with its own settings and its own Run as identity; billed separately at the job's own compute rates.`,
@@ -246,9 +266,10 @@ const plan: Handler<"plan"> = async (input, call, deps) => {
   if (deps.options.admin.requireReason && !input.reason) throw new DatabricksError("ADMIN_REASON_REQUIRED")
   const edit = input.warehouse as { id: string; edit: Readonly<Record<string, unknown>> }
   if (edit.edit.statementTimeoutSeconds !== undefined) {
-    // The edit body has no statement_timeout: it is a warehouse configuration parameter, not a field of this call
-    // (review of #7, request 2's ruling), so the preview does not pretend it can change it.
-    throw new DatabricksError("INPUT_INVALID", "statementTimeoutSeconds is not part of a warehouse edit in this version.", "Set statement_timeout with the warehouse's SQL configuration, or in the Databricks SQL warehouse settings.")
+    // The edit page does document `statement_timeout` (Public Preview), but this version's `WarehouseEdit` has no field
+    // for it (review of #7, request 2's ruling kept it out until the page was cited; it now is). Say "not yet supported"
+    // rather than claiming the body has no such field.
+    throw new DatabricksError("INPUT_INVALID", "statementTimeoutSeconds is not yet supported in a warehouse edit by this version.", "Set statement_timeout in the Databricks SQL warehouse settings, or with the warehouse's SQL configuration.")
   }
   const current = await deps.databricks.getWarehouse(account, edit.id, call.signal)
   const changes = warehouseChanges(current, edit.edit)

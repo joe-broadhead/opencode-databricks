@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
 import type { FunctionInfo, HistoryQuery, RunInfo, TableInfo } from "../../../src/ports.js"
-import { createDatabricksClient } from "../../../src/process/client.js"
+import { createDatabricksClient, toJobCompute } from "../../../src/process/client.js"
 import { DUMMY_TOKEN } from "../../fake/ports.js"
 import { fakeAuth, workspace } from "./support.js"
 
@@ -354,5 +354,48 @@ describe("the Databricks client: workspace and Files", () => {
     } finally {
       await fake.close()
     }
+  })
+})
+
+// The reviewer's table for a job's task compute (`JobTaskSettings`, https://docs.databricks.com/api/jobs/v2/get-job.md):
+// `existing_cluster_id`, `new_cluster`, `job_cluster_key` resolved from `settings.job_clusters`, a SQL warehouse task,
+// `environment_key` or a serverless job, and anything else named plainly as undetermined.
+describe("the Databricks client: a job's task compute", () => {
+  const settings = { job_clusters: [{ job_cluster_key: "shared_big", new_cluster: { node_type_id: "i3.8xlarge", num_workers: 40 } }] }
+
+  it("maps every documented kind, and never guesses serverless", () => {
+    expect(toJobCompute({ existing_cluster_id: "0923-164208-meows279" }, settings)).toEqual({ kind: "existing", clusterId: "0923-164208-meows279" })
+    expect(toJobCompute({ new_cluster: { node_type_id: "Standard_DS3_v2", num_workers: 2 } }, settings)).toEqual({ kind: "job-cluster", nodeTypeId: "Standard_DS3_v2", numWorkers: 2 })
+    expect(toJobCompute({ new_cluster: { autoscale: { min_workers: 2, max_workers: 16 } } }, settings)).toEqual({ kind: "job-cluster", autoscale: { min: 2, max: 16 } })
+    expect(toJobCompute({ job_cluster_key: "shared_big", notebook_task: { notebook_path: "/Shared/n" } }, settings)).toEqual({ kind: "job-cluster", jobClusterKey: "shared_big", nodeTypeId: "i3.8xlarge", numWorkers: 40 })
+    expect(toJobCompute({ job_cluster_key: "gone" }, settings)).toMatchObject({ kind: "unknown", reason: expect.stringContaining("gone") })
+    expect(toJobCompute({ sql_task: { warehouse_id: "wh-small", query: { query_id: "q" } } }, settings)).toEqual({ kind: "warehouse", warehouseId: "wh-small" })
+    expect(toJobCompute({ dbt_task: { warehouse_id: "wh-small", commands: ["dbt run"] } }, settings)).toEqual({ kind: "warehouse", warehouseId: "wh-small" })
+    expect(toJobCompute({ notebook_task: { notebook_path: "/Shared/n", warehouse_id: "wh-small" } }, settings)).toEqual({ kind: "warehouse", warehouseId: "wh-small" })
+    expect(toJobCompute({ environment_key: "default_python", python_wheel_task: { package_name: "p", entry_point: "m" } }, settings)).toEqual({ kind: "serverless" })
+    expect(toJobCompute({}, { environments: [{ environment_key: "default_python" }] })).toEqual({ kind: "serverless" })
+    expect(toJobCompute({}, { performance_target: "PERFORMANCE_OPTIMIZED" })).toEqual({ kind: "serverless" })
+    expect(toJobCompute({}, settings)).toMatchObject({ kind: "unknown" })
+    expect(toJobCompute({ pipeline_task: { pipeline_id: "p" } }, settings)).toMatchObject({ kind: "unknown", reason: expect.stringContaining("pipeline") })
+  })
+
+  it("resolves a shared cluster through toJobInfo, and follows the array pages", async () => {
+    const page = (tasks: unknown[], token?: string) => ({ job_id: 10, creator_user_name: "user@example.com", settings: { name: "nightly", timeout_seconds: 3600, job_clusters: settings.job_clusters, tasks }, ...(token ? { next_page_token: token } : {}) })
+    const pages = [page([{ task_key: "one", job_cluster_key: "shared_big" }], "p2"), page([{ task_key: "two", existing_cluster_id: "c-1" }])]
+    let asked = 0
+    const fetch = async (input: string | URL | Request) => {
+      const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
+      const body = url.searchParams.get("page_token") === "p2" ? pages[1] : pages[0]
+      asked += 1
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })
+    }
+    const { account, auth } = await workspace()
+    const client = createDatabricksClient({ auth, fetch })
+    const job = await client.getJob(account.alias, 10, signal())
+    expect(asked).toBe(2)
+    expect(job.tasks.map((task) => [task.taskKey, task.compute])).toEqual([
+      ["one", { kind: "job-cluster", jobClusterKey: "shared_big", nodeTypeId: "i3.8xlarge", numWorkers: 40 }],
+      ["two", { kind: "existing", clusterId: "c-1" }],
+    ])
   })
 })
