@@ -14,7 +14,7 @@ describe("host range", () => {
   })
 
   it("tests the family's six releases", () => {
-    expect(TESTED_HOSTS).toEqual(["2.2.3", "2.2.4", "2.2.5", "2.2.6", "2.2.7", "2.3.0"])
+    expect(TESTED_HOSTS).toEqual(["2.2.3", "2.2.4", "2.2.5", "2.2.6", "2.2.7", "2.3.0", "2.3.1", "2.3.2"])
     for (const version of TESTED_HOSTS) expect(isTestedHost(version)).toBe(true)
   })
 

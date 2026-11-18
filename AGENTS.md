@@ -10,8 +10,8 @@ first. User docs: `README.md`, `docs/configuration.md`, `docs/safety.md`; contri
 - Use only public APIs of `@opencode/plugin` 2.2.3. The supported host range is exactly `>=2.2.3 <2.4.0`, in
   `package.json` `opencode.host`, `SUPPORTED_HOST` in `src/constants.ts` and `HOST_RANGE` in `scripts/check.mjs`.
   Never write it as `^2.2.3`.
-- Test against stock OpenCode 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7 and 2.3.0. `TESTED_HOSTS` in `src/constants.ts` is the
-  one list.
+- Test against stock OpenCode 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.1 and 2.3.2. `TESTED_HOSTS` in
+  `src/constants.ts` is the one list.
 - Keep the plugin ids `databricks.databricks` (status RPC), `databricks.databricks.tools` (tools RPC) and
   `databricks.databricks.tui` (TUI), and the namespace `databricks`.
 
