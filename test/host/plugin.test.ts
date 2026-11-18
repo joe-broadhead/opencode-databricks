@@ -6,9 +6,9 @@ import { WRITE_DISCLOSURE } from "../../src/domain/contract.js"
 import { defaultRules } from "../../src/permissions.js"
 import { isStatus } from "../../src/rpc.js"
 import { TOOLS_RPC_ID } from "../../src/tools-rpc.js"
-import { agentRules, cleanup, pluginState, startHost, status } from "./harness.js"
+import { agentRules, CLOSE_MS, cleanup, pluginState, SDK_VERSION, settleAbandoned, START_HOOK_MS, startHost, status, TEARDOWN_HOOK_MS } from "./harness.js"
 
-afterAll(cleanup)
+afterAll(cleanup, TEARDOWN_HOOK_MS)
 
 /** The client side only names the methods: the plugin checks each input against the tool's own contract. */
 const open = {}
@@ -32,7 +32,7 @@ describe("the plugin in a host", () => {
     } finally {
       await host.close()
     }
-  }, 120_000)
+  }, START_HOOK_MS)
 
   test("at ask-changes, the block asks for changes and starts", async () => {
     const host = await startHost({ options: { access: "ask-changes" } })
@@ -44,7 +44,7 @@ describe("the plugin in a host", () => {
     } finally {
       await host.close()
     }
-  }, 120_000)
+  }, START_HOOK_MS)
 
   test("serves the tools RPC: describe lists the reads, probe and saved_list; plan classifies SQL and sends nothing", async () => {
     const host = await startHost({ options: { accounts: { work: { warehouse: "wh-small" } } } })
@@ -64,7 +64,7 @@ describe("the plugin in a host", () => {
     } finally {
       await host.close()
     }
-  }, 120_000)
+  }, START_HOOK_MS)
 
   test("refuses an unknown option, and a host outside the range", async () => {
     const typo = await startHost({ options: { acess: "all" } })
@@ -79,5 +79,26 @@ describe("the plugin in a host", () => {
     } finally {
       await old.close()
     }
-  }, 240_000)
+  }, 2 * START_HOOK_MS)
+
+  test("a host that misses its start bound fails with the harness's error, naming its OpenCode version", async () => {
+    // A bound no host can meet: the harness's own deadline fires, not the runner's, and says which host and phase.
+    await expect(startHost({ startWithinMs: 1 })).rejects.toThrow(new RegExp(`^the OpenCode ${SDK_VERSION.replaceAll(".", "\\.")} host did not (import its SDK|start|answer its plugin list|settle) within 0\\.001 s of starting`))
+    // The host that started late is closed before the next test.
+    await settleAbandoned()
+  }, START_HOOK_MS)
+
+  test("a host whose plugin list and close both hang still fails with the harness's error, within its bound", async () => {
+    // Review of #14, F1: a stand-in SDK whose host never answers its plugin list and never closes. The failed start's
+    // close is bounded, so the harness's message arrives at the deadline plus CLOSE_MS, never the runner's timeout.
+    const never = () => new Promise<never>(() => undefined)
+    const sdk = { OpenCode: { create: async () => ({ plugin: { list: never }, close: never }) } }
+    const started = Date.now()
+    await expect(startHost({ sdk, startWithinMs: 200 })).rejects.toThrow(new RegExp(`^the OpenCode ${SDK_VERSION.replaceAll(".", "\\.")} host did not answer its plugin list within 0\\.2 s of starting`))
+    expect(Date.now() - started).toBeLessThan(200 + CLOSE_MS + 2_000)
+    // The hung close is abandoned; settling it is bounded too, and drops it.
+    const settling = Date.now()
+    await settleAbandoned(100)
+    expect(Date.now() - settling).toBeLessThan(2_000)
+  }, START_HOOK_MS)
 })

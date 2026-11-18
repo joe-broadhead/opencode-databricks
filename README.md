@@ -12,8 +12,8 @@ trademark of Databricks, Inc.; this unofficial plugin is not endorsed by them.
 
 ## Requirements
 
-- OpenCode `>=2.2.3 <2.4.0`, tested on 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7 and 2.3.0. Outside that range the plugin does
-  not load, unless you set [`allowUntestedHost`](docs/configuration.md#options).
+- OpenCode `>=2.2.3 <2.4.0`, tested on 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.1 and 2.3.2. Outside that range
+  the plugin does not load, unless you set [`allowUntestedHost`](docs/configuration.md#options).
 - macOS or Linux.
 - A Databricks workspace on AWS, Azure or GCP, and an OAuth app connection your account admin creates once
   ([Sign in](docs/configuration.md#sign-in)) [11][12]. You need `Can use` on a SQL warehouse, and `USE CATALOG`,

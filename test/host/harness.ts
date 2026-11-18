@@ -36,8 +36,13 @@ export type Client = Omit<OpenCodeClient, "plugin"> & {
 
 export const router = routeFetch()
 
-/** Removes the temp root and restores fetch; call once after every host in the file has closed. */
-export function cleanup() {
+/**
+ * Removes the temp root and restores fetch; call once after every host in the file has closed. A host abandoned after
+ * missing its start bound may still be closing, so its close settles (bounded) before fetch is restored and the root
+ * goes.
+ */
+export async function cleanup() {
+  await settleAbandoned()
   if (router.stale.length > 0) console.warn(`requests from closed hosts, blocked: ${[...new Set(router.stale)].join(", ")}`)
   router.restore()
   rmSync(ROOT, { recursive: true, force: true })
@@ -61,11 +66,88 @@ export interface HostInput {
    * part of what the test checks (the report says they were unavailable), so `close()` does not fail on them.
    */
   readonly expectBlocked?: boolean
+  /** The start's overall bound; HOST_START_MS unless a test of the bound itself sets it. */
+  readonly startWithinMs?: number
+  /** A stand-in SDK, for the harness's own tests of a host that hangs; the SDK under test otherwise. */
+  readonly sdk?: { readonly OpenCode: { create(options: Record<string, unknown>): Promise<unknown> } }
 }
 
 let hosts = 0
 
+/**
+ * One host start's overall bound: importing the SDK, creating the host, and waiting for the readiness signal (the
+ * plugin's state is reported and the probe plugin has loaded). The first host in a test process pays the cold start:
+ * the SDK's import and the first plugin load took 4 to 6 s on 2.3.0 and 5 to 9 s on 2.3.1 on a loaded machine, against
+ * under 3 s for every later host. So the bound is generous, and the harness, not the test runner, enforces it: a host
+ * that misses it fails with its OpenCode version, the phase and the plugin's last state.
+ */
+export const HOST_START_MS = 90_000
+/**
+ * The limit for a hook or test that starts one host. It sits above HOST_START_MS, so the harness's own error is the one
+ * a failure shows, never the runner's anonymous "hook timed out" (bun's default for a hook is 5 s).
+ */
+export const START_HOOK_MS = HOST_START_MS + 30_000
+
+/** How long a host gets to close: after a failed start (from its deadline), and in a file's teardown. */
+export const CLOSE_MS = 5_000
+/** A teardown hook's limit: one bounded close, then the bounded settle of abandoned hosts, with a margin. */
+export const TEARDOWN_HOOK_MS = 2 * CLOSE_MS + 10_000
+
+/** Work left running when a bound passed (a late host's close, a close that hung). Each entry never rejects. */
+const abandoned: Promise<void>[] = []
+const abandon = (work: Promise<unknown>) => void abandoned.push(work.then(() => undefined, () => undefined))
+
+/** True when `work` settles (either way) within `ms`; otherwise false, and `work` is left to `settleAbandoned`. */
+async function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const done = work.then(() => true, () => true)
+  const settled = await Promise.race([done, new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), ms)))])
+  clearTimeout(timer)
+  if (!settled) abandon(work)
+  return settled
+}
+
+/** Waits up to `ms` for the abandoned work; anything still running then is dropped with a warning, never awaited forever. */
+export async function settleAbandoned(ms: number = CLOSE_MS): Promise<void> {
+  const pending = abandoned.splice(0)
+  if (pending.length > 0 && !(await settlesWithin(Promise.all(pending), ms))) {
+    abandoned.splice(0)
+    console.warn(`${pending.length} abandoned host(s) were still closing after ${ms / 1000} s`)
+  }
+}
+
+/** Closes a host within `ms`, or fails with an error naming its OpenCode version; a close that hangs is abandoned. */
+export async function closeHost(host: Host, ms: number = CLOSE_MS): Promise<void> {
+  let failure: unknown
+  const closing = host.close().catch((error: unknown) => {
+    failure = error
+  })
+  if (!(await settlesWithin(closing, ms))) throw new Error(`the OpenCode ${SDK_VERSION} host did not close within ${ms / 1000} s`)
+  if (failure !== undefined) throw failure
+}
+
+/** Settles `work`, or fails at the start's deadline with a message naming the host version and the phase. */
+/** A start that missed its bound may still finish: when it does, `close` it, as abandoned work. */
+const abandonLate = <T>(work: Promise<T>, close: (value: T) => unknown) => abandon(work.then(close))
+
+async function within<T>(start: { deadline: number; boundMs: number }, phase: string, work: Promise<T>, onLate?: (value: T) => unknown): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      if (onLate) abandonLate(work, onLate)
+      reject(new Error(`the OpenCode ${SDK_VERSION} host did not ${phase} within ${start.boundMs / 1000} s of starting`))
+    }, Math.max(0, start.deadline - Date.now()))
+  })
+  try {
+    return await Promise.race([work, late])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export async function startHost(input: HostInput = {}) {
+  const boundMs = input.startWithinMs ?? HOST_START_MS
+  const start = { deadline: Date.now() + boundMs, boundMs }
   const base = join(ROOT, `host-${++hosts}`)
   const work = join(base, "work")
   mkdirSync(work, { recursive: true })
@@ -77,8 +159,8 @@ export async function startHost(input: HostInput = {}) {
     providers: { lmstudio: { settings: { baseURL: "" } }, ollama: { settings: { baseURL: "" } }, vllm: { settings: { baseURL: "" } } },
     ...input.config?.(),
   }
-  const { OpenCode } = (await import(pathToFileURL(join(SDK, manifest.exports["."].import)).href)) as typeof import("@opencode/sdk")
-  const client = (await OpenCode.create({
+  const { OpenCode } = (input.sdk ?? (await within(start, "import its SDK", import(pathToFileURL(join(SDK, manifest.exports["."].import)).href)))) as typeof import("@opencode/sdk")
+  const client = (await within(start, "start", OpenCode.create({
     plugins: [probe],
     // An embedded host reports "unknown" unless told, and the plugin's host check refuses that.
     app: { version: input.version ?? SDK_VERSION },
@@ -87,7 +169,7 @@ export async function startHost(input: HostInput = {}) {
     models: { fetch: false },
     fs: { filewatcher: false },
     log: { level: "error" },
-  })) as Client
+  }), (late) => (late as Client).close())) as Client
   const location = { directory: work }
   const host = {
     client,
@@ -103,10 +185,20 @@ export async function startHost(input: HostInput = {}) {
       if (!expectBlocked && blocked.length > 0) throw new Error(`the host tried to leave the machine: ${[...new Set(blocked)].join(", ")}`)
     },
   }
+  // The readiness signal: the host reports the plugin's state (active or failed) and the probe plugin has its context.
   try {
-    await until("the Databricks plugin has settled", async () => (await pluginState(host)) !== undefined && probes.has(work), 60_000)
+    let state: Awaited<ReturnType<typeof pluginState>>
+    for (;;) {
+      state = await within(start, "answer its plugin list", pluginState(host))
+      if (state !== undefined && probes.has(work)) break
+      if (Date.now() > start.deadline) {
+        throw new Error(`the OpenCode ${SDK_VERSION} host did not settle within ${boundMs / 1000} s of starting: the plugin's state was ${JSON.stringify(state) ?? "not reported"}, and the probe ${probes.has(work) ? "had" : "had not"} loaded`)
+      }
+      await Bun.sleep(50)
+    }
   } catch (error) {
-    await host.close().catch(() => undefined)
+    // Bounded: a host whose close hangs too must not hide this error behind the runner's limit (review of #14, F1).
+    await settlesWithin(host.close(), Math.max(0, start.deadline - Date.now()) + CLOSE_MS)
     throw error
   }
   return host
