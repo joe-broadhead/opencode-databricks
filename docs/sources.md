@@ -39,7 +39,8 @@ So each event is keyed on the moment it becomes final: `occurred_at` is the end,
   it is final, wherever its end falls, so its final state may lag by any amount. A run is tracked by its id
   (delta-encoded, about 100 fit; read back with `runs/get`). A statement is tracked by a **reference**, the second it
   started and 12 bits of its id's hash (about 7 characters, so about 70 fit, where 24 full ids did): the walk behind
-  the line finds it, or a one-second Query History read does. A reference is admitted only when no other statement of
+  the line finds it, or a one-second Query History read does (paged to the end, at most 20,000 statements; past that,
+a gap, never a silent drop; a second that crowded is never tracked by reference, and the floors cover it instead). A reference is admitted only when no other statement of
   yours started in that second with the same hash, and every statement of a second is shown within five minutes of it,
   so a reference names exactly one statement: it can neither lose one nor list one twice. An item is admitted only if
   the set still fits once every entry is finished, so the set never has to drop one;
@@ -57,7 +58,9 @@ more items run at once than the cursor tracks.
 minutes after its end, the hold widens to that lag plus 15 minutes (at most 12 hours) until a day passes without such
 proof. A gap is answered for the episode only if the line passed an untracked running item, under a shorter hold, since
 the last such gap; then once, from where that happened, and the model's tool says what was seen in its `message`.
-Proof with no such pass lost nothing, and answers no gap.
+Proof with no such pass lost nothing, and answers no gap. An episode's gap means items **may be missing**, not that
+they are: the source cannot tell whether the items it passed had in fact finished (in the simulations, a 2-hour lag
+answered one gap and nothing was missing).
 
 Nothing is de-duplicated by a set of ids, so no volume shortens the window. The cursor is at most 1,006 characters (the
 contract's cap is 1,024), whatever the load.
@@ -101,16 +104,29 @@ about 1,000 statements it reads, plus a one-second read for each tracked stateme
 within reach of the walk. A runs read makes one `runs/list` call per 25 runs it reads (and per 25 rows it re-walks
 behind the line), plus one `runs/get` per tracked run (running ones once a read, finished ones when due).
 
-Measured on the simulated workspace (calls per read, all pages of the read):
+Measured on the simulated workspace (provider calls per read, all pages of the read; typical is the median read, peak
+the costliest one):
 
-| Load | Calls a read |
-|---|---|
-| 300 statements an hour, 5% running 1–6 h, read every 5 min | about 3 |
-| 200 statements an hour, 10% running 20–47 h, read hourly | about 65 |
-| 600 runs an hour, 5% running 1–6 h, read hourly | about 300 (60 `runs/list`, 240 `runs/get`) |
-| 200 runs an hour, 10% running 20–47 h, read hourly (24 h of it) | about 135 (the review measured about 170) |
-| the same, sustained for 72 h (about 670 day-long runs at once) | about 505, mostly `runs/list` re-walking up to 12,000 runs back |
-| 300 runs an hour with final states 60 minutes late, read every 5 min | about 115 (the review measured about 78) |
+| Load | Typical | Peak |
+|---|---|---|
+| 300 statements an hour, 5% running 1–6 h, read every 5 min | 3 | 3 |
+| 200 statements an hour, 10% running 20–47 h, read hourly | 95 | 130 |
+| 600 runs an hour, 5% running 1–6 h, read hourly | 260 | 690 |
+| 200 runs an hour, 10% running 20–47 h, read hourly (24 h of it) | 195 | 420 |
+| the same, sustained for 72 h (about 670 day-long runs at once) | 580 | 915 |
+| 300 runs an hour with final states 60 minutes late, read every 5 min | 120 | 140 |
+
+The peaks are reads where the walk behind the line re-reads up to 12,000 runs (`runs/list` answers 25 at a time) and
+every tracked run is read back. These calls are free, but they count against the workspace's Jobs API rate limit; a
+`RATE_LIMITED` answer fails the page whole and the consumer reads again later, losing nothing.
+
+**Why a read's re-walk is not capped and carried to the next read.** The line may pass only runs this read has seen:
+a run behind the line that it did not re-read may have finished, and listing past it would lose it. Carrying the rest
+of the re-walk to the next read would therefore need the cursor to keep, for the part not re-read, the earliest end
+among its finished runs and when it was last read, and the line to wait on them for as many reads as the walk is split
+over. Those fields take room from the tracked runs (the 1,024-character cursor is already full under this load), and
+fewer tracked runs mean a longer re-walk, which is what the cap was meant to shorten; the events would also wait one
+more read for each part. So the peaks are stated here instead of capped.
 
 `databricks.saved` runs one statement on a warehouse that is already running, and charges it to the spend ledger like
 every read.

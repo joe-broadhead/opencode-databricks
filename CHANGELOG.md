@@ -78,6 +78,8 @@ All notable changes to this project are documented here. The format follows [Kee
   more. The model's tool says what was seen in its `message`.
 - `databricks.runs` re-walks up to 12,000 runs behind the line before it gives one up, so a workspace with hundreds of
   day-long runs at once no longer gaps.
+- A tracked statement's one-second read-back pages to the end (at most 20,000 statements, then a gap), so one among
+  more than 1,000 statements started in a second is never dropped without a gap.
 - A job run's parameters are sent as run-now 2.2's documented `job_parameters`, not `notebook_params`.
 - Review of package F (PR #10):
   - `/databricks-cleanup` asserts every stop and cancel at Allowed as well as at Ask before changes, so a person's own
