@@ -6,7 +6,7 @@ import type { Plugin } from "@opencode/plugin/tui"
 import { type RGBA, TextAttributes } from "@opentui/core"
 import { For, Show, createSignal } from "solid-js"
 import { DISPLAY_NAME, NAMESPACE, PLUGIN_ID } from "../constants.js"
-import { DatabricksRpc, STATUS_COMMAND, type Status, type StatusRow, isStatus, formatRules, statusRows } from "../rpc.js"
+import { CLEANUP_COMMAND, DatabricksRpc, STATUS_COMMAND, type Status, type StatusRow, isStatus, formatRules, statusRows } from "../rpc.js"
 
 type View = { readonly state: "loading" } | { readonly state: "ready"; readonly status: Status } | { readonly state: "unavailable" }
 
@@ -54,12 +54,14 @@ function StatusDialog(props: {
   readonly view: View
   readonly refreshing: boolean
   readonly refresh: () => void
+  readonly cleanup: () => void
 }) {
   // Created inside the dialog, so OpenCode removes these keys when the dialog closes.
   props.context.keymap.layer(() => ({
     mode: "modal",
     commands: [
       { title: `Refresh ${DISPLAY_NAME} status`, group: DISPLAY_NAME, bind: "r", run: () => props.refresh() },
+      { title: `Run /${CLEANUP_COMMAND}`, group: DISPLAY_NAME, bind: "c", run: () => props.cleanup() },
       { title: `Close ${DISPLAY_NAME} status`, group: DISPLAY_NAME, bind: "escape", run: () => props.context.ui.dialog.clear() },
     ],
   }))
@@ -68,7 +70,7 @@ function StatusDialog(props: {
   const ready = () => (props.view.state === "ready" ? props.view.status : undefined)
   const rowColor = (row: StatusRow, status: Status) => {
     if (row.label === "Connection") return tone(TONES[status.state])
-    if (row.label === "Problems" || row.label === "Skills" || (row.label === "Writes" && status.writes === "without asking") || (row.label === "Agents without default rules" && status.unguardedAgents.length > 0) || (row.label === "OpenCode" && !status.host.tested)) return tone("warning")
+    if (row.label === "Problems" || row.label === "Skills" || (row.label === "Cleanup" && (status.cleanup?.length ?? 0) > 0) || (row.label === "Writes" && status.writes === "without asking") || (row.label === "Agents without default rules" && status.unguardedAgents.length > 0) || (row.label === "OpenCode" && !status.host.tested)) return tone("warning")
     return colors().text.base
   }
   return (
@@ -110,7 +112,7 @@ function StatusDialog(props: {
           </box>
         )}
       </Show>
-      <text fg={colors().text.muted}>{"r refresh · esc close"}</text>
+      <text fg={colors().text.muted}>{`r refresh · c cleanup · esc close`}</text>
     </box>
   )
 }
@@ -164,12 +166,28 @@ export default {
         })
     }
 
+    // The TUI only asks for the command: the confirmation and the acting are the server command's, and only a person
+    // typing (or clicking this key) starts it. No cleanup code runs in the TUI bundle.
+    const cleanup = () => {
+      const route = context.ui.router.current()
+      if (route.type !== "session") {
+        context.ui.toast.show({ title: DISPLAY_NAME, message: `Open a session, then run /${CLEANUP_COMMAND}.`, variant: "warning" })
+        return
+      }
+      void context.client.session
+        .command({ sessionID: route.sessionID, name: CLEANUP_COMMAND, text: "" })
+        .then(
+          () => context.ui.toast.show({ title: DISPLAY_NAME, message: `The cleanup report is in this session; each action asks you first unless access is Allowed, where this key is the confirmation and your deny rules still win.`, variant: "info" }),
+          () => context.ui.toast.show({ title: DISPLAY_NAME, message: `/${CLEANUP_COMMAND} could not run in this session.`, variant: "error" }),
+        )
+    }
+
     const show = () => {
       if (disposed) return
       const token = {}
       setView({ state: "loading" })
       context.ui.dialog.show(
-        () => <StatusDialog context={context} view={view()} refreshing={refreshing()} refresh={refresh} />,
+        () => <StatusDialog context={context} view={view()} refreshing={refreshing()} refresh={refresh} cleanup={cleanup} />,
         () => {
           if (open !== token) return
           open = undefined

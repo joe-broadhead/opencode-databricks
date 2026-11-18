@@ -32,7 +32,7 @@ edits only its own files, adds new files only under its own folders, and wires a
 | **C. Reads and guards** | `src/tools/reads/**` (`catalog`, `table`, `warehouses`, `explain`, `query`, `statement`, `history`, `profile`), `src/guards/**` (read path steps 3–7, dependencies, fence, inline, warehouse policy, budget use), `test/unit/reads/**`, `test/unit/guards/**` | `HANDLERS` entries for its eight tools |
 | **D. Changes and runs** | `src/tools/changes/**` (`plan` beyond SQL, the six commit tools, `cancel`, `stop`, `jobs`, `workspace`), `src/drift.ts`, `test/unit/changes/**`, `test/host/access.test.ts` | `HANDLERS` entries for its tools |
 | **E. Files and sources** | `src/tools/save/**`, `src/sources/**` (`events_list`, `saved_read`, `saved_list`, `probe`), `test/conformance/**` (beyond `declaration.test.ts`), `test/unit/save/**`, `test/unit/sources/**` | `HANDLERS` entries; `src/tools-rpc.ts` `sourceMethod` bodies |
-| **F. Status, cleanup, skills, docs** | `src/status.ts`, `src/rpc.ts`, `src/tui/**`, `src/automation/**`, `src/hooks/**`, `skills/**`, `README.md`, `docs/**` except this file and `docs/parser.md`, `CHANGELOG.md`, `test/unit/docs.test.ts`, `test/host/status.test.ts` | `plugin.ts`: status and automation registration |
+| **F. Status, cleanup, skills, docs** | `src/status.ts`, `src/rpc.ts`, `src/tui/**`, `src/automation/**`, `src/hooks/**`, `skills/**`, `README.md`, `docs/**` except this file and `docs/parser.md`, `CHANGELOG.md`, `test/unit/docs.test.ts`, `test/unit/automation/**`, `test/host/status.test.ts` | `plugin.ts`: status and automation registration |
 
 ## Rules for every package
 

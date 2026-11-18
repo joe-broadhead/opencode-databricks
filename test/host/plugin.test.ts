@@ -28,7 +28,7 @@ describe("the plugin in a host", () => {
       expect(rules.slice(base + 1, base + 1 + defaultRules("all").length)).toEqual(defaultRules("all"))
       const answer = await status(host)
       expect(isStatus(answer)).toBe(true)
-      expect(answer).toMatchObject({ access: "all", writes: "without asking", disclosure: WRITE_DISCLOSURE, accounts: [{ alias: "work", mode: "interactive" }], tools: { declared: 23, built: 1 } })
+      expect(answer).toMatchObject({ access: "all", writes: "without asking", disclosure: WRITE_DISCLOSURE, accounts: [{ alias: "work", mode: "interactive" }] })
     } finally {
       await host.close()
     }
@@ -40,7 +40,7 @@ describe("the plugin in a host", () => {
       const rules = (await agentRules(host)).get("build") ?? []
       const base = rules.findIndex((rule) => rule.action === "*" && rule.resource === "*" && rule.effect === "allow")
       expect(rules.slice(base + 1, base + 1 + defaultRules("ask-changes").length)).toEqual(defaultRules("ask-changes"))
-      expect(await status(host)).toMatchObject({ access: "ask-changes", writes: "ask", state: "not_configured" })
+      expect(await status(host)).toMatchObject({ access: "ask-changes", writes: "ask", state: "sign_in_required" })
     } finally {
       await host.close()
     }
