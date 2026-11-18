@@ -6,9 +6,9 @@ import { WRITE_DISCLOSURE } from "../../src/domain/contract.js"
 import { defaultRules } from "../../src/permissions.js"
 import { isStatus } from "../../src/rpc.js"
 import { TOOLS_RPC_ID } from "../../src/tools-rpc.js"
-import { agentRules, cleanup, pluginState, SDK_VERSION, settleAbandoned, START_HOOK_MS, startHost, status } from "./harness.js"
+import { agentRules, CLOSE_MS, cleanup, pluginState, SDK_VERSION, settleAbandoned, START_HOOK_MS, startHost, status, TEARDOWN_HOOK_MS } from "./harness.js"
 
-afterAll(cleanup)
+afterAll(cleanup, TEARDOWN_HOOK_MS)
 
 /** The client side only names the methods: the plugin checks each input against the tool's own contract. */
 const open = {}
@@ -86,5 +86,19 @@ describe("the plugin in a host", () => {
     await expect(startHost({ startWithinMs: 1 })).rejects.toThrow(new RegExp(`^the OpenCode ${SDK_VERSION.replaceAll(".", "\\.")} host did not (import its SDK|start|answer its plugin list|settle) within 0\\.001 s of starting`))
     // The host that started late is closed before the next test.
     await settleAbandoned()
+  }, START_HOOK_MS)
+
+  test("a host whose plugin list and close both hang still fails with the harness's error, within its bound", async () => {
+    // Review of #14, F1: a stand-in SDK whose host never answers its plugin list and never closes. The failed start's
+    // close is bounded, so the harness's message arrives at the deadline plus CLOSE_MS, never the runner's timeout.
+    const never = () => new Promise<never>(() => undefined)
+    const sdk = { OpenCode: { create: async () => ({ plugin: { list: never }, close: never }) } }
+    const started = Date.now()
+    await expect(startHost({ sdk, startWithinMs: 200 })).rejects.toThrow(new RegExp(`^the OpenCode ${SDK_VERSION.replaceAll(".", "\\.")} host did not answer its plugin list within 0\\.2 s of starting`))
+    expect(Date.now() - started).toBeLessThan(200 + CLOSE_MS + 2_000)
+    // The hung close is abandoned; settling it is bounded too, and drops it.
+    const settling = Date.now()
+    await settleAbandoned(100)
+    expect(Date.now() - settling).toBeLessThan(2_000)
   }, START_HOOK_MS)
 })

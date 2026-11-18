@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { signInMetadata } from "../../src/auth/credential.js"
-import { cleanup, START_HOOK_MS, startHost, until, type Host } from "./harness.js"
+import { cleanup, closeHost, START_HOOK_MS, startHost, TEARDOWN_HOOK_MS, until, type Host } from "./harness.js"
 
 const WORK = "databricks-work"
 const HOST = "https://fake-workspace.cloud.databricks.com"
@@ -23,9 +23,10 @@ beforeAll(async () => {
 }, START_HOOK_MS)
 
 afterAll(async () => {
-  await host?.close()
-  cleanup()
-})
+  // Bounded, like the start: a close that hangs fails with the harness's error, inside the hook's own limit.
+  if (host) await closeHost(host)
+  await cleanup()
+}, TEARDOWN_HOOK_MS)
 
 const at = () => ({ location: host.location })
 
