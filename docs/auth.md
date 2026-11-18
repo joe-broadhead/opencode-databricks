@@ -23,9 +23,9 @@ The form asks for:
 
 The browser goes to `https://<workspace>/oidc/v1/authorize` with PKCE (S256) and a random `state`, and Databricks sends
 it back to `http://localhost:8765/callback` — or, when a host serves OpenCode to a browser elsewhere, to the host's
-relay (`redirectUri`) while a local listener on `callbackPort` receives it. The code is exchanged once at
+relay (`redirectUri`) while a local listener on `callbackPort` receives it [9][12]. The code is exchanged once at
 `https://<workspace>/oidc/v1/token`; the app connection is a public client, so no secret is sent. An access token lives
-60 minutes and a refresh token 7 days by default; the admin sets both per app.
+60 minutes and a refresh token 7 days by default; the admin sets both per app [11].
 
 **The credential's record.** OpenCode's credential store holds the tokens; its metadata holds the workspace, the public
 client ID, the scope choice and grant, the bound role group and a sign-in generation. Every token call compares the
@@ -37,7 +37,7 @@ carries the workspace it was minted for, so a caller sends it there even if the 
 
 ## Headless modes
 
-`pat`, `m2m` and `cli` are opt-in, one per account, and never a fallback. No option holds a secret:
+`pat`, `m2m` and `cli` are opt-in, one per account, and never a fallback. No option holds a secret [9][10][14]:
 
 - `pat` reads the personal access token from the environment variable `tokenEnv` names.
 - `m2m` exchanges the service principal's client ID and the OAuth secret `clientSecretEnv` names at the workspace token
@@ -54,9 +54,10 @@ environment, so `pat` and `m2m` find no variable and answer `AUTH_REQUIRED`, and
 
 ## Scopes, and the check before a call
 
-Databricks scopes are per API family, never per read and write. The plugin asks for the base families and one scope per
-configured feature, and compares the scope a call needs with the ones the sign-in was granted **before any request**. A
-missing family is `AUTH_SCOPE_MISSING`, and Databricks is not called.
+Databricks scopes are per API family, never per read and write [8]: the `sql` scope covers Execute Statement, Start and
+Stop Warehouse and Edit Warehouse alike, and `jobs` covers List Runs and Run Now. The plugin asks for the base families
+and one scope per configured feature, and compares the scope a call needs with the ones the sign-in was granted **before
+any request**. A missing family is `AUTH_SCOPE_MISSING`, and Databricks is not called.
 
 A pat or cli token's scope is unknown to the plugin and treated as every scope; a `m2m` token requests the scopes the
 call needs, and a scoped OAuth secret narrower than the request answers `AUTH_SCOPE_MISSING`. Fine-grained M2M scopes are
@@ -77,6 +78,9 @@ Only the identity's privileges are enforced by Databricks. Under fine-grained sc
 > SQL writes refused on what doctor checked; secret scopes and serving endpoints not checked; job runs use each job's
 > Run as identity
 
+That wording is `ROLE_ENFORCEMENT_TEXT` in `src/domain/contract.ts`, and `src/auth/doctor.ts` sets it only with
+`enforcement: "role"` [13].
+
 The doctor checks the role's own grants, and those of the `users` and `account users` groups a role inherits, on every
 visible catalog and on the workspace catalog's `default` schema; the `EXTERNAL` functions in each `default` schema are
 checked for a function-level `EXECUTE`, and a catalog- or schema-level `EXECUTE` is refused when an `EXTERNAL` function
@@ -89,8 +93,8 @@ it. After a restart status says `role-requested` until `/databricks-doctor` runs
 memory only, bound to the credential the report ran against, and any sign-in or refresh that changes its workspace, role
 or granted scopes clears it.
 
-SCIM `Me` is not documented to list the inherited `users` and `account users` groups, so the doctor always queries them
-by name along with the role group. Whether `effective-permissions?principal=<role group>` already includes a parent
+SCIM `Me` is not documented to list the inherited `users` and `account users` groups [30], so the doctor always queries
+them by name along with the role group. Whether `effective-permissions?principal=<role group>` already includes a parent
 group's grants is live check L3; the explicit inherited groups cover it either way.
 
 ## Known limits
@@ -107,3 +111,19 @@ group's grants is live check L3; the explicit inherited groups cover it either w
   it checked.
 - **Fine-grained M2M scopes** are not exercised by the live check; the request and the error mapping are tested against
   a fake endpoint.
+- **The role's name is for display.** `assume_group` takes the numeric group ID [13], and the name shown comes from SCIM
+  `Me`'s groups when it is there.
+- **Jelly's relay.** An app connection registered for Jelly must list `<Jelly ID issuer>/connect/callback` beside the
+  loopback URL, exactly, and Databricks must echo the relay's signed `state` (live check L12) [12].
+
+## Sources
+
+- [8] API scopes — https://docs.databricks.com/api/workspace/scopes
+- [9] OAuth U2M — https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m
+- [10] OAuth M2M — https://docs.databricks.com/aws/en/dev-tools/auth/oauth-m2m
+- [11] Partner and custom OAuth apps — https://docs.databricks.com/aws/en/integrations/enable-disable-oauth
+- [12] Custom OAuth App Integration API — https://docs.databricks.com/api/account/customappintegration/create
+- [13] RBAC — https://docs.databricks.com/aws/en/security/auth/rbac
+- [14] CLI authentication — https://docs.databricks.com/aws/en/dev-tools/cli/authentication
+- [30] SCIM Me — https://docs.databricks.com/api/scim/v1/me.md
+- [38] Manage privileges — https://docs.databricks.com/aws/en/data-governance/unity-catalog/manage-privileges/

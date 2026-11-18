@@ -1,16 +1,20 @@
 // The server part: the default permission rules, the 23 tools under the `databricks` namespace, status, the tools RPC
 // for scripts and the skills, in the family's setup order. Everything goes through public OpenCode plugin APIs. Every
 // transform is synchronous and never throws: a failure is kept and shown by status. Package A owns the auth default;
-// package B's client is the Databricks default; package C's guard is the read path.
+// package B's client is the Databricks default; package C's guard is the read path; package F owns status, the
+// automation, the cleanup command, the context hook and the skills.
 import { Plugin } from "@opencode/plugin"
 import { registerToolsRpc } from "@we-the-rebel-alliance/source-contract/tools-rpc"
 import { createAuth } from "./auth/index.js"
+import { Automation, registerAutomation } from "./automation/index.js"
+import { registerCleanup } from "./automation/cleanup.js"
 import { DISPLAY_NAME, NAMESPACE, PLUGIN_ID } from "./constants.js"
 import { type ToolName, TOOLS } from "./domain/actions.js"
 import { errorText } from "./domain/errors.js"
 import { createPlanStore } from "./domain/plans.js"
 import { checkHost } from "./host-version.js"
 import { createReadGuard } from "./guards/read.js"
+import { registerContextHook } from "./hooks/context.js"
 import { createLedger } from "./ledger.js"
 import { loadOptions } from "./options.js"
 import { registerPermissionDefaults } from "./permissions.js"
@@ -65,6 +69,7 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
         clock: { now: Date.now, uuid: () => crypto.randomUUID() },
       }
       const deps: Deps = { ...base, reads: createReadGuard(base) }
+      const automation = new Automation(base)
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
         keep(
@@ -79,16 +84,16 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
           }),
         )
         keep(
-          await registerStatus(ctx, {
-            options,
+          await registerStatus(ctx, deps, {
             hostVersion: ctx.app.version,
             ...(hostWarning ? { hostWarning } : {}),
             skills: SKILL_IDS.map((id) => ({ id, path: skillPath(id) })),
-            problems: () => [...problems.values()],
-            // Day 0: only databricks_plan is built.
-            built: () => 1,
+            problems: () => [...problems.values(), ...(automation.lastProblem() ? [automation.lastProblem()!] : [])],
           }),
         )
+        keep(await registerCleanup(ctx, deps))
+        keep(await registerAutomation(ctx, automation))
+        keep(await registerContextHook(ctx, automation, deps.clock))
         const stopTools = await registerToolsRpc(ctx as never, { plugin: PLUGIN, methods: methods(() => deps, HANDLERS) })
         keep({ dispose: stopTools })
         keep(await registerSkills(ctx))

@@ -1,16 +1,14 @@
 # Databricks for OpenCode
 
 Connects OpenCode to [Databricks](https://www.databricks.com): Unity Catalog, SQL warehouses, queries, jobs and saved
-results, through Databricks' own REST APIs, with every change planned first and every warehouse start visible.
+results, through Databricks' own REST APIs, with every change planned first and every warehouse start visible. No MCP
+server is wrapped and no SDK is installed: the plugin calls the documented REST APIs with `fetch` [6][15][24][27][29].
 
-Unofficial; not affiliated with Databricks. The icon is the family's own tile, not Databricks' mark.
+Unofficial; not affiliated with Databricks. The icon is the family's own tile, not Databricks' mark. Databricks is a
+trademark of Databricks, Inc.; this unofficial plugin is not endorsed by them.
 
-Databricks is a trademark of Databricks, Inc.; this unofficial plugin is not endorsed by them.
-
-> **Not yet released.** This is v0.0.1 before its first release: the contract (23 tools, their schemas, the errors,
-> the permission actions), the SQL parser generated from Spark's grammar, the function allowlist, the statement table,
-> the plan store and the spend ledger are in place. `databricks_plan` classifies SQL; every other tool answers
-> `NOT_IMPLEMENTED` until it is built. Nothing calls Databricks yet.
+> **Status.** v0.1.0: 23 tools, three sources, two skills, status, `/databricks-cleanup` and the TUI dialog. The live
+> check (design §15.4) has not run, so the Known limits below list what is measured and what is not.
 
 ## Requirements
 
@@ -18,13 +16,13 @@ Databricks is a trademark of Databricks, Inc.; this unofficial plugin is not end
   not load, unless you set [`allowUntestedHost`](docs/configuration.md#options).
 - macOS or Linux.
 - A Databricks workspace on AWS, Azure or GCP, and an OAuth app connection your account admin creates once
-  ([Sign in](docs/configuration.md#sign-in)). You need `Can use` on a SQL warehouse, and `USE CATALOG`, `USE SCHEMA`
-  and `SELECT` on the data you read.
+  ([Sign in](docs/configuration.md#sign-in)) [11][12]. You need `Can use` on a SQL warehouse, and `USE CATALOG`,
+  `USE SCHEMA` and `SELECT` on the data you read [13][38].
 
 ## Install
 
 ```sh
-opencode plugin add github:joe-broadhead/opencode-databricks#v0.0.1
+opencode plugin add github:joe-broadhead/opencode-databricks#v0.1.0
 ```
 
 Run `opencode reload`, or restart OpenCode. Then run `/databricks-status` in a session.
@@ -35,9 +33,13 @@ Run `opencode reload`, or restart OpenCode. Then run `/databricks-status` in a s
 > For a hard limit, sign in with a read-only role.
 
 The plugin narrows reads as far as it can: a read runs as exactly one query wrapped in `SELECT * FROM (…)`, calls only
-an allowlist of built-in functions (each qualified as `system.builtin.<name>`), and never starts a warehouse unless the
-call says `start: true`. Those checks are the plugin's own and best-effort; the only read-only Databricks enforces is
-your identity's privileges, such as a role with only `SELECT`. [Safety](docs/safety.md) says what each layer stops.
+an allowlist of built-in functions (each qualified as `system.builtin.<name>`; a function name or a keyword with any
+non-ASCII character, and a function named by one or two parts, are refused), and never starts a warehouse unless the
+call says `start: true` and the start policy allows it. Those checks are the plugin's own and best-effort; the only
+read-only Databricks enforces is your identity's privileges, such as a role with only `SELECT` [13]. A role is
+recommended, and `/databricks-doctor` checks what it really allows; a role inherits the grants of the workspace's
+`users` group and the account's `account users` group, and workspace users can create objects in the workspace
+catalog's `default` schema [13][38]. [Safety](docs/safety.md) says what each layer stops.
 
 The `access` option generates the default rules: `all` (the default) runs every tool without asking; `ask-changes`
 asks before each change and each warehouse start; `read-only` denies changes, and reads may still start a small
@@ -45,27 +47,80 @@ serverless warehouse that bills until it auto-stops.
 
 ## Cost
 
-Queries run on a SQL warehouse your workspace bills by the hour while it runs. Starting a stopped one bills until it
-auto-stops. A saved-query source (`databricks.saved`) reads only on a warehouse that is already running, which then
-stays up until it auto-stops. Unity Catalog reads are free. AI functions and jobs bill separately. [Costs](docs/costs.md) has the
-numbers and their sources.
+Queries run on a SQL warehouse your workspace bills by the hour while it runs, and an idle warehouse keeps billing
+until it auto-stops [16]. Starting a stopped one bills until it auto-stops, and a query against a stopped warehouse
+starts it [18]. A saved-query source (`databricks.saved`) reads only on a warehouse that is already running, which then
+stays up until it auto-stops. Unity Catalog reads are free. AI functions and jobs bill separately [21][33].
+[Costs](docs/costs.md) has the numbers and their sources.
+
+## Clean up
+
+`databricks_status` lists the statements this plugin started that are still running, and each running warehouse this
+plugin started with its estimated $ per hour and idle time, each with one call. `/databricks-cleanup`, typed by you,
+reports the same and then stops or cancels what it lists. At Allowed, typing the command is the confirmation and stops
+every listed warehouse and cancels every listed read; at Ask before changes each action asks first; at Read only it
+reports and takes no action. Your own deny rules still win, action by action, at every level. Nothing in this plugin ever
+deletes a table, file, job, warehouse or result. Automation cancels this plugin's own orphaned reads when a session is
+deleted or archived, at every access level, because a read has no effects. Stopping a warehouse automatically is not in
+v0.1.0, and a stop is only offered for a warehouse the plugin's own start record names (a start in the last 24 hours).
+[Costs](docs/costs.md#cleanup) has the details.
 
 ## Known limits
 
-- **Masks and filters run functions you cannot see.**
-  Column masks and row filters set by your admins run their own functions on every read; Databricks enforces them, and the plugin cannot see them.
-  A mask may wrap a Python function. The plugin shows each column's mask and the table's row filter by name.
-- **The parser is Spark's, not Databricks'.** The plugin parses SQL with Apache Spark's grammar at v4.3.0. Databricks'
-  own syntax that Spark lacks (`VACUUM`, `OPTIMIZE`, `COPY INTO`, `GRANT … ON`, `TABLE(f(…))` in `FROM`) is refused in
-  reads and plans as `run`, the strictest category.
-- **Keyword forms follow the path.** `EXTRACT`, `TRIM(… FROM …)`, `POSITION(… IN …)`, `SUBSTRING(… FROM …)` and similar
-  forms cannot be qualified, so a read that uses one needs the workspace's default SQL path (`PATH_NOT_DEFAULT`).
+- **Privileges are the only server-enforced read-only.** The wrapper, the function allowlist, the dependency checks and
+  the fence are the plugin's own, over its own parse of Spark's grammar, and best-effort: Databricks' parser is closed
+  and a warehouse channel may differ. Sign in with a role for a hard limit; see [Auth](docs/auth.md#enforcement).
+- **A role is weaker than "read-only" sounds.** Roles inherit the grants of `users` and `account users`, workspace users
+  can create objects in the workspace catalog's `default` schema, and a job run uses its job's Run as identity. The
+  doctor checks those, and its claim names what it did not check: secret scopes, serving endpoints, and schema- or
+  table-level grants outside the `default` schema. Under `all-apis` those families block the claim [13][38].
+- **Non-ASCII names are refused.** A function or generator name, or a keyword, with any non-ASCII character is
+  `SQL_INVALID`: the plugin cannot prove Databricks reads the name it checked. A user function named by one or two
+  parts is `FUNCTION_NAME_PARTIAL`; write `catalog.schema.function`.
+- **The dependency set is the union of Unity Catalog's record and the parsed body.** A view's `view_dependencies` and
+  its body are both walked; a view whose definition or dependencies Unity Catalog does not return is `NEEDS_PLAN`, not a
+  warning [27]. A Python or Scala function, a user-defined table function, a body that is not returned or does not parse,
+  and a name the two sources cannot pin all need a plan [28][42].
+- **Write `current_date`, not `current_date()`.** The pinned grammar refuses the parenthesised form
+  (`SQL_UNSUPPORTED`); the bare keyword is allowed and needs no SQL path. The same holds for `current_timestamp` and
+  `current_user`.
+- **The parser is Spark's, not Databricks'.** The plugin parses SQL with Apache Spark's grammar at v4.3.0 [41].
+  Databricks-only syntax that Spark lacks is refused in reads (`SQL_UNSUPPORTED`) and planned as `run`, the strictest
+  category: `VACUUM`, `OPTIMIZE`, `RESTORE`, `COPY INTO`, `CREATE STREAMING TABLE`, `REORG` and `FSCK`.
+- **Keyword forms follow the path.** `EXTRACT`, `TRIM(… FROM …)`, `POSITION(… IN …)`, `SUBSTRING(… FROM …)` and
+  `LATERAL VIEW` generators cannot be qualified, so a read that uses one needs the workspace's default SQL path
+  (`PATH_NOT_DEFAULT`).
+- **A start bills.** There is no per-query cap and no per-user spending stop for SQL warehouses [22]; server-side limits
+  are warehouse settings an admin owns. Budgets are opt-in estimates in DBU-hours from list prices, not bills. A
+  statement's backstop is `STATEMENT_TIMEOUT`, two days by default [20].
+- **Stopping needs Can manage.** Other users' statements are visible only with Can monitor or above, and `Can use`
+  includes starting a warehouse [16]. For a person with only Can use, the cleanup report is advisory, and a stop may be
+  refused (`STOP_NOT_PERMITTED`).
 - **Single-use refresh tokens can sign one of two processes out.** With `enable_single_use_refresh_tokens` (Beta, an
   admin's choice), each refresh invalidates the old refresh token. The plugin serializes refreshes within one process and
   re-reads OpenCode's credential store after a failed read, but two OpenCode processes renewing the same sign-in at the
-  same instant can still sign one out (`AUTH_REQUIRED`); sign in again. A cross-process lock is the host's to provide.
-  [Auth](docs/auth.md#known-limits) has the details.
-- **Nothing is built yet** beyond `databricks_plan` for SQL (see the note above).
+  same instant can still sign one out (`AUTH_REQUIRED`); sign in again. A cross-process lock is the host's to provide
+  [12]. [Auth](docs/auth.md#known-limits) has the details.
+- **Headless modes are refused in every engine Jelly runs.** `pat`, `m2m` and `cli` answer `HEADLESS_REFUSED` there
+  unless `allowHeadlessInHost` is set: the environment and the CLI are the host's. The detection fails open when Jelly's
+  engine handoff never arrived; the environment is then almost empty, so only `cli` could find a binary.
+- **Masks and filters run functions you cannot see.** Column masks and row filters set by your admins run their own
+  functions on every read; Databricks enforces them, and the plugin cannot see them. A mask may wrap a Python
+  function [27]. The plugin shows each column's mask and the table's row filter by name.
+- **Results and history are bounded by Databricks.** A statement's results are kept 12 hours [6]. Query History returns
+  at most 1,000 rows a page, 30 days a call, and a source cursor older than 30 days is `CURSOR_EXPIRED` [24]. Job runs
+  are kept 60 days [29]. `query_id` and the Statement API's `statement_id` are the same UUID by assumption until live
+  check L8 confirms it, which is what the ambiguous-submit recovery relies on.
+- **Query tags are Public Preview** [24]. The plugin's recovery after an ambiguous submit matches its `oc_call` tag, and
+  falls back to the exact wrapped text for a record with no tag.
+- **Some cell renderings are unverified.** A zone-less `TIMESTAMP` is shown zone-less, in the session's zone, never
+  labelled UTC; `BINARY`, `INTERVAL` and `VARIANT` renderings come from hand-written fixtures until live check L8
+  records Databricks' own. [Safety](docs/safety.md#known-limits) repeats these.
+- **Automation runs only while OpenCode runs.** It cancels this plugin's own orphaned reads at every access level and
+  stops no warehouse in v0.1.0. A read whose session ended while OpenCode was not running is left to
+  `STATEMENT_TIMEOUT`. The context hook speaks only from a snapshot at most five minutes old.
+- **Actions can email people.** A change (`GRANT`, `ALTER … OWNER`, a job run) reaches the people Databricks notifies;
+  the plugin cannot see or stop those notifications.
 
 ## Troubleshooting
 
@@ -134,12 +189,38 @@ Every error has the form `CODE: What happened. Next step: What to do.`
 ## Docs
 
 - [Configuration](docs/configuration.md): options, sign-in, the default rules.
-- [Safety](docs/safety.md): the read path, the allowlist, plans, and where read-only is enforced.
-- [Costs](docs/costs.md): warehouse billing, starts, the ledger and budgets.
+- [Safety](docs/safety.md): the read path, the allowlist, dependencies, plans, and where read-only is enforced.
+- [Costs](docs/costs.md): warehouse billing, starts, the ledger, budgets and cleanup.
 - [Scripting](docs/scripting.md): the tools RPC.
-- [In Jelly](docs/jelly.md): the declaration.
+- [In Jelly](docs/jelly.md): the declaration, the relay and the settings.
+- [Auth](docs/auth.md): modes, the role and the doctor.
 - [Errors](docs/errors.md): every code.
 - Contributors: [Architecture](docs/architecture.md), [Ownership](docs/ownership.md), [The parser](docs/parser.md).
+
+## Sources
+
+Databricks facts above are cited to Databricks' documentation, fetched 17 November 2026:
+
+- [6] Statement Execution API — https://docs.databricks.com/api/statement-execution/v1/statement-execution
+- [9] OAuth U2M — https://docs.databricks.com/aws/en/dev-tools/auth/oauth-u2m
+- [11] Partner and custom OAuth apps — https://docs.databricks.com/aws/en/integrations/enable-disable-oauth
+- [12] Custom OAuth App Integration API — https://docs.databricks.com/api/account/customappintegration/create
+- [13] RBAC — https://docs.databricks.com/aws/en/security/auth/rbac
+- [15] Warehouse object — https://docs.databricks.com/api/warehouses/v1/warehouse/object.md
+- [16] Create a SQL warehouse — https://docs.databricks.com/aws/en/compute/sql-warehouse/create
+- [18] SQL warehouses — https://docs.databricks.com/aws/en/compute/sql-warehouse/
+- [20] STATEMENT_TIMEOUT — https://docs.databricks.com/aws/en/sql/language-manual/parameters/statement_timeout
+- [21] Pricing — https://www.databricks.com/product/pricing/databricks-sql
+- [22] Budgets — https://docs.databricks.com/aws/en/admin/account-settings/budgets
+- [24] Query History API — https://docs.databricks.com/api/query-history/v1/list-queries.md
+- [25] System tables — https://docs.databricks.com/aws/en/admin/system-tables
+- [27] Unity Catalog tables — https://docs.databricks.com/api/uc-tables/v1/get-table.md
+- [28] Unity Catalog functions — https://docs.databricks.com/api/uc-functions/v1/function/object.md
+- [29] Jobs runs — https://docs.databricks.com/api/jobs/v2/list-runs.md
+- [33] Functions with effects — https://docs.databricks.com/aws/en/sql/language-manual/functions/secret
+- [38] Manage privileges — https://docs.databricks.com/aws/en/data-governance/unity-catalog/manage-privileges/
+- [41] Spark's SQL grammar — https://github.com/apache/spark/blob/master/sql/api/src/main/antlr4/org/apache/spark/sql/catalyst/parser/SqlBaseLexer.g4
+- [42] Unity Catalog Python UDTFs — https://docs.databricks.com/aws/en/udf/udtf-unity-catalog
 
 ## License
 

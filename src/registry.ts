@@ -17,6 +17,7 @@ import type { PlanStorePort } from "./domain/plans.js"
 import { classifyPlan } from "./domain/statements.js"
 import type { Options } from "./options.js"
 import type { AuthPort, Clock, DatabricksPort, LedgerPort, PermissionPort, ReadGuardPort } from "./ports.js"
+import { statusHandler } from "./status.js"
 import { READ_HANDLERS } from "./tools/reads/index.js"
 import save from "./tools/save/index.js"
 import { SOURCE_HANDLERS } from "./sources/index.js"
@@ -156,7 +157,7 @@ const commit = <T extends "write" | "delete" | "share" | "export" | "run" | "adm
  * `query`, `statement`, `history` and `profile` are package C's (`src/tools/reads/`), and the rest are still Day 0 stubs.
  */
 export const HANDLERS: Handlers = {
-  status: stub("status"),
+  status: statusHandler,
   catalog: READ_HANDLERS.catalog,
   table: READ_HANDLERS.table,
   warehouses: READ_HANDLERS.warehouses,

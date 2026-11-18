@@ -201,14 +201,15 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
       const { output } = await host.api<{ output: Record<string, unknown> }>("POST", `/api/rpc/${PLUGIN_ID}/status`, { input: {} })
       expect(output).toMatchObject({
         version: pkg.version,
-        state: "not_configured",
+        // Package F's status knows the configured account before its first sign-in, so it says sign-in required.
+        state: "sign_in_required",
         access: "all",
         writes: "without asking",
-        tools: { declared: 23, built: 1 },
         unguardedAgents: ["reviewer"],
         host: { version, range: SUPPORTED_HOST, tested: true },
       })
-      expect(output).not.toHaveProperty("problems")
+      // The problem is the missing sign-in, in the family's form; no skill is shadowed.
+      expect((output.problems as string[])[0]).toContain("AUTH_REQUIRED")
       expect(output).not.toHaveProperty("shadowedSkills")
 
       // The tools RPC answers with no model: its id, and exactly the read tools, probe and saved_list.
