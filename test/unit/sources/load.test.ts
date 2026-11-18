@@ -336,3 +336,47 @@ describe("round 2 of the review: the tracked ids, a busy workspace, and final st
   })
 })
 
+
+describe("review of #15, LOW 3: a tracked statement's one-second read-back is paged", () => {
+  /** `crowd` statements start in one second, one of them (`target`) running 3 h; then `after` statements over 2.5 h,
+   * enough that the floors rise past that second and the target is read back on its own. */
+  function crowded(crowd: number, after: number): WorldItem[] {
+    const second = NOW + 10 * MINUTE
+    const items: WorldItem[] = Array.from({ length: crowd }, (_, index) => ({ id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`, start: second + Math.floor((index * 1000) / crowd), end: second + Math.floor((index * 1000) / crowd) + 2000 }))
+    items[crowd >> 1] = { ...items[crowd >> 1]!, id: "00000000-0000-4000-9000-000000000001", end: second + 3 * HOUR }
+    for (let index = 0; index < after; index++) {
+      const start = second + MINUTE + Math.floor((index * 150 * MINUTE) / after)
+      items.push({ id: `00000000-0000-4000-a000-${String(index).padStart(12, "0")}`, start, end: start + 2000 })
+    }
+    return items
+  }
+
+  test("1,500 statements in one second: the tracked one is found on the read-back's second page, listed once, no gap", async () => {
+    const items = crowded(1500, 6000)
+    const { fake, deps } = worldOf(items)
+    const result = await consume(deps, { source: "queries", since: NOW, reads: 20, every: 15 * MINUTE, limit: 500 })
+    expect(result.gaps).toEqual([])
+    expect(repeats(result)).toEqual([])
+    expect(result.listed.get("00000000-0000-4000-9000-000000000001")).toBe(1)
+    expect(missing(result, items, NOW)).toEqual([])
+    // The read-back of that one second asked for its second page.
+    const second = Math.floor((NOW + 10 * MINUTE) / 1000) * 1000
+    const pagedReadBack = fake.calls.filter((entry) => {
+      const filter = entry.args[0] as { startMs?: number; endMs?: number; pageToken?: string }
+      return entry.method === "history" && filter.startMs === second && filter.endMs === second + 999 && filter.pageToken !== undefined
+    })
+    expect(pagedReadBack.length).toBeGreaterThan(0)
+  }, 300_000)
+
+  test("more statements in one second than the read-back's bound (20,000): never a silent drop", async () => {
+    const items = crowded(20_100, 6000)
+    const { deps } = worldOf(items)
+    const result = await consume(deps, { source: "queries", since: NOW, reads: 20, every: 15 * MINUTE, limit: 500 })
+    expect(repeats(result)).toEqual([])
+    // Such a second is never tracked by reference (its read-back could not page through it): the floors cover it, and
+    // that many rows behind the line also pass the behind-walk's own cap, which answers its gap.
+    if (!result.listed.has("00000000-0000-4000-9000-000000000001")) expect(result.gaps.length).toBeGreaterThanOrEqual(1)
+    const lost = missing(result, items, NOW)
+    if (lost.length > 0) expect(result.gaps.length).toBeGreaterThanOrEqual(1)
+  }, 300_000)
+})

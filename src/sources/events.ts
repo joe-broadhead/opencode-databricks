@@ -85,6 +85,8 @@ export const QUERY_RETENTION_MS = 30 * DAY
 export const RUN_RETENTION_MS = 60 * DAY
 /** A narrowed walk is retried at most this many times a page; then the page answers with a narrower slice to read next. */
 export const NARROW_ATTEMPTS = 3
+/** The most pages (1,000 statements each) a tracked statement's one-second read-back takes; past it, a gap. */
+export const REF_PAGES = 20
 
 /** One statement or run: its id, its start, and its end once final. */
 interface Item {
@@ -144,7 +146,7 @@ interface Adapter {
   /** The key an item is tracked by: a run's id, a statement's reference (`refOf`). */
   readonly keyOf: (item: Item) => string
   /** The tracked items, read back by key (or, from a cursor written before references, by id); one gone is absent. */
-  readonly recheck: (context: Context, keys: readonly string[]) => Promise<readonly Item[]>
+  readonly recheck: (context: Context, keys: readonly string[]) => Promise<{ readonly items: readonly Item[]; readonly truncated: boolean }>
 }
 
 /** The page request every source's page needs. */
@@ -363,7 +365,10 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
   const due = unresolved.filter((entry) => (entry.end !== undefined ? entry.end <= top : entry.done === true || checkRunning))
   const carriedTracked = unresolved.filter((entry) => !due.includes(entry))
   if (due.length > 0) {
-    const answers = await adapter.recheck(context, due.map((entry) => entry.id))
+    const answer = await adapter.recheck(context, due.map((entry) => entry.id))
+    const answers = answer.items
+    // A read-back that stopped at its bound may have missed a tracked item: never a silent drop.
+    if (answer.truncated) lost ??= "window-truncated"
     for (const entry of due) {
       const matches = named(entry.id, answers)
       if (matches.length === 1) resolved.push({ entry, item: matches[0]! })
@@ -390,7 +395,11 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
   const trackedItemIds = new Set(tracked.map((item) => item.id))
   const runningSeen = seen.filter((item) => item.end === undefined && item.start <= top && !trackedItemIds.has(item.id)).sort((a, b) => a.start - b.start)
   /** A key this page can track: one that names this item alone among what the walks saw. */
-  const trackable = (item: Item) => (seenByKey.get(keyOf(item))?.length ?? 0) <= 1
+  // A statement is not tracked by reference in a second with more statements than its read-back can page through
+  // (`REF_PAGES`): the floors keep covering it instead.
+  const perSecond = new Map<number, number>()
+  if (adapter.source === "queries") for (const item of seen) perSecond.set(Math.floor(item.start / 1000), (perSecond.get(Math.floor(item.start / 1000)) ?? 0) + 1)
+  const trackable = (item: Item) => (seenByKey.get(keyOf(item))?.length ?? 0) <= 1 && (perSecond.get(Math.floor(item.start / 1000)) ?? 0) < REF_PAGES * 1000
   let ids: Tracked[] = [...carriedTracked, ...resolved.map((pair) => ({ id: pair.entry.id, done: true }))]
   const admitted = new Set<string>()
   for (const item of runningSeen) {
@@ -733,33 +742,40 @@ const queries: Adapter = {
   keyOf: (item) => refOf(item.id, item.start),
   async recheck(context, keys) {
     const found: Item[] = []
-    // A reference: the one second it names, read whole (a person starts a handful of statements in a second at most).
+    let truncated = false
+    /** Every page of one Query History filter, up to `REF_PAGES`; past that, `truncated`. */
+    const allPages = async (filter: Omit<Parameters<Deps["databricks"]["history"]>[1], "pageToken">) => {
+      const items: HistoryQuery[] = []
+      let pageToken: string | undefined
+      for (let pages = 0; ; pages++) {
+        if (pages >= REF_PAGES) {
+          truncated = true
+          break
+        }
+        const token = pageToken
+        const answer = await provider(() => context.deps.databricks.history(context.account, { ...filter, ...(token === undefined ? {} : { pageToken: token }) }, context.call.signal))
+        items.push(...answer.items)
+        pageToken = answer.nextPageToken
+        if (pageToken === undefined) break
+      }
+      return items
+    }
+    // A reference: the one second it names, read whole, page by page (a person starts a handful of statements in a
+    // second; more than `REF_PAGES` pages of them is a gap, never a silent drop).
     for (const key of keys) {
       const ref = parseRef(key)
       if (ref === undefined) continue
-      const answer = await provider(() =>
-        context.deps.databricks.history(
-          context.account,
-          { userIds: [Number(context.identity!.userId)], startMs: ref.second * 1000, endMs: ref.second * 1000 + 999, maxResults: 1000, includeMetrics: false },
-          context.call.signal,
-        ),
-      )
-      for (const query of answer.items) if (refOf(query.queryId, query.queryStartTimeMs) === key) found.push(queryItem(query, context.host))
+      const rows = await allPages({ userIds: [Number(context.identity!.userId)], startMs: ref.second * 1000, endMs: ref.second * 1000 + 999, maxResults: 1000, includeMetrics: false })
+      for (const query of rows) if (refOf(query.queryId, query.queryStartTimeMs) === key) found.push(queryItem(query, context.host))
     }
-    // Ids (a cursor written before references): one call, the `statement_ids` filter over the widest range the API takes.
+    // Ids (a cursor written before references): the `statement_ids` filter over the widest range the API takes.
     const ids = keys.filter((key) => parseRef(key) === undefined)
     if (ids.length > 0) {
       const wanted = new Set(ids)
-      const answer = await provider(() =>
-        context.deps.databricks.history(
-          context.account,
-          { userIds: [Number(context.identity!.userId)], statementIds: ids, startMs: context.now - QUERY_RETENTION_MS + 60_000, endMs: context.now, maxResults: 1000, includeMetrics: false },
-          context.call.signal,
-        ),
-      )
-      for (const query of answer.items) if (wanted.has(query.queryId)) found.push(queryItem(query, context.host))
+      const rows = await allPages({ userIds: [Number(context.identity!.userId)], statementIds: ids, startMs: context.now - QUERY_RETENTION_MS + 60_000, endMs: context.now, maxResults: 1000, includeMetrics: false })
+      for (const query of rows) if (wanted.has(query.queryId)) found.push(queryItem(query, context.host))
     }
-    return found
+    return { items: found, truncated }
   },
 }
 
@@ -857,7 +873,7 @@ const runs: Adapter = {
         throw sourceErrorOf(error)
       }
     }
-    return found
+    return { items: found, truncated: false }
   },
 }
 
