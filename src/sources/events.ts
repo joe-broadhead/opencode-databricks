@@ -48,7 +48,7 @@ import { DatabricksError } from "../domain/errors.js"
 import type { HistoryQuery, RunInfo } from "../ports.js"
 import type { Deps } from "../registry.js"
 import type { Call } from "../tool-spec.js"
-import { assertRead, assertToolRead } from "./assert.js"
+import { assertRead } from "./assert.js"
 import { after, bindingOf, decodeState, encodeState, fits, hashOf, iso, packIds, unpackIds, type CursorState, type Tracked } from "./cursor.js"
 import { sourceError, sourceErrorOf } from "./errors.js"
 import { hostName, ownerOf, workspaceOwner, type Owner } from "./owner.js"
@@ -176,7 +176,7 @@ async function identityFor(deps: Deps, account: string, request: PageRequest): P
   if (request.mode !== "tool") {
     throw sourceError("UNAVAILABLE", "This source lists only your own statements, and no probe has named you on this account yet.", "Probe this source first (a consumer does at bind), then read it again.")
   }
-  await assertToolRead(deps.permission, request.call, "databricks.events_list", ["scim.me.get"], account)
+  await assertRead("tool", deps.permission, request.call, "databricks.events_list", ["scim.me.get"], account)
   try {
     const me = await deps.databricks.me(account, request.call.signal)
     const record: IdentityRecord = { userId: me.id, userName: me.userName, ...(me.displayName ? { displayName: me.displayName } : {}), at: deps.clock.now() }
@@ -568,15 +568,20 @@ async function provider<T>(work: () => Promise<T>): Promise<T> {
 
 const TERMINAL = new Set(["FINISHED", "FAILED", "CANCELED"])
 
+const userActor = (host: string, name: string) => (name.includes("@") ? `mailto:${name}` : `databricks:${host}:user:${name}`)
+
 function queryItem(query: HistoryQuery, host: string): Item {
   const start = query.queryStartTimeMs
   const final = query.isFinal === true || (query.isFinal === undefined && TERMINAL.has(query.status))
   const reported = query.queryEndTimeMs ?? (query.durationMs === undefined ? undefined : start + query.durationMs)
   const end = final ? Math.max(start, reported ?? start) : undefined
   const duration = query.durationMs ?? (end === undefined ? 0 : end - start)
-  // `client_application` and the user's name are not on the port yet: the actor is named by its id, and the labels are
-  // what the port holds.
-  const labels = [query.statementType, query.status, query.queryTags?.oc_tool].filter((label): label is string => typeof label === "string" && label.length > 0)
+  // The client that submitted it is a label (untrusted, cut to 64 characters); the actor is named by `user_name` when
+  // the port carries it (an address becomes `mailto:`), else by the user id.
+  const client = query.clientApplication?.trim().slice(0, 64)
+  const labels = [query.statementType, query.status, query.queryTags?.oc_tool, client].filter((label): label is string => typeof label === "string" && label.length > 0)
+  const name = query.userName?.trim()
+  const actor = name ? { role: "author", id: userActor(host, name), name: name.slice(0, 200) } : query.userId === undefined ? undefined : { role: "author", id: `databricks:${host}:user:${query.userId}` }
   return {
     id: query.queryId,
     start,
@@ -586,7 +591,7 @@ function queryItem(query: HistoryQuery, host: string): Item {
       kind: "x-databricks/query",
       title: `${query.statementType ?? "statement"} on ${query.warehouseId ?? "a warehouse"}: ${query.status}, ${durationText(duration)}, ${query.rowsProduced ?? 0} rows`,
       labels,
-      actors: query.userId === undefined ? [] : [{ role: "author", id: `databricks:${host}:user:${query.userId}` }],
+      actors: actor === undefined ? [] : [actor],
     },
   }
 }
@@ -668,7 +673,6 @@ const queries: Adapter = {
 const RUN_TERMINAL = new Set(["TERMINATED", "SKIPPED", "INTERNAL_ERROR"])
 const GONE = new Set(["NOT_FOUND", "PERMISSION_DENIED", "INPUT_INVALID"])
 
-const userActor = (host: string, name: string) => (name.includes("@") ? `mailto:${name}` : `databricks:${host}:user:${name}`)
 
 function runItem(run: RunInfo, host: string): Item {
   const terminal = RUN_TERMINAL.has(run.state.lifeCycleState)

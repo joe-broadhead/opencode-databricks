@@ -178,6 +178,14 @@ describe("databricks.queries", () => {
     await expect(eventsPage(deps, { account: "work", source: "queries", since: iso(NOW - HOUR), call: call("rate") })).rejects.toMatchObject({ code: "RATE_LIMITED", retryAfterSec: 7 })
   })
 
+  test("a statement's actor is named by user_name (mailto: for an address), and its client application is a label cut to 64", async () => {
+    const query = { ...historyQuery({ id: "q-named", ago: HOUR }), userName: "sam.rivera@example.com", clientApplication: `Tableau ${"x".repeat(100)}` }
+    const page = await eventsPage(queryDeps([query]), { account: "work", source: "queries", since: iso(NOW - 2 * HOUR), call: call("named") })
+    expect(page.events[0]!.actors).toEqual([{ role: "author", id: "mailto:sam.rivera@example.com", name: "sam.rivera@example.com" }])
+    // The contract's makeEvent writes a label's whitespace as "-".
+    expect(page.events[0]!.labels).toContain(`Tableau-${"x".repeat(56)}`)
+  })
+
   test("a scoped read asks Query History for the warehouses, and lists only theirs", async () => {
     const rest = fakeRest({ history: [historyQuery({ id: "q-a", ago: HOUR, warehouse: "wh-a" }), historyQuery({ id: "q-b", ago: HOUR, warehouse: "wh-b" })] })
     const page = await eventsPage(depsFor(rest, open), { account: "work", source: "queries", since: iso(NOW - 2 * HOUR), scope: { warehouses: ["wh-a"] }, call: call("scope") })
@@ -212,7 +220,12 @@ describe("the probe record (H3's request 1: content reads never read the identit
     const deps = depsFor(fakeRest({ history: [historyQuery({ id: "q1", ago: HOUR })] }), permission, {}, records)
     const page = await eventsPage(deps, { account: "work", source: "queries", since: iso(NOW - 2 * HOUR), call: call("model"), mode: "tool" })
     expect(page.events).toHaveLength(1)
-    expect(permission.requests.map((request) => `${request.action} ${request.resource}`)).toEqual(["databricks.events_list work:sql.history.queries.list", "databricks.events_list work:scim.me.get"])
+    expect(permission.requests.map((request) => `${request.action} ${request.resource}`)).toEqual([
+      "databricks.events_list work:sql.history.queries.list",
+      "databricks.read work:sql.history.queries.list",
+      "databricks.events_list work:scim.me.get",
+      "databricks.read work:scim.me.get",
+    ])
     expect(records.get("work", "https://fake-workspace.cloud.databricks.com")).toBeDefined()
   })
 })
@@ -232,11 +245,16 @@ describe("the grants each read asserts (H2)", () => {
     }
   })
 
-  test("the model's own tool keeps the family's rule: its action on <account>:<operation>, the primary operation first", async () => {
+  test("the model's own tool asserts the family's rule first (its action on <account>:<operation>), then databricks.read on each", async () => {
     const permission = new RecordingPermission()
     const rest = fakeRest({ runs: [jobRun({ id: 1, ago: HOUR })] })
     await eventsPage(depsFor(rest, permission), { account: "work", source: "runs", since: iso(NOW - 2 * HOUR), call: call("tool"), mode: "tool" })
-    expect(permission.requests.map((request) => `${request.action} ${request.resource}`)).toEqual(["databricks.events_list work:jobs.runs.list", "databricks.events_list work:jobs.runs.get"])
+    expect(permission.requests.map((request) => `${request.action} ${request.resource}`)).toEqual([
+      "databricks.events_list work:jobs.runs.list",
+      "databricks.events_list work:jobs.runs.get",
+      "databricks.read work:jobs.runs.list",
+      "databricks.read work:jobs.runs.get",
+    ])
   })
 
   test("a person's off switch for one operation is consulted: denying databricks.read on it refuses the read", async () => {

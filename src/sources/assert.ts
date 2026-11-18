@@ -10,10 +10,10 @@
  * off switch for one operation is consulted, and the conformance kit runs under the grants the declaration derives,
  * not ones a test wrote. The rule is the contract's own `operationRule`, imported rather than restated.
  *
- * The **model's own tools** (`databricks_events_list`, `databricks_saved_read`) keep the family's rule instead
- * (`assertTool`, `src/registry.ts`): the tool's dotted action on `<account>:<operation>`, for each operation. Asserting
- * `databricks.read` there needs it declared as a permission-only Jelly tool first (the review's request 3, a Day 0
- * change), or OpenCode's namespace pattern would ask for or deny it.
+ * The **model's own tools** (`databricks_events_list`, `databricks_saved_read`) assert the family's rule first
+ * (`assertTool`, `src/registry.ts`: the tool's dotted action on `<account>:<operation>`, the primary operation first),
+ * then the same `databricks.read` on each operation, which the contract declares permission-only and allowed at every
+ * access (review of #8, request 3): a person's off switch for an operation holds on every read path.
  */
 import { operationRule } from "@we-the-rebel-alliance/source-contract/permission"
 import type { PermissionPort } from "../ports.js"
@@ -57,6 +57,7 @@ export async function assertToolRead(permission: SourceAssert, call: Call, actio
 
 /** The asserts for `mode`, before a read's first provider call. */
 export async function assertRead(mode: ReadMode, permission: SourceAssert, call: Call, action: string, operations: readonly string[], account: string): Promise<void> {
-  if (mode === "tool") await assertToolRead(permission, call, action, operations, account)
-  else await assertSourceRead(permission, call, action, operations, account)
+  if (mode === "source") return assertSourceRead(permission, call, action, operations, account)
+  await assertToolRead(permission, call, action, operations, account)
+  for (const operation of operations) await assertOperationRead(permission, call, operation, account)
 }

@@ -38,8 +38,7 @@ const eventsList: Handler<"events_list"> = async (input, call, deps) => {
       account: accountFor(input, deps),
       source: input.source,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-      // `since` is on the tool's input once the contract keeper's change (#13) adds it; the RPC method takes it already.
-      ...(typeof (input as { since?: unknown }).since === "string" ? { since: (input as { since?: unknown }).since as string } : {}),
+      ...(input.since === undefined ? {} : { since: input.since }),
       ...(input.limit === undefined ? {} : { limit: input.limit }),
       ...(input.scope === undefined ? {} : { scope: input.scope }),
       call,

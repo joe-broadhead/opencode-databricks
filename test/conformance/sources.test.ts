@@ -10,9 +10,8 @@
 // succeeds or fails the whole page, and a tracked run that is gone is dropped, so no page carries `failed[]`. A check
 // that applies and does not run leaves the report incomplete, and the test fails.
 //
-// The kit runs twice: on the declaration as shipped, and on it without the keys only a v0.2.0 consumer reads
-// (`readsIdentity`, a price's `min` and `conditions`), which the contract keeper removes separately; the sources must
-// pass both.
+// The declaration holds none of the keys only a v0.2.0 consumer reads (`declaration.test.ts` checks that), and the
+// queries source never reads the identity in a content read: `probe` records it.
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -109,17 +108,6 @@ const reports: ConformanceReport[] = []
 const SAVED_COST_NOTE =
   "databricks.saved is declared cost.class billed. source-contract v0.2.0's billed-cost check runs only for an events source, so a billed snapshot is neither checked nor not-applicable and the report could never be complete; the kit checks this snapshot as metered (the same price table) until the contract's patch (review of opencode-databricks #8, contract request 2) ships. The declaration test validates the declared billed block."
 
-/** The declaration without the keys a v0.1.x consumer refuses, as the contract keeper's separate change leaves it. */
-function withoutHeldKeys<T>(source: T): T {
-  const copy = JSON.parse(JSON.stringify(source)) as { permission?: Record<string, unknown>; cost?: { units?: Record<string, unknown>[] } }
-  if (copy.permission) delete copy.permission.readsIdentity
-  for (const unit of copy.cost?.units ?? []) {
-    delete unit.min
-    delete unit.conditions
-  }
-  return copy as T
-}
-
 async function runKit(source: (typeof sources.items)[number]) {
   const name = source.id.split(".")[1] as "queries" | "runs" | "saved"
   const rest = fakeRest({ history: [...RECENT_QUERIES, ...OLD_QUERIES], runs: [...RECENT_RUNS, ...OLD_RUNS, ...ACTIVE_RUNS], saved: [SAVED] })
@@ -161,13 +149,6 @@ describe("the source contract's conformance kit", () => {
       expect(report.ok).toBe(true)
       expect(report.incomplete).toBe(false)
       for (const check of report.checks) expect(check.ran || check.notApplicable, `${check.name}: ${check.problems.join("; ")}`).toBe(true)
-    })
-
-    test(`${source.id} keeps the contract without the v0.2.0-only keys (readsIdentity, a price's min and conditions)`, async () => {
-      const report = await runKit(withoutHeldKeys(source))
-      assertConformance(report)
-      expect(report.ok).toBe(true)
-      expect(report.incomplete).toBe(false)
     })
   }
 
