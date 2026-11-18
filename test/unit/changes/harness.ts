@@ -41,6 +41,8 @@ export interface ChangeHarnessInput {
   readonly functionNames?: Readonly<Record<string, readonly string[]>>
   /** Volumes per `<catalog>.<schema>`, for `volumes.list` (a CASCADE's volumes). */
   readonly volumeNames?: Readonly<Record<string, readonly string[]>>
+  /** Registered models per `<catalog>.<schema>`, for `listModels` (a CASCADE's models). */
+  readonly modelNames?: Readonly<Record<string, readonly string[]>>
   readonly runs?: readonly RunInfo[]
   /** The statement answer for every submit, in the documented shape. */
   readonly statement?: (statement: string) => Record<string, unknown>
@@ -62,6 +64,8 @@ export interface ChangeHarness {
   readonly functions: Map<string, string[]>
   /** `volumes.list`'s answer per `<catalog>.<schema>`. */
   readonly volumes: Map<string, string[]>
+  /** `listModels`'s answer per `<catalog>.<schema>`. */
+  readonly models: Map<string, string[]>
   /** `getJob`'s answer per job: change it to move a job between plan and commit. */
   readonly jobSettings: Map<number, JobInfo>
   /** Moves the warehouse under a plan or a commit, for the policy's TOCTOU and PLAN_CHANGED cases. */
@@ -114,6 +118,7 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
   const catalogs = new Map(Object.entries(input.catalogs ?? { main: ["hr", "s"] }).map(([name, names]) => [name, [...names]]))
   const functions = new Map(Object.entries(input.functionNames ?? {}).map(([name, names]) => [name, [...names]]))
   const volumes = new Map(Object.entries(input.volumeNames ?? {}).map(([name, names]) => [name, [...names]]))
+  const models = new Map(Object.entries(input.modelNames ?? {}).map(([name, names]) => [name, [...names]]))
   const base = fakeDatabricks({
     getWarehouse: () => Promise.resolve(warehouse),
     startWarehouse: () => {
@@ -129,6 +134,7 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
       const items = names.slice(start, start + 100).map((name) => ({ name, routineBody: "SQL" }))
       return Promise.resolve({ items, ...(start + 100 < names.length ? { nextPageToken: String(start + 100) } : {}) })
     },
+    listModels: (_account, catalog, schema) => Promise.resolve((models.get(`${String(catalog)}.${String(schema)}`) ?? []).map((name) => ({ name }))),
     listVolumes: (_account, catalog, schema, page) => {
       const paging = page as { readonly pageToken?: string } | undefined
       const names = volumes.get(`${String(catalog)}.${String(schema)}`) ?? []
@@ -188,6 +194,7 @@ export function changeHarness(input: ChangeHarnessInput = {}): ChangeHarness {
     catalogs,
     functions,
     volumes,
+    models,
     jobSettings,
     setWarehouse: (next) => {
       warehouse = next

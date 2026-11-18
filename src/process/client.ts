@@ -227,6 +227,11 @@ export function toJobInfo(value: unknown): JobInfo {
  * ones take documented defaults (`auto_stop_mins` defaults to 120, `enable_photon` to true, …), so the client sends the
  * warehouse read back with only the changed fields replaced: a partial body would silently reset the rest.
  */
+/** One page of `models` asks for the documented maximum (its `max_results` is at most 100). */
+const MODEL_PAGE = 100
+/** How many pages one `listModels` reads before it gives up: 10,000 models in one schema is more than a CASCADE should drop. */
+const MODEL_PAGES_MAX = 100
+
 const WAREHOUSE_EDIT_FIELDS = ["name", "cluster_size", "min_num_clusters", "max_num_clusters", "auto_stop_mins", "creator_name", "instance_profile_arn", "tags", "spot_instance_policy", "enable_photon", "channel", "enable_serverless_compute", "warehouse_type", "statement_timeout"] as const
 
 /** Base64 → text, for `workspace/export`'s `content`. */
@@ -456,6 +461,37 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
 
     async getFunction(account: string, fullName: string, signal: AbortSignal): Promise<FunctionInfo> {
       return toFunction(await call(account, "unity-catalog.functions.get", "GET", `/api/2.1/unity-catalog/functions/${encodeURIComponent(fullName)}`, { idempotent: true, signal }))
+    },
+
+    /**
+     * `GET /api/2.1/unity-catalog/models?catalog_name=&schema_name=` (`unity-catalog.registered-models.list`): every
+     * page, because "clients must continue reading pages until next_page_token is absent", and a page may hold zero
+     * models while still carrying a token
+     * (https://docs.databricks.com/api/uc-registered-models/v1/list-registered-models.md). A 404 is `NOT_FOUND` and a
+     * 403 `PERMISSION_DENIED`, as everywhere else in this client.
+     */
+    async listModels(account: string, catalog: string, schema: string, signal: AbortSignal): Promise<readonly { readonly name: string; readonly fullName?: string }[]> {
+      const models: { name: string; fullName?: string }[] = []
+      let pageToken: string | undefined
+      for (let page = 0; page < MODEL_PAGES_MAX; page++) {
+        const answer = record(
+          await call(account, "unity-catalog.registered-models.list", "GET", "/api/2.1/unity-catalog/models", {
+            query: { catalog_name: catalog, schema_name: schema, max_results: MODEL_PAGE, ...(pageToken === undefined ? {} : { page_token: pageToken }) },
+            idempotent: true,
+            signal,
+          }),
+        )
+        for (const entry of list(answer.registered_models)) {
+          const model = record(entry)
+          const name = text(model.name)
+          if (name === "") continue
+          models.push({ name, ...(maybeText(model.full_name) ? { fullName: maybeText(model.full_name) } : {}) })
+        }
+        const next = maybeText(answer.next_page_token)
+        if (next === undefined) return models
+        pageToken = next
+      }
+      throw new DatabricksError("UNAVAILABLE", `Registered models in ${catalog}.${schema} have more than ${MODEL_PAGES_MAX * MODEL_PAGE} entries, more than this client reads in one call.`, "List them in Databricks, or narrow the schema.")
     },
 
     async listVolumes(account: string, catalog: string, schema: string, pageInput, signal: AbortSignal): Promise<Page<{ name: string; volumeType: string }>> {

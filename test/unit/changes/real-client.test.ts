@@ -171,6 +171,25 @@ describe("the real client's getJob and editWarehouse, end to end", () => {
     }
   })
 
+  it("listModels follows next_page_token across pages", async () => {
+    const models = Array.from({ length: 101 }, (_, index) => ({ name: `m${index}` }))
+    const fake = await startFakeDatabricks({ models: new Map([["main.hr", models]]) })
+    try {
+      const account = accountOf(fake, { features: [] })
+      const client = createDatabricksClient({ auth: fakeAuth(account) })
+      const signal = new AbortController().signal
+      const listed = await client.listModels("work", "main", "hr", signal)
+      expect(listed).toHaveLength(101)
+      expect(listed[0]).toMatchObject({ name: "m0", fullName: "main.hr.m0" })
+      const requests = fake.requests.filter((request: { path: string }) => request.path === "/api/2.1/unity-catalog/models")
+      expect(requests).toHaveLength(2)
+      expect(requests[0]!.query).toMatchObject({ catalog_name: "main", schema_name: "hr", max_results: "100" })
+      expect(requests[1]!.query).toMatchObject({ page_token: "p:100" })
+    } finally {
+      await fake.close()
+    }
+  })
+
   it("commits a warehouse edit through the documented body, read back with the change applied", async () => {
     const { fake, client, deps, signal } = await depsOver()
     try {

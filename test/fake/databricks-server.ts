@@ -429,6 +429,7 @@ export const startFakeDatabricks: StartFake = async (seed = {}) => {
     workspace: new Map(seed.workspace ?? []),
     notebooks: new Map(seed.notebooks ?? []),
     directories: new Map(seed.directories ?? []),
+    models: new Map(seed.models ?? []),
     jobs: new Map(seed.jobs ?? []),
   }
 
@@ -839,6 +840,23 @@ export const startFakeDatabricks: StartFake = async (seed = {}) => {
       const key = `${url.searchParams.get("catalog_name") ?? ""}.${url.searchParams.get("schema_name") ?? ""}`
       const volumes = state.volumes.get(key) ?? []
       return json(res, 200, { volumes: volumes.map((volume) => ({ name: volume.name, volume_type: volume.volumeType })) })
+    }
+    if (path === "/api/2.1/unity-catalog/models" && method === "GET") {
+      // `GET /api/2.1/unity-catalog/models?catalog_name=&schema_name=` documents both names together and a
+      // `next_page_token` that may accompany an empty page
+      // (https://docs.databricks.com/api/uc-registered-models/v1/list-registered-models.md).
+      const catalog = url.searchParams.get("catalog_name")
+      const schema = url.searchParams.get("schema_name")
+      if (catalog === null || schema === null) return failure(res, 400, "BAD_REQUEST", "catalog_name and schema_name are required together.")
+      const all = state.models.get(`${catalog}.${schema}`) ?? []
+      const size = Math.min(Number(url.searchParams.get("max_results") ?? 100) || 100, 100)
+      const offset = Number(/^p:(\d+)$/u.exec(url.searchParams.get("page_token") ?? "")?.[1] ?? 0)
+      const page = all.slice(offset, offset + size)
+      const next = offset + size < all.length ? `p:${offset + size}` : undefined
+      return json(res, 200, {
+        registered_models: page.map((model) => ({ name: model.name, catalog_name: catalog, schema_name: schema, full_name: model.fullName ?? `${catalog}.${schema}.${model.name}`, owner: state.identity.userName })),
+        ...(next ? { next_page_token: next } : {}),
+      })
     }
     if (path === "/api/2.1/unity-catalog/connections" && method === "GET") {
       // Connections are not in FakeState (no package reads them yet): the empty page is the honest answer.

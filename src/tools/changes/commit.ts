@@ -56,7 +56,7 @@ function operationFor(payload: Plan["payload"]["kind"], fallback: Operation): Op
 function plannedTargets(plan: Plan): readonly ResolvedTarget[] {
   const policy = decodePolicy(plan.fingerprint.policy)
   if (policy?.targets) {
-    return policy.targets.map((target) => ({ name: target.name, kind: target.kind as TargetKind, cascade: false, ...(target.type ? { type: target.type } : {}), ...(target.children ? { children: target.children.map((child) => ({ name: child.name, kind: child.kind as "schema" | "table" | "function" | "volume" })) } : {}) }))
+    return policy.targets.map((target) => ({ name: target.name, kind: target.kind as TargetKind, cascade: false, ...(target.type ? { type: target.type } : {}), ...(target.children ? { children: target.children.map((child) => ({ name: child.name, kind: child.kind as "schema" | "table" | "function" | "volume" | "model" })) } : {}) }))
   }
   return plan.fingerprint.targets.map((name) => ({ name, kind: "table" as const, cascade: false }))
 }

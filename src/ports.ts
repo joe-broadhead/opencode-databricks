@@ -310,6 +310,12 @@ export interface DatabricksPort {
   listFunctions(account: string, catalog: string, schema: string, page: { readonly pageToken?: string }, signal: AbortSignal): Promise<Page<{ readonly name: string; readonly routineBody: string }>>
   getFunction(account: string, fullName: string, signal: AbortSignal): Promise<FunctionInfo>
   listVolumes(account: string, catalog: string, schema: string, page: { readonly pageToken?: string }, signal: AbortSignal): Promise<Page<{ readonly name: string; readonly volumeType: string }>>
+  /**
+   * Every registered model in a schema (`GET /api/2.1/unity-catalog/models?catalog_name=&schema_name=`, operation
+   * `unity-catalog.registered-models.list`, free). Package B follows `next_page_token` to its end — a page may hold zero
+   * models and still carry a token (https://docs.databricks.com/api/uc-registered-models/v1/list-registered-models.md).
+   */
+  listModels(account: string, catalog: string, schema: string, signal: AbortSignal): Promise<readonly { readonly name: string; readonly fullName?: string }[]>
   /** UC effective permissions on a securable, for one `principal` when given; package B pages to the end. `USE_CONNECTION` is read with `{ type: "connection" }`. */
   effectivePermissions(account: string, securable: { readonly type: string; readonly fullName: string }, signal: AbortSignal, principal?: string): Promise<readonly { readonly principal: string; readonly privileges: readonly string[] }[]>
   /** UC connections (`unity-catalog.connections.list`). */

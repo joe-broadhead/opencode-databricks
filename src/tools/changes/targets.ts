@@ -44,8 +44,8 @@ import type { DatabricksPort } from "../../ports.js"
 import { SqlBaseLexer } from "../../sql/generated/SqlBaseLexer.js"
 import { type Parsed, contextName, lex, parseStatement } from "../../sql/parse.js"
 
-/** What a target is: a table or view, a Unity Catalog function or volume, a schema, or a catalog. */
-export type TargetKind = "table" | "function" | "volume" | "schema" | "catalog"
+/** What a target is: a table or view, a Unity Catalog function, volume or registered model, a schema, or a catalog. */
+export type TargetKind = "table" | "function" | "volume" | "model" | "schema" | "catalog"
 
 /** A target as the text names it, before resolution. */
 export interface ChangeTarget {
@@ -74,10 +74,10 @@ export interface ResolvedTarget {
   readonly children?: readonly CascadeChild[]
 }
 
-/** One object a CASCADE drops: a schema, a table or view, a function, or a volume, all `<c>.<s>[.<o>]`. */
+/** One object a CASCADE drops: a schema, a table or view, a function, a volume or a registered model. */
 export interface CascadeChild {
   readonly name: string
-  readonly kind: "schema" | "table" | "function" | "volume"
+  readonly kind: "schema" | "table" | "function" | "volume" | "model"
 }
 
 export interface CheckedTargets {
@@ -254,7 +254,7 @@ export function qualifyName(target: ChangeTarget, defaults: NameDefaults): strin
 }
 
 export interface TargetDeps {
-  readonly databricks: Pick<DatabricksPort, "getTable" | "listTables" | "listSchemas" | "listFunctions" | "listVolumes">
+  readonly databricks: Pick<DatabricksPort, "getTable" | "listTables" | "listSchemas" | "listFunctions" | "listVolumes" | "listModels">
 }
 
 export interface ResolveInput {
@@ -285,8 +285,8 @@ async function listAll(fetch: (page: { readonly pageToken?: string; readonly max
 
 /**
  * What a schema CASCADE drops beyond the schema itself: its tables and views (`tables.list`), its functions
- * (`functions.list`) and its volumes (`volumes.list`). Each is a child with its own resource, so a rule naming one
- * reaches it (review of #7, round 4's LOW 3).
+ * (`functions.list`), its volumes (`volumes.list`) and its registered models (`listModels`, which reads every page).
+ * Each is a child with its own resource, so a rule naming one reaches it (review of #7, round 4's LOW 3 and round 5).
  */
 async function schemaChildren(deps: TargetDeps, account: string, name: string, signal: AbortSignal): Promise<readonly CascadeChild[]> {
   const [catalog, schema] = name.split(".")
@@ -294,10 +294,13 @@ async function schemaChildren(deps: TargetDeps, account: string, name: string, s
   const tables = await listAll((page) => deps.databricks.listTables(account, catalog, schema, page, signal), quoted(name), signal)
   const functions = await listAll((page) => deps.databricks.listFunctions(account, catalog, schema, page, signal), quoted(name), signal)
   const volumes = await listAll((page) => deps.databricks.listVolumes(account, catalog, schema, page, signal), quoted(name), signal)
+  // `listModels` follows `next_page_token` itself, and answers a name per registered model.
+  const models = await deps.databricks.listModels(account, catalog, schema, signal)
   return [
     ...tables.map((table) => ({ name: `${catalog}.${schema}.${table}`, kind: "table" as const })),
     ...functions.map((fn) => ({ name: `${catalog}.${schema}.${fn}`, kind: "function" as const })),
     ...volumes.map((volume) => ({ name: `${catalog}.${schema}.${volume}`, kind: "volume" as const })),
+    ...models.map((model) => ({ name: `${catalog}.${schema}.${model.name}`, kind: "model" as const })),
   ]
 }
 
@@ -371,7 +374,7 @@ export async function resolveTargets(deps: TargetDeps, input: ResolveInput): Pro
         }
       }
       targets.push({ name, kind: "catalog", cascade: true, type: "CATALOG", children })
-      notes.push(`${quoted(name)} is dropped with CASCADE: ${schemas.length} schema${schemas.length === 1 ? "" : "s"} and ${children.length - schemas.length} object${children.length - schemas.length === 1 ? "" : "s"} will be checked against your rules. Registered models are not listed by this version, so a rule for them cannot reach them.`)
+      notes.push(`${quoted(name)} is dropped with CASCADE: ${schemas.length} schema${schemas.length === 1 ? "" : "s"} and ${children.length - schemas.length} object${children.length - schemas.length === 1 ? "" : "s"} will be checked against your rules.`)
       continue
     }
     if (target.kind === "schema") {
@@ -387,7 +390,7 @@ export async function resolveTargets(deps: TargetDeps, input: ResolveInput): Pro
         throw new DatabricksError("FENCED", `The plugin cannot list the objects in ${quoted(name)}, so it cannot tell what DROP SCHEMA … CASCADE would drop.`, "Drop the schema in the Databricks SQL editor, or empty it first and drop it without CASCADE.")
       }
       targets.push({ name, kind: "schema", cascade: true, type: "SCHEMA", children })
-      notes.push(`${quoted(name)} is dropped with CASCADE: ${children.length} object${children.length === 1 ? "" : "s"} will be checked against your rules. Registered models are not listed by this version, so a rule for them cannot reach them.`)
+      notes.push(`${quoted(name)} is dropped with CASCADE: ${children.length} object${children.length === 1 ? "" : "s"} will be checked against your rules.`)
       continue
     }
     try {
@@ -422,7 +425,7 @@ export function categoryFor(classified: PlanClassification, checked: CheckedTarg
 
 /** The resource a target is asserted as (design §10.1's table resource, and this plugin's for the other two kinds). */
 export function targetResource(account: string, target: { readonly name: string; readonly kind: TargetKind }): string {
-  const prefix = target.kind === "function" ? "function" : target.kind === "volume" ? "volume" : "table"
+  const prefix = target.kind === "function" ? "function" : target.kind === "volume" ? "volume" : target.kind === "model" ? "model" : "table"
   const suffix = target.kind === "schema" ? ".*" : target.kind === "catalog" ? ".*.*" : ""
   return `${account}:${prefix}:${target.name}${suffix}`
 }
