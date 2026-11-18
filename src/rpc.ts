@@ -25,8 +25,10 @@ export type Rule = { readonly action: string; readonly resource: string; readonl
 export type SkillPath = { readonly id: string; readonly path: string }
 export type Enforcement = (typeof ENFORCEMENTS)[number]
 export type AccountStatus = Output<"status">["accounts"][number]
-export type RunningItem = Output<"status">["running"][number]
-export type Spend = NonNullable<Output<"status">["spend"]>
+export type RunningItem = Output<"status">["running"][number] & { readonly account: string }
+export type Spend = NonNullable<Output<"status">["spend"]> & {
+  readonly reconciled?: { readonly warehouse: string; readonly usageDate: string; readonly dbu: number; readonly complete: boolean }
+}
 export type CleanupAction = NonNullable<Output<"status">["cleanup"]>[number]
 
 export type Status = {
@@ -81,7 +83,7 @@ const account = object(
   },
   ["alias", "mode", "enforcement", "writes", "scopes"],
 )
-const running = object({ kind: { enum: ["statement", "run"] }, id: text, warehouse: text, startedAt: text, tool: text }, ["kind", "id", "startedAt", "tool"])
+const running = object({ kind: { enum: ["statement", "run"] }, account: text, id: text, warehouse: text, startedAt: text, tool: text }, ["kind", "account", "id", "startedAt", "tool"])
 const spend = object(
   {
     startsToday: number,
@@ -89,6 +91,7 @@ const spend = object(
     dbuHoursSession: number,
     estimate: { type: "boolean" },
     budget: object({ state: { enum: BUDGET_STATES }, limit: number }, ["state"]),
+    reconciled: object({ warehouse: text, usageDate: text, dbu: number, complete: { type: "boolean" } }, ["warehouse", "usageDate", "dbu", "complete"]),
   },
   ["startsToday", "dbuHoursToday", "dbuHoursSession", "estimate", "budget"],
 )
@@ -169,11 +172,18 @@ const isAccount = (value: unknown) =>
   isOptional(value.warehouse, isWarehouse)
 
 const isRunning = (value: unknown) =>
-  isRecord(value) && only(value, ["kind", "id", "warehouse", "startedAt", "tool"]) && inList(value.kind, ["statement", "run"]) && isText(value.id) && isOptional(value.warehouse, isText) && isText(value.startedAt) && isText(value.tool)
+  isRecord(value) &&
+  only(value, ["kind", "account", "id", "warehouse", "startedAt", "tool"]) &&
+  inList(value.kind, ["statement", "run"]) &&
+  isText(value.account) &&
+  isText(value.id) &&
+  isOptional(value.warehouse, isText) &&
+  isText(value.startedAt) &&
+  isText(value.tool)
 
 const isSpend = (value: unknown) =>
   isRecord(value) &&
-  only(value, ["startsToday", "dbuHoursToday", "dbuHoursSession", "estimate", "budget"]) &&
+  only(value, ["startsToday", "dbuHoursToday", "dbuHoursSession", "estimate", "budget", "reconciled"]) &&
   isNumber(value.startsToday) &&
   isNumber(value.dbuHoursToday) &&
   isNumber(value.dbuHoursSession) &&
@@ -181,7 +191,8 @@ const isSpend = (value: unknown) =>
   isRecord(value.budget) &&
   only(value.budget, ["state", "limit"]) &&
   inList(value.budget.state, BUDGET_STATES) &&
-  isOptional(value.budget.limit, isNumber)
+  isOptional(value.budget.limit, isNumber) &&
+  isOptional(value.reconciled, (reconciled) => isRecord(reconciled) && only(reconciled, ["warehouse", "usageDate", "dbu", "complete"]) && isText(reconciled.warehouse) && isText(reconciled.usageDate) && isNumber(reconciled.dbu) && typeof reconciled.complete === "boolean")
 
 const isAutomation = (value: unknown) => isRecord(value) && only(value, ["mode", "active"]) && inList(value.mode, AUTOMATION_MODES) && typeof value.active === "boolean"
 const isCleanup = (value: unknown) => isRecord(value) && only(value, ["what", "usdPerHour", "next"]) && isText(value.what) && isOptional(value.usdPerHour, isNumber) && isText(value.next)
@@ -265,12 +276,13 @@ function warehousesText(accounts: readonly AccountStatus[]): string {
 
 function runningText(running: readonly RunningItem[]): string {
   if (running.length === 0) return "nothing this plugin started is still running"
-  return running.map((item) => `${item.tool} on ${item.warehouse ?? "a warehouse"} (${item.id}, started ${item.startedAt})`).join("; ")
+  return running.map((item) => `${item.tool} on ${item.account}/${item.warehouse ?? "a warehouse"} (${item.id}, started ${item.startedAt})`).join("; ")
 }
 
 function spendText(spend: Spend): string {
   const budget = spend.budget.state === "off" ? "no budget" : `budget ${spend.budget.state}${spend.budget.limit === undefined ? "" : ` (${spend.budget.limit})`}`
-  return `today ${spend.startsToday} start${spend.startsToday === 1 ? "" : "s"}, ${dbus(spend.dbuHoursToday)} DBU-hours; this session ${dbus(spend.dbuHoursSession)}; an estimate, not a bill; ${budget}`
+  const reconciled = spend.reconciled ? `; system.billing.usage reports ${spend.reconciled.dbu} DBU on ${spend.reconciled.usageDate} (incomplete for 12 h)` : ""
+  return `today ${spend.startsToday} start${spend.startsToday === 1 ? "" : "s"}, ${dbus(spend.dbuHoursToday)} DBU-hours; this session ${dbus(spend.dbuHoursSession)}; an estimate, not a bill; ${budget}${reconciled}`
 }
 
 const AUTOMATION_TEXT = (status: Status): string => {

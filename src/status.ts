@@ -29,6 +29,8 @@ import { defaultRules, unguardedAgents } from "./permissions.js"
 import type { AccountInfo, DatabricksPort, HistoryQuery, LedgerPort, ReadGuardPort, StatementRequest, Token, Warehouse } from "./ports.js"
 import type { AuthPort, Clock } from "./ports.js"
 import { AGENT_STEP, DatabricksRpc, formatStatus, NOTHING_TO_DO, type SkillPath, STATUS_COMMAND } from "./rpc.js"
+import { isMineStatement } from "./automation/index.js"
+import { startedWarehouses } from "./automation/starts.js"
 import { assertTool } from "./registry.js"
 import type { Handler } from "./tool-spec.js"
 import { PLUGIN_VERSION } from "./version.js"
@@ -120,7 +122,7 @@ function lastActivity(history: readonly HistoryQuery[], warehouseId: string): { 
   return { ...(end === undefined ? {} : { end }), ...(busy ? { busy: busy.queryId } : {}) }
 }
 
-async function scanAccount(deps: StatusPorts, alias: string, now: number, signal: AbortSignal): Promise<AccountScan> {
+async function scanAccount(deps: StatusPorts, alias: string, started: ReadonlySet<string>, now: number, signal: AbortSignal): Promise<AccountScan> {
   const problems: string[] = []
   const settings = accountSettings(deps.options).find((account) => account.alias === alias)
   const info = deps.auth.accounts().find((account) => account.alias === alias)
@@ -169,20 +171,25 @@ async function scanAccount(deps: StatusPorts, alias: string, now: number, signal
     }
   }
 
+  // Only this identity's statements: with Can monitor Query History returns everyone's, and another person's tagged
+  // statement is not this plugin's (review of F, M4).
+  const numericId = identity ? Number(identity.id) : Number.NaN
+  const userIds = Number.isSafeInteger(numericId) && numericId > 0 ? [numericId] : undefined
   let history: readonly HistoryQuery[] = []
   try {
-    const page = await deps.databricks.history(alias, { startMs: now - HISTORY_WINDOW_MS, maxResults: HISTORY_PAGE }, signal)
+    const page = await deps.databricks.history(alias, { startMs: now - HISTORY_WINDOW_MS, maxResults: HISTORY_PAGE, ...(userIds ? { userIds } : {}) }, signal)
     history = page.items
   } catch (error) {
     problems.push(problem(alias, error))
   }
 
   const running: RunningItem[] = history
-    .filter((item) => item.queryTags?.oc_plugin === PLUGIN_TAG && (item.status === "RUNNING" || item.status === "QUEUED"))
+    .filter((item) => isMineStatement(item, userIds) && item.queryTags?.oc_plugin === PLUGIN_TAG && (item.status === "RUNNING" || item.status === "QUEUED"))
     .map((item) => ({
       kind: "statement" as const,
       // The result lists every account, so the id names its account; `next` carries the account for databricks_cancel.
-      id: `${alias}:${safeText(item.queryId, 128)}`,
+      account: alias,
+      id: safeText(item.queryId, 128),
       ...(item.warehouseId ? { warehouse: item.warehouseId } : {}),
       startedAt: iso(item.queryStartTimeMs),
       tool: safeText(item.queryTags?.oc_tool ?? "query", 40),
@@ -190,6 +197,7 @@ async function scanAccount(deps: StatusPorts, alias: string, now: number, signal
 
   const cleanup: CleanupAction[] = []
   for (const item of history) {
+    if (!isMineStatement(item, userIds)) continue
     if (!(item.queryTags?.oc_plugin === PLUGIN_TAG && (item.status === "RUNNING" || item.status === "QUEUED"))) continue
     const tool = item.queryTags?.oc_tool ?? "query"
     const statementId = safeText(item.queryId, 128)
@@ -212,6 +220,9 @@ async function scanAccount(deps: StatusPorts, alias: string, now: number, signal
     return { warehouse, ...(activity.end === undefined ? {} : { idleMinutes: minutes(now - activity.end) }), ...(activity.busy ? { busy: safeText(activity.busy, 40) } : {}) }
   })
   for (const entry of [...scanned].sort((a, b) => usdPerHour(b.warehouse, deps.options) - usdPerHour(a.warehouse, deps.options))) {
+    // A stop is only suggested for a warehouse this plugin started (review of F, M5): the ledger's start record is the
+    // only evidence, and guessing would nudge a stop of a warehouse someone else is using.
+    if (!started.has(entry.warehouse.id)) continue
     const price = cents(usdPerHour(entry.warehouse, deps.options))
     const idle = entry.busy ? `a statement is running on it (${entry.busy})` : entry.idleMinutes === undefined ? `no statement you can see in the last ${HISTORY_WINDOW_MS / 3_600_000} h` : `idle ${entry.idleMinutes} min by the statements you can see`
     cleanup.push({
@@ -271,11 +282,15 @@ export const automationOf = (options: Options): { mode: Options["automation"]; a
   active: options.automation === "on" || (options.automation === "auto" && options.access === "all"),
 })
 
-/** One scan of every configured account. Databricks failures become problems; nothing is thrown for them. */
-export async function scanAccounts(ports: StatusPorts, sessionID: string, signal: AbortSignal): Promise<Scan> {
+/** One scan of every configured account (or the ones named). Databricks failures become problems; nothing is thrown. */
+export async function scanAccounts(ports: StatusPorts, sessionID: string, signal: AbortSignal, only?: readonly string[]): Promise<Scan> {
   const now = ports.clock.now()
-  const aliases = accountSettings(ports.options).map((account) => account.alias)
-  const scans = await Promise.all(aliases.map((alias) => scanAccount(ports, alias, now, signal).catch((error) => failedScan(ports, alias, error))))
+  const aliases = only ?? accountSettings(ports.options).map((account) => account.alias)
+  const started = new Map<string, ReadonlySet<string>>()
+  for (const alias of aliases) started.set(alias, await startedWarehouses(ports.ledger, alias, now))
+  const scans = await Promise.all(
+    aliases.map((alias) => scanAccount(ports, alias, started.get(alias) ?? new Set(), now, signal).catch((error) => failedScan(ports, alias, error))),
+  )
   const running = scans.flatMap((scan) => scan.running)
   // Biggest saving first, then the statements; a UI list, so it is capped.
   const cleanup = scans.flatMap((scan) => scan.cleanup).sort((a, b) => (b.usdPerHour ?? 0) - (a.usdPerHour ?? 0)).slice(0, MAX_CLEANUP)
@@ -308,14 +323,23 @@ export async function scanAccounts(ports: StatusPorts, sessionID: string, signal
  * One statement through the read path on a warehouse that is already running (no `start`), charged like any read.
  * Anything that stops it — no warehouse, no grant, a stopped warehouse — becomes a `problem`, never a failed status.
  */
-async function reconcileSpend(ports: StatusPorts, alias: string, sessionID: string, callID: string, signal: AbortSignal): Promise<{ line?: string; problem?: string }> {
+async function reconcileSpend(
+  ports: StatusPorts,
+  alias: string,
+  sessionID: string,
+  callID: string,
+  signal: AbortSignal,
+): Promise<{ reconciled?: Spend["reconciled"]; line?: string; problem?: string }> {
   const settings = accountSettings(ports.options).find((account) => account.alias === alias)
   if (!settings) return { problem: "no account is configured, so there is no warehouse to reconcile against." }
   const info = ports.auth.accounts().find((account) => account.alias === alias)
   const warehouseId = info?.warehouse ?? settings.warehouse
   if (!warehouseId) return { problem: `${alias} has no default warehouse, so there is nothing to reconcile against; set accounts.${alias}.warehouse.` }
+  // The documented struct field access (`.`), not the `:` operator, which takes VARIANT or JSON text and not a struct
+  // column (review of F, M6): https://docs.databricks.com/aws/en/admin/system-tables/billing. `current_date` is written
+  // without parentheses, the form the pinned grammar parses.
   const sql =
-    "SELECT sum(usage_quantity) AS dbu FROM system.billing.usage WHERE usage_date = current_date AND usage_metadata:warehouse_id = :warehouse"
+    "SELECT sum(usage_quantity) AS dbu, current_date AS usage_date FROM system.billing.usage WHERE usage_date = current_date AND usage_metadata.warehouse_id = :warehouse"
   try {
     const prepared = await ports.reads.prepare(
       {
@@ -360,14 +384,17 @@ async function reconcileSpend(ports: StatusPorts, alias: string, sessionID: stri
       })
     }
     const value = answer.rows?.[0]?.[0]
+    const day = answer.rows?.[0]?.[1]
     if (answer.state !== "SUCCEEDED" || value === null || value === undefined) {
       return { problem: `${alias}: the reconciliation statement did not return a figure (${answer.state}).` }
     }
     const dbu = Number(value)
     if (!Number.isFinite(dbu)) return { problem: `${alias}: the reconciliation statement returned a value that is not a number.` }
+    const usageDate = typeof day === "string" && day.length > 0 ? day : new Date(ports.clock.now()).toISOString().slice(0, 10)
     const totals = await ports.ledger.totals(alias, sessionID)
     return {
-      line: `system.billing.usage reports ${Math.round(dbu * 1000) / 1000} DBU for ${safeText(warehouseId, 64)} today; this process's estimate is ${Math.round(totals.dbuHoursToday * 1000) / 1000} DBU-hours for every warehouse (both are estimates until the account's own prices apply [25]).`,
+      reconciled: { warehouse: safeText(warehouseId, 64), usageDate, dbu: Math.round(dbu * 1000) / 1000, complete: false },
+      line: `system.billing.usage reports ${Math.round(dbu * 1000) / 1000} DBU for ${safeText(warehouseId, 64)} on ${usageDate}; records are typically available within 12 hours, so today's figure is incomplete. This process's estimate is ${Math.round(totals.dbuHoursToday * 1000) / 1000} DBU-hours for every warehouse (both are estimates until the account's own prices apply [25]).`,
     }
   } catch (error) {
     return { problem: problem(alias, error) }
@@ -432,28 +459,38 @@ export async function computeStatus(ctx: StatusContext, ports: StatusPorts, extr
 /** `databricks_status` (design §4): the same scan, in the tool's contract shape. */
 export const statusHandler: Handler<"status"> = async (input, call, deps) => {
   // Status must answer before a sign-in exists: resolve the alias from the options, never through `auth.account()`,
-  // which refuses a workspace that has not been signed in to yet.
-  const alias = input.account ?? deps.auth.accounts()[0]?.alias ?? accountSettings(deps.options)[0]?.alias ?? "default"
-  await assertTool("status", alias, call, deps)
-  const scan = await scanAccounts(deps, call.sessionID, call.signal)
+  // which refuses a workspace that has not been signed in to yet. A named account is the only one scanned and asserted;
+  // with none, every configured account is (review of F, LOW 12).
+  const fallback = input.account ?? deps.auth.accounts()[0]?.alias ?? accountSettings(deps.options)[0]?.alias ?? "default"
+  const aliases = input.account ? [input.account] : accountSettings(deps.options).map((account) => account.alias)
+  const scanning = aliases.length > 0 ? aliases : [fallback]
+  for (const alias of scanning) await assertTool("status", alias, call, deps)
+  const scan = await scanAccounts(deps, call.sessionID, call.signal, scanning)
   const includeSpend = input.include?.includes("spend") ?? false
-  const reconciled = includeSpend ? await reconcileSpend(deps, alias, call.sessionID, call.id, call.signal) : {}
-  const problems = [...scan.problems, ...(reconciled.problem ? [reconciled.problem] : [])]
-  const out: Output<"status"> = {
+  const recon = includeSpend ? await reconcileSpend(deps, fallback, call.sessionID, call.id, call.signal) : {}
+  const problems = [...scan.problems, ...(recon.problem ? [recon.problem] : [])]
+  const spend = recon.reconciled ? { ...scan.spend, reconciled: recon.reconciled } : scan.spend
+  const warnings = [
+    { code: "ESTIMATE_ONLY", message: "Spend figures are estimates from list prices and this plugin's own ledger; the account's system.billing tables are the authority." },
+    ...(recon.problem
+      ? [{ code: "SPEND_UNAVAILABLE", message: `system.billing.usage could not be read for the reconciliation: ${recon.problem}` }]
+      : []),
+  ]
+  // The running `account` field and the spend `reconciled` field are the accepted Day 0 amendment (review of F, request
+  // 3); the contract keeper lands them. The cast goes when the amendment is in this branch's base.
+  const out = {
     state: "ok",
     access: deps.access,
     accounts: [...scan.scans.map((item) => item.account)],
     running: [...scan.running],
-    spend: scan.spend,
+    spend,
     automation: scan.automation,
     disclosure: WRITE_DISCLOSURE,
     ...(scan.cleanup.length ? { cleanup: [...scan.cleanup] } : {}),
-    ...(problems.length || reconciled.line
-      ? { message: [...problems, ...(reconciled.line ? [reconciled.line] : [])].join(" ") }
-      : {}),
+    ...(problems.length || recon.line ? { message: [...problems, ...(recon.line ? [recon.line] : [])].join(" ") } : {}),
     ...(problems.length ? { next: `Fix the first problem, or run /${STATUS_COMMAND} for the same detail.` } : {}),
-    warnings: [{ code: "ESTIMATE_ONLY", message: "Spend figures are estimates from list prices and this plugin's own ledger; the account's system.billing tables are the authority." }],
-  }
+    warnings,
+  } as unknown as Output<"status">
   return out
 }
 

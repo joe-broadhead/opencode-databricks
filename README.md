@@ -70,10 +70,13 @@ v0.1.0, and a stop is only offered for a warehouse the plugin's own start record
 - **Privileges are the only server-enforced read-only.** The wrapper, the function allowlist, the dependency checks and
   the fence are the plugin's own, over its own parse of Spark's grammar, and best-effort: Databricks' parser is closed
   and a warehouse channel may differ. Sign in with a role for a hard limit; see [Auth](docs/auth.md#enforcement).
-- **A role is weaker than "read-only" sounds.** Roles inherit the grants of `users` and `account users`, workspace users
-  can create objects in the workspace catalog's `default` schema, and a job run uses its job's Run as identity. The
-  doctor checks those, and its claim names what it did not check: secret scopes, serving endpoints, and schema- or
-  table-level grants outside the `default` schema. Under `all-apis` those families block the claim [13][38].
+- **A role is weaker than "read-only" sounds.** Roles inherit the grants of `users` and `account users`, and workspace
+  users can create objects in the workspace catalog's `default` schema [13][38]. `/databricks-doctor` checks the role's
+  own grants and those two inherited groups, on every catalog it can see and on the workspace catalog's `default` schema;
+  its claim is exactly: "SQL writes refused on what doctor checked; secret scopes and serving endpoints not checked; job
+  runs use each job's Run as identity". Under `all-apis` secret scopes and serving endpoints are reachable, so they block
+  the claim. The claim covers only what the doctor checked; schema- and table-level grants outside the `default` schema
+  are not part of it.
 - **Non-ASCII names are refused.** A function or generator name, or a keyword, with any non-ASCII character is
   `SQL_INVALID`: the plugin cannot prove Databricks reads the name it checked. A user function named by one or two
   parts is `FUNCTION_NAME_PARTIAL`; write `catalog.schema.function`.
@@ -84,12 +87,15 @@ v0.1.0, and a stop is only offered for a warehouse the plugin's own start record
 - **Write `current_date`, not `current_date()`.** The pinned grammar refuses the parenthesised form
   (`SQL_UNSUPPORTED`); the bare keyword is allowed and needs no SQL path. The same holds for `current_timestamp` and
   `current_user`.
-- **The parser is Spark's, not Databricks'.** The plugin parses SQL with Apache Spark's grammar at v4.3.0 [41].
-  Databricks-only syntax that Spark lacks is refused in reads (`SQL_UNSUPPORTED`) and planned as `run`, the strictest
-  category: `VACUUM`, `OPTIMIZE`, `RESTORE`, `COPY INTO`, `CREATE STREAMING TABLE`, `REORG` and `FSCK`.
-- **Keyword forms follow the path.** `EXTRACT`, `TRIM(… FROM …)`, `POSITION(… IN …)`, `SUBSTRING(… FROM …)` and
-  `LATERAL VIEW` generators cannot be qualified, so a read that uses one needs the workspace's default SQL path
-  (`PATH_NOT_DEFAULT`).
+- **The parser is Spark's, not Databricks'.** The plugin parses SQL with Apache Spark's grammar at v4.3.0 [41]. Reads
+  refuse syntax the grammar lacks (`SQL_UNSUPPORTED`); plans take the statement's own category where the grammar parses
+  it, and `run`, the strictest category, where it does not. In practice: `VACUUM`, `OPTIMIZE`, `RESTORE`, `COPY INTO`,
+  `REORG` and `FSCK` plan as `run`; `CREATE STREAMING TABLE … AS SELECT` plans as `write`; `CREATE OR REFRESH STREAMING
+  TABLE` plans as `run`; `GRANT` plans as `share`.
+- **These forms follow the path.** `EXTRACT`, `TRIM(… FROM …)`, `POSITION(… IN …)`, `SUBSTRING(… FROM …)`, `BETWEEN`,
+  `FIRST`/`LAST`/`ANY_VALUE(… IGNORE NULLS)` and `LATERAL VIEW` generators cannot be qualified, and neither can
+  `count(*)` or a table named by one or two parts, so a read that uses one needs the workspace's default SQL path
+  (`PATH_NOT_DEFAULT`). Write `count(1)` and three-part table names to avoid it.
 - **A start bills.** There is no per-query cap and no per-user spending stop for SQL warehouses [22]; server-side limits
   are warehouse settings an admin owns. Budgets are opt-in estimates in DBU-hours from list prices, not bills. A
   statement's backstop is `STATEMENT_TIMEOUT`, two days by default [20].
@@ -107,12 +113,19 @@ v0.1.0, and a stop is only offered for a warehouse the plugin's own start record
 - **Masks and filters run functions you cannot see.** Column masks and row filters set by your admins run their own
   functions on every read; Databricks enforces them, and the plugin cannot see them. A mask may wrap a Python
   function [27]. The plugin shows each column's mask and the table's row filter by name.
+- **Status lists statements, not job runs.** Its running list is this plugin's own statements from Query History; job
+  runs are `databricks_jobs`' and the runs source's.
 - **Results and history are bounded by Databricks.** A statement's results are kept 12 hours [6]. Query History returns
   at most 1,000 rows a page, 30 days a call, and a source cursor older than 30 days is `CURSOR_EXPIRED` [24]. Job runs
   are kept 60 days [29]. `query_id` and the Statement API's `statement_id` are the same UUID by assumption until live
   check L8 confirms it, which is what the ambiguous-submit recovery relies on.
 - **Query tags are Public Preview** [24]. The plugin's recovery after an ambiguous submit matches its `oc_call` tag, and
   falls back to the exact wrapped text for a record with no tag.
+- **Spend reconciliation is incomplete for 12 hours.** `system.billing.usage` records are "typically available within
+  12 hours", and `usage_date` is a UTC date [25]. `include: ["spend"]` says so, and its figure is not a bill.
+- **A cleanup stop is offered only for this plugin's own starts.** The ledger's start record (a start in the last 24
+  hours) is the evidence. A warehouse started elsewhere is listed by `/databricks-cleanup` with no stop action; use
+  `databricks_stop` if you mean to stop it, and your identity needs Can manage [16].
 - **Some cell renderings are unverified.** A zone-less `TIMESTAMP` is shown zone-less, in the session's zone, never
   labelled UTC; `BINARY`, `INTERVAL` and `VARIANT` renderings come from hand-written fixtures until live check L8
   records Databricks' own. [Safety](docs/safety.md#known-limits) repeats these.

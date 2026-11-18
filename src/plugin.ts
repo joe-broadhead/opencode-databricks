@@ -93,7 +93,7 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
         )
         keep(await registerCleanup(ctx, deps))
         keep(await registerAutomation(ctx, automation))
-        keep(await registerContextHook(ctx, automation, deps.clock))
+        keep(await registerContextHook(ctx, automation, deps.clock, options.access))
         const stopTools = await registerToolsRpc(ctx as never, { plugin: PLUGIN, methods: methods(() => deps, HANDLERS) })
         keep({ dispose: stopTools })
         keep(await registerSkills(ctx))

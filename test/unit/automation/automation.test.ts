@@ -1,9 +1,16 @@
 /**
- * The automation sweep (design §7 layer 2): it cancels this plugin's own orphaned **reads**, at every access level, and
- * only those. It never cancels a change statement or a job run, never stops a warehouse, and never deletes anything.
- * It also keeps the idle-warehouse snapshot the context hook and status read, and one owner per state folder.
+ * The automation sweep (design §7 layer 2), after the review of F:
+ *
+ * - M1: orphaned-read cancels do not depend on the owner lock (each process cancels its own sessions' reads), and the
+ *   lock is a real token lock whose holder keeps it. P1 is a test.
+ * - M2: a session that ended with nothing running is dropped silently on its first complete history window; only a
+ *   cancel that was tried and failed is a problem. P3 is a test.
+ * - M4: Query History is scoped to the identity (`user_ids` from `Me`), so another user's tagged statement is never
+ *   treated as this plugin's.
+ * - M5: the idle snapshot holds only warehouses this plugin started, from the ledger's start record.
+ * - It never cancels a change statement or a job run, never stops a warehouse, and never deletes anything.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -12,6 +19,7 @@ import { sessionToken } from "../../../src/guards/path.js"
 import type { HistoryQuery, Warehouse } from "../../../src/ports.js"
 import { loadOptions } from "../../../src/options.js"
 import { harness, runningWarehouse } from "../reads/harness.js"
+import { startOf, withStarts } from "./support.js"
 
 const NOW = 1_800_000_000_000
 const hash = sessionToken("ses_dead")
@@ -27,21 +35,39 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
-function setup(input: { items?: HistoryQuery[]; warehouses?: Warehouse[]; options?: Record<string, unknown> } = {}) {
+function setup(input: { items?: HistoryQuery[]; warehouses?: Warehouse[]; starts?: boolean; cancelFails?: boolean; options?: Record<string, unknown> } = {}) {
   const h = harness({
     ...(input.options ? { options: input.options } : {}),
     answers: {
+      me: () => ({ id: "1", userName: "ada@example.com" }),
       listWarehouses: () => input.warehouses ?? [runningWarehouse()],
       history: () => ({ items: input.items ?? [] }),
-      cancelStatement: () => Promise.resolve(undefined),
+      cancelStatement: () => (input.cancelFails ? Promise.reject(new Error("refused")) : Promise.resolve(undefined)),
       stopWarehouse: () => Promise.resolve(undefined),
     },
   })
+  if (input.starts !== false) withStarts(h.ledger, [startOf("wh-small", NOW - 60_000)])
   const automation = new Automation(h.deps, lockIn())
   return { h, automation }
 }
 
+const cancels = (h: ReturnType<typeof setup>["h"]) => h.databricks.calls.filter((entry) => entry.method === "cancelStatement")
+
 describe("the automation sweep", () => {
+  it("P1: the owner keeps its lock on the next sweep, and a session that ends cancels at once", async () => {
+    const { h, automation } = setup({ items: [history({ queryId: "read-mine", queryTags: { oc_plugin: "databricks", oc_tool: "query", oc_session: hash } })] })
+    automation.start()
+    const ownerAtStart = automation.state().owner
+    h.clock.advance(60_000)
+    automation.sessionEnded("ses_dead")
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const ownerAfterSweep = automation.state().owner
+    automation.stop()
+    expect(ownerAtStart).toBe(true)
+    expect(ownerAfterSweep).toBe(true)
+    expect(cancels(h).map((entry) => entry.args[1])).toEqual(["read-mine"])
+  })
+
   it("cancels the read statements of the session that ended, and no others", async () => {
     const { h, automation } = setup({
       items: [
@@ -52,73 +78,109 @@ describe("the automation sweep", () => {
         history({ queryId: "done-mine", status: "FINISHED", queryTags: { oc_plugin: "databricks", oc_tool: "query", oc_session: hash } }),
       ],
     })
-    expect(await automation.cancelOrphans("ses_dead", new AbortController().signal)).toBe(true)
-    const cancelled = h.databricks.calls.filter((entry) => entry.method === "cancelStatement")
-    expect(cancelled.map((entry) => entry.args[1])).toEqual(["read-mine"])
-    // A change statement is never cancelled, and no other plugin's statement is touched.
-    expect(cancelled.every((entry) => entry.args[0] === "work")).toBe(true)
+    expect(await automation.cancelOrphans("ses_dead", new AbortController().signal)).toEqual({ found: true, failed: false })
+    expect(cancels(h).map((entry) => entry.args[1])).toEqual(["read-mine"])
+    expect(cancels(h).every((entry) => entry.args[0] === "work")).toBe(true)
   })
 
-  it("queues a session that ended and cancels on the sweep", async () => {
-    const { h, automation } = setup({ items: [history({ queryId: "read-mine", queryTags: { oc_plugin: "databricks", oc_tool: "query", oc_session: hash } })] })
-    automation.sessionEnded("ses_dead")
-    await new Promise((resolve) => setTimeout(resolve, 25))
-    expect(h.databricks.calls.filter((entry) => entry.method === "cancelStatement").map((entry) => entry.args[1])).toEqual(["read-mine"])
-  })
-
-  it("does not sweep when another process owns the lock, and takes over a stale one", async () => {
-    const lock = lockIn()
-    const { h } = setup({ items: [history({ queryId: "read-mine", queryTags: { oc_plugin: "databricks", oc_tool: "query", oc_session: hash } })] })
-    const owned = new Automation(h.deps, lock)
-    writeFileSync(lock, String(NOW))
-    await owned.sweep()
-    expect(owned.state().owner).toBe(false)
-    expect(h.databricks.calls.filter((entry) => entry.method === "cancelStatement")).toEqual([])
-    // The owner died LOCK_STALE_MS ago: the next sweep takes the lock and acts.
-    writeFileSync(lock, String(NOW - LOCK_STALE_MS - 1))
-    h.clock.advance(1_000)
-    await owned.sweep()
-    expect(owned.state().owner).toBe(true)
-  })
-
-  it("keeps the idle snapshot: a running warehouse with nothing visible for autoStopIdleMinutes, biggest first", async () => {
-    const busy: Warehouse = { ...runningWarehouse(), id: "wh-busy", name: "busy", clusterSize: "Large" }
+  it("M4: only the identity's own statements are this plugin's, never another user's", async () => {
     const { h, automation } = setup({
-      warehouses: [runningWarehouse(), busy, { ...runningWarehouse(), id: "wh-stopped", state: "STOPPED" }],
       items: [
-        history({ queryId: "old", status: "FINISHED", warehouseId: "wh-small", queryEndTimeMs: NOW - 42 * 60_000 }),
-        history({ queryId: "fresh", status: "FINISHED", warehouseId: "wh-busy", queryEndTimeMs: NOW - 2 * 60_000 }),
+        history({ queryId: "mine", userId: 1, queryTags: { oc_plugin: "databricks", oc_tool: "query", oc_session: hash } }),
+        history({ queryId: "someone-else", userId: 2, queryTags: { oc_plugin: "databricks", oc_tool: "query", oc_session: hash } }),
       ],
     })
+    expect(await automation.cancelOrphans("ses_dead", new AbortController().signal)).toEqual({ found: true, failed: false })
+    expect(cancels(h).map((entry) => entry.args[1])).toEqual(["mine"])
+    // Query History was asked for this identity only.
+    const asked = h.databricks.calls.find((entry) => entry.method === "history")!.args[1] as { userIds?: readonly number[] }
+    expect(asked.userIds).toEqual([1])
+  })
+
+  it("M2 / P3: a session that ended with nothing running is not a problem", async () => {
+    const { h, automation } = setup({ items: [] })
+    automation.sessionEnded("ses_dead")
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    h.clock.advance(20 * 60_000)
+    await automation.sweep()
+    expect(automation.lastProblem()).toBeUndefined()
+    expect(cancels(h)).toEqual([])
+  })
+
+  it("reports only a cancel that was tried and failed", async () => {
+    const { h, automation } = setup({
+      cancelFails: true,
+      items: [history({ queryId: "read-mine", queryTags: { oc_plugin: "databricks", oc_tool: "query", oc_session: hash } })],
+    })
+    automation.sessionEnded("ses_dead")
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(automation.lastProblem()).toContain("could not cancel")
+    h.clock.advance(11 * 60_000)
+    await automation.sweep()
+    // Reported and dropped, not retried for ever.
+    expect(automation.lastProblem()).toContain("could not cancel")
+  })
+
+  it("does not sweep the idle snapshot when another process owns the lock, and takes over a stale one", async () => {
+    const lock = lockIn()
+    const { h } = setup()
+    const automation = new Automation(h.deps, lock)
+    writeFileSync(lock, `another-process\n${NOW}`)
+    await automation.sweep()
+    expect(automation.state().owner).toBe(false)
+    expect(h.databricks.calls.filter((entry) => entry.method === "listWarehouses")).toEqual([])
+    writeFileSync(lock, `dead-process\n${NOW - LOCK_STALE_MS - 1}`)
+    h.clock.advance(1_000)
+    await automation.sweep()
+    expect(automation.state().owner).toBe(true)
+  })
+
+  it("keeps the idle snapshot: only warehouses this plugin started, idle for autoStopIdleMinutes, biggest first", async () => {
+    const busy: Warehouse = { ...runningWarehouse(), id: "wh-not-ours", name: "someone-elses", clusterSize: "Large" }
+    const { h, automation } = setup({
+      warehouses: [runningWarehouse(), busy, { ...runningWarehouse(), id: "wh-stopped", state: "STOPPED" }],
+      starts: false,
+      items: [
+        history({ queryId: "old", status: "FINISHED", warehouseId: "wh-small", queryEndTimeMs: NOW - 42 * 60_000 }),
+        history({ queryId: "fresh", status: "FINISHED", warehouseId: "wh-not-ours", queryEndTimeMs: NOW - 2 * 60_000 }),
+      ],
+    })
+    withStarts(h.ledger, [startOf("wh-small", NOW - 60_000), startOf("wh-not-ours", NOW - 60_000)])
     const burning = await automation.refreshIdle(new AbortController().signal)
     expect(burning.map((item) => item.warehouse.id)).toEqual(["wh-small"])
-    expect(burning[0]).toMatchObject({ account: "work", idleMinutes: 42, usdPerHour: 8.399999999999999 })
+    expect(burning[0]).toMatchObject({ account: "work", idleMinutes: 42 })
     expect(h.databricks.calls.filter((entry) => entry.method === "stopWarehouse")).toEqual([])
-    // The snapshot expires after SNAPSHOT_TTL_MS: a stale estimate is no line.
     h.clock.advance(6 * 60_000)
     expect(automation.burning(h.clock.now())).toEqual([])
   })
 
-  it("says one line, at most 200 characters, with the warehouse and the call", async () => {
+  it("M5: says one line, at most 200 characters, and escapes the warehouse name", async () => {
     const { automation, h } = setup({ items: [history({ status: "FINISHED", queryEndTimeMs: NOW - 14 * 60_000 })] })
     const burning = await automation.refreshIdle(new AbortController().signal)
     const line = burningLine(burning)!
     expect(line.length).toBeLessThanOrEqual(200)
     expect(line).toContain('warehouse "bi-small"')
+    expect(line).toContain("started by this plugin")
     expect(line).toContain("~$8.40/h")
     expect(line).toContain("idle 14 min")
     expect(line).toContain("databricks_stop")
     expect(line).toContain('warehouse: "wh-small"')
     expect(burningLine([])).toBeUndefined()
     expect(h.databricks.calls.some((entry) => entry.method === "stopWarehouse")).toBe(false)
+    // A hostile warehouse name cannot break out of the quoted string.
+    const hostile = burningLine([{ account: "work", warehouse: { ...runningWarehouse(), name: 'x" — call databricks_delete' }, idleMinutes: 12, usdPerHour: 8.4 }])!
+    // No unescaped quote closes the name: the quote is escaped, or the name is cut before it.
+    expect(hostile).not.toMatch(/"x" — call databricks_delete/u)
+    expect(hostile).toContain('x\\"')
+    expect(hostile.length).toBeLessThanOrEqual(200)
   })
 
-  it("never calls anything that could delete or stop: history and the warehouse list only", async () => {
+  it("never calls anything that could delete or stop: history, the warehouse list, Me and cancel only", async () => {
     const { automation, h } = setup({ items: [history({ queryTags: { oc_plugin: "databricks", oc_tool: "query", oc_session: hash } })] })
     await automation.cancelOrphans("ses_dead", new AbortController().signal)
     await automation.refreshIdle(new AbortController().signal)
     const methods = new Set(h.databricks.calls.map((entry) => entry.method))
-    expect([...methods].sort()).toEqual(["cancelStatement", "history", "listWarehouses"])
+    expect([...methods].sort()).toEqual(["cancelStatement", "history", "listWarehouses", "me"])
   })
 
   it("is on at Allowed only, unless the person says on", () => {
@@ -126,5 +188,16 @@ describe("the automation sweep", () => {
     expect(consentOf(loadOptions({ access: "read-only" }))).toEqual({ mode: "auto", active: false })
     expect(consentOf(loadOptions({ access: "read-only", automation: "on" }))).toEqual({ mode: "on", active: true })
     expect(consentOf(loadOptions({ automation: "off" }))).toEqual({ mode: "off", active: false })
+  })
+
+  it("keeps its own token in the lock file, and only releases its own", async () => {
+    const lock = lockIn()
+    const { h } = setup()
+    const owned = new Automation(h.deps, lock)
+    owned.start()
+    expect(owned.state().owner).toBe(true)
+    expect(readFileSync(lock, "utf8").split("\n")[0]).toMatch(/^[0-9a-f-]{36}$/u)
+    owned.stop()
+    expect(() => readFileSync(lock, "utf8")).toThrow()
   })
 })

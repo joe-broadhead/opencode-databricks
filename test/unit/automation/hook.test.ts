@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { harness } from "../reads/harness.js"
+import { startOf, withStarts } from "./support.js"
 
 const NOW = 1_800_000_000_000
 
@@ -21,11 +22,12 @@ async function setup(idleMinutes = 14) {
     },
   })
   const dir = mkdtempSync(join(tmpdir(), "dbx-hook-"))
+  withStarts(h.ledger, [startOf("wh-small", NOW - 60_000)])
   const automation = new Automation(h.deps, join(dir, "automation.lock"))
   await automation.refreshIdle(new AbortController().signal)
   let callback: ((event: unknown) => void) | undefined
   const ctx = { session: { hook: async (_name: string, cb: (event: unknown) => void) => { callback = cb; return { dispose: async () => undefined } } } }
-  await registerContextHook(ctx as never, automation, h.clock)
+  await registerContextHook(ctx as never, automation, h.clock, "all")
   return { h, automation, fire: (event: unknown) => callback!(event), cleanup: () => rmSync(dir, { recursive: true, force: true }) }
 }
 
@@ -99,9 +101,9 @@ describe("the context hook", () => {
 
   it("fingerprints the warehouse set and an idle time in 30-minute buckets", () => {
     const item = { account: "work", warehouse: h_warehouse(), idleMinutes: 14, usdPerHour: 8.4 }
-    expect(fingerprintOf([item], "databricks")).toBe(fingerprintOf([{ ...item, idleMinutes: 20 }], "databricks"))
-    expect(fingerprintOf([item], "databricks")).not.toBe(fingerprintOf([{ ...item, idleMinutes: 46 }], "databricks"))
-    expect(fingerprintOf([item], "databricks")).not.toBe(fingerprintOf([{ ...item, warehouse: { ...item.warehouse, id: "wh-2" } }], "databricks"))
+    expect(fingerprintOf([item], "all")).toBe(fingerprintOf([{ ...item, idleMinutes: 20 }], "all"))
+    expect(fingerprintOf([item], "all")).not.toBe(fingerprintOf([{ ...item, idleMinutes: 46 }], "all"))
+    expect(fingerprintOf([item], "all")).not.toBe(fingerprintOf([{ ...item, warehouse: { ...item.warehouse, id: "wh-2" } }], "all"))
   })
 
   it("never throws into the model request", async () => {

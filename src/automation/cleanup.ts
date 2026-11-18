@@ -23,6 +23,7 @@ import { safeText } from "../guards/pattern.js"
 import { usdPerHour } from "../guards/warehouse.js"
 import { CLEANUP_COMMAND } from "../rpc.js"
 import { READ_TOOLS } from "./index.js"
+import { startedWarehouses } from "./starts.js"
 import { scanAccounts, type StatusPorts } from "../status.js"
 
 export type CleanupContext = {
@@ -53,9 +54,8 @@ export async function planCleanup(ports: StatusPorts, sessionID: string, signal:
   if (running.length > 0) {
     lines.push("", "Statements this plugin started that are still running:")
     for (const item of running) {
-      const separator = item.id.indexOf(":")
-      const account = item.id.slice(0, separator)
-      const statementId = item.id.slice(separator + 1)
+      const account = item.account
+      const statementId = item.id
       const tool = item.tool
       lines.push(`- ${account}: ${tool} on ${item.warehouse ?? "a warehouse"}, started ${item.startedAt} (${statementId})`)
       if (READ_TOOLS.has(tool)) {
@@ -69,7 +69,10 @@ export async function planCleanup(ports: StatusPorts, sessionID: string, signal:
     }
   }
 
-  const warehouses = scan.scans.flatMap((item) => item.warehouses.map((entry) => ({ ...entry, account: item.account.alias, price: usdPerHour(entry.warehouse, ports.options) })))
+  const now = ports.clock.now()
+  const startedByAccount = new Map<string, ReadonlySet<string>>()
+  for (const account of scan.scans) startedByAccount.set(account.account.alias, await startedWarehouses(ports.ledger, account.account.alias, now))
+  const warehouses = scan.scans.flatMap((item) => item.warehouses.map((entry) => ({ ...entry, account: item.account.alias, price: usdPerHour(entry.warehouse, ports.options), ours: startedByAccount.get(item.account.alias)?.has(entry.warehouse.id) ?? false })))
   if (warehouses.length > 0) {
     lines.push("", "Running warehouses:")
     for (const entry of [...warehouses].sort((a, b) => b.price - a.price)) {
@@ -79,14 +82,17 @@ export async function planCleanup(ports: StatusPorts, sessionID: string, signal:
           : entry.idleMinutes === undefined
             ? "no statement you can see in the last six hours"
             : `idle ${entry.idleMinutes} min by the statements you can see`
-      lines.push(`- ${entry.account}: ${safeText(entry.warehouse.id, 64)} ${safeText(entry.warehouse.name, 60)}, ${safeText(entry.warehouse.clusterSize, 24)} ${entry.warehouse.serverless ? "serverless" : entry.warehouse.warehouseType.toLowerCase()}, auto-stop ${entry.warehouse.autoStopMins} min, about ${money(entry.price)}/hour, ${idle}`)
-      actions.push({
-        kind: "stop",
-        account: entry.account,
-        warehouseId: entry.warehouse.id,
-        what: `stop warehouse ${safeText(entry.warehouse.name || entry.warehouse.id, 60)} (${safeText(entry.warehouse.id, 64)}) at about ${money(entry.price)}/hour`,
-        usdPerHour: entry.price,
-      })
+      const who = entry.ours ? "" : "; not started by this plugin, so no stop is offered here"
+      lines.push(`- ${entry.account}: ${safeText(entry.warehouse.id, 64)} ${safeText(entry.warehouse.name, 60)}, ${safeText(entry.warehouse.clusterSize, 24)} ${entry.warehouse.serverless ? "serverless" : entry.warehouse.warehouseType.toLowerCase()}, auto-stop ${entry.warehouse.autoStopMins} min, about ${money(entry.price)}/hour, ${idle}${who}`)
+      if (entry.ours) {
+        actions.push({
+          kind: "stop",
+          account: entry.account,
+          warehouseId: entry.warehouse.id,
+          what: `stop warehouse ${safeText(entry.warehouse.name || entry.warehouse.id, 60)} (${safeText(entry.warehouse.id, 64)}) at about ${money(entry.price)}/hour`,
+          usdPerHour: entry.price,
+        })
+      }
     }
     lines.push(
       "",
@@ -97,7 +103,7 @@ export async function planCleanup(ports: StatusPorts, sessionID: string, signal:
   lines.push("", `Access: ${ports.options.access}.`)
   if (ports.options.access === "read-only") lines.push("Read only: this command reports and takes no action.")
   else if (ports.options.access === "ask-changes") lines.push("Ask before changes: each action asks you first, and only you can answer that prompt.")
-  else lines.push("Allowed: typing this command is the confirmation for each action below.")
+  else lines.push("Allowed: typing this command is the confirmation for each action below; your own deny rules still win, action by action.")
   if (actions.length === 0) lines.push("Nothing to cancel or stop.")
   lines.push("Nothing here deletes a table, file, job, warehouse or result.")
   for (const problem of scan.problems) lines.push(`Problem: ${problem}`)
@@ -110,13 +116,13 @@ type Outcome = { readonly action: Action; readonly state: "done" | "denied" | "r
 async function act(ctx: CleanupContext, ports: StatusPorts, sessionID: string, action: Action): Promise<Outcome> {
   const dotted = action.kind === "stop" ? "databricks.stop" : "databricks.cancel"
   const resource = action.kind === "stop" ? warehouseResource(action.account, action.warehouseId) : operationResource(action.account, "sql.statements.cancel")
-  if (ports.options.access === "ask-changes") {
-    try {
-      // No `source`: the host's own prompt, which only a person answers (design §7 layer 4).
-      await ctx.permission.assert({ sessionID, action: dotted, resources: [resource], metadata: { what: action.what } })
-    } catch {
-      return { action, state: "denied", detail: "you declined it" }
-    }
+  try {
+    // Every action asserts its own dotted action, at every access level that acts (review of F, M3). At Ask before
+    // changes the default rules make this the host's prompt, which only a person answers; at Allowed they allow it, so
+    // there is no prompt — and the person's own deny rule still wins, which is the point. No `source`.
+    await ctx.permission.assert({ sessionID, action: dotted, resources: [resource], metadata: { what: action.what } })
+  } catch {
+    return { action, state: "denied", detail: "you declined it, or a rule denied it" }
   }
   try {
     if (action.kind === "stop") await ports.databricks.stopWarehouse(action.account, action.warehouseId, new AbortController().signal)

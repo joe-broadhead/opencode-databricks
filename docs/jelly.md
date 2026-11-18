@@ -46,7 +46,8 @@ enters the workspace URL and the admin's OAuth client ID; Jelly fills the relay 
 The account description carries the write disclosure and says that column masks and row filters run functions the
 plugin cannot see.
 
-`jelly.admin` asks the admin for an OAuth app connection (a public client) with this plugin's redirect URLs [11][12]:
+`jelly.admin` asks the admin for an OAuth app connection (a public client) and names this plugin's redirect URLs
+[11][12]. The connection must list both of these:
 
 - the loopback URL, `http://localhost:8765/callback` (the default `callbackPort`), and
 - **Jelly's relay address**, `<Jelly ID issuer>/connect/callback` — `connectRelayAddress(issuer)` in Jelly's
@@ -80,10 +81,12 @@ reads run only on a warehouse already running, which then stays up until it auto
 bill separately [16][18][21]. See [Costs](costs.md).
 
 The plugin cancels its own orphaned reads when a session ends, at every access level, and stops no warehouse in
-v0.1.0: warehouse cleanup is the person's, through `/databricks-cleanup` or `databricks_stop`. `automation: "on"` is a
+v0.1.0: warehouse cleanup is the person's, through `/databricks-cleanup` or `databricks_stop`. Every cleanup action
+asserts its own `databricks.stop` or `databricks.cancel` at Allowed and at Ask before changes, so a person's deny rule
+wins at both; a stop is offered only for a warehouse this plugin's ledger says it started. `automation: "on"` is a
 standing yes to what automation does, and in v0.1.0 that is only the orphan cancels, which need no consent. The card's
-setting description says what Ask before changes and Read only do; [Configuration](configuration.md#automation-and-cleanup)
-says the rest.
+setting description says what Ask before changes and Read only do;
+[Configuration](configuration.md#automation-and-cleanup) says the rest.
 
 ## Sources declaration
 

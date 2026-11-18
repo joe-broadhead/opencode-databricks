@@ -37,8 +37,10 @@ estimate, labelled as one. Budgets are opt-in: `budget: { daily: { starts, dbuHo
 
 `databricks_status({ include: ["spend"] })` reconciles the estimate with `system.billing.usage` for the default
 warehouse today, when your identity has the grants [25]. That is one statement through the read path, on a warehouse
-that is already running (it never starts one), and it is charged like any read. Without grants it reports a problem
-instead of a figure.
+that is already running (it never starts one), and it is charged like any read. It reads the struct field
+`usage_metadata.warehouse_id`, as Databricks' own examples do, and `usage_date` is a UTC date; records are "typically
+available within 12 hours", so today's figure is incomplete and the result says so (`complete: false`). Without grants,
+a running warehouse or a successful statement it answers `SPEND_UNAVAILABLE` in `warnings` and nothing else changes.
 
 ## Cleanup
 
@@ -53,16 +55,17 @@ The layers, and who acts:
 
 | Layer | What happens | Consent |
 |---|---|---|
-| Server | Auto-stop and `statement_timeout`, set by admins. Status flags `AUTO_STOP_OFF` and `AUTO_STOP_LONG`. | The admin's |
+| Server | Auto-stop and `statement_timeout`, set by admins. `databricks_warehouses` and `/databricks-doctor` flag `AUTO_STOP_OFF` and `AUTO_STOP_LONG`. | The admin's |
 | Automation, while OpenCode runs | Cancels **this plugin's own orphaned reads** when OpenCode reports a session deleted or archived. Never cancels a change statement or a job run, never stops a warehouse, never deletes anything. | Always: a read has no effects |
 | Status and the skill | `databricks_status` lists running statements and every running warehouse with its estimated $/hour and idle time, each with one call (at most ten suggestions, the biggest $/hour first); the context hook says one line when a warehouse has been idle for `autoStopIdleMinutes`. | — |
-| You | `/databricks-cleanup` reports the same and then stops or cancels what you confirm. At `ask-changes` each action is a permission prompt only you answer; at `read-only` it reports and does nothing. | The typed command, plus the prompt at `ask-changes` |
+| You | `/databricks-cleanup` reports the same and then stops or cancels what it lists. Every action asserts its own `databricks.stop` or `databricks.cancel` at `all` and at `ask-changes`; at `ask-changes` that is a permission prompt only you answer, and at `all` the default rules allow it without a prompt unless your own deny rule refuses it. At `read-only` it reports and does nothing. A stop is offered only for a warehouse the ledger says this plugin started. | The typed command, your rules, and the prompt at `ask-changes` |
 | Tools | `databricks_stop` and `databricks_cancel` are ordinary tools with the access rules. `databricks_stop` refuses while another user's statement is visible as running, and has no `force`. | `access` and your rules |
 
 **Stopping needs Can manage**, and other users' statements are visible only with Can monitor or above [16]. Without
 them the report counts only the statements you can see, a stop may be refused (`STOP_NOT_PERMITTED`), and the report is
-advisory. **No warehouse is stopped automatically in v0.1.0**: automation keeps no record of which warehouses this
-plugin started, and stopping one it did not start is not allowed. Use `/databricks-cleanup` or `databricks_stop`.
+advisory. **No warehouse is stopped automatically in v0.1.0.** A stop is suggested only for a warehouse this plugin
+started — the ledger's start record, a start in the last 24 hours — never for one started elsewhere; use
+`databricks_stop` if you mean to stop that one.
 
 Nothing in any layer deletes a table, file, job, warehouse or result.
 

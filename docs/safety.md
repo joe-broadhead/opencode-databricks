@@ -46,10 +46,11 @@ anything is sent:
 4. **Qualified built-ins.** Each allowlisted call is sent as `system.builtin.<name>`, except a `LATERAL VIEW`
    generator, which Spark accepts with at most two name parts: it is sent as written and needs the default path.
    Databricks resolves a three-part name exactly, so a function of the same name in your schema, or a changed SQL path,
-   cannot stand in for it. Keyword forms (`EXTRACT`, `TRIM(BOTH … FROM …)`, `POSITION(… IN …)`, `SUBSTRING(… FROM …)`,
-   `BETWEEN`, `FIRST(… IGNORE NULLS)`) and `LATERAL VIEW` generators cannot be qualified, so a read using one runs only
-   while the workspace's SQL path keeps `system.builtin` before every user schema (`PATH_NOT_DEFAULT` otherwise).
-   `current_date`, `current_timestamp` and `current_user` resolve before the path, as Databricks documents.
+   cannot stand in for it. These forms cannot be qualified, so a read using one runs only while the workspace's SQL path
+   keeps `system.builtin` before every user schema (`PATH_NOT_DEFAULT` otherwise): the keyword forms `EXTRACT`,
+   `TRIM(BOTH … FROM …)`, `POSITION(… IN …)`, `SUBSTRING(… FROM …)`, `BETWEEN` and `FIRST`/`LAST`/`ANY_VALUE(… IGNORE
+   NULLS)`; a `LATERAL VIEW` generator; `count(*)` (write `count(1)`); and a table named by one or two parts. The three
+   current-value functions `current_date`, `current_timestamp` and `current_user` are not path-sensitive [43].
 5. **The wrapper.** The statement sent is exactly `SELECT * FROM (\n<sql>\n) AS oc_q`. With `wait` at most 50
    seconds, Databricks itself cancels it at the wait [6].
 
@@ -61,8 +62,11 @@ own parser is closed. Your privileges are the guarantee.
 `databricks_plan` classifies a change by the statement table (`src/domain/statements.ts`), stores a single-use plan
 for 300 seconds, and returns a preview. It sends no statement: never `EXPLAIN`, because Spark ran statements during
 `EXPLAIN` until SPARK-59689 and SPARK-61554 [41]. `EXECUTE IMMEDIATE`, `CALL` or `IDENTIFIER` anywhere make a plan `run`;
-text the grammar cannot parse is `run` too, including Databricks-only statements such as `VACUUM`, `OPTIMIZE`,
-`RESTORE`, `COPY INTO`, `CREATE STREAMING TABLE`, `REORG` and `FSCK`. Each category commits only through its own tool.
+text the grammar cannot parse is `run` too. Where it parses, the statement keeps its own category, which is not always
+the strictest: `CREATE STREAMING TABLE … AS SELECT` plans as `write`, `CREATE OR REFRESH STREAMING TABLE` as `run`, and
+`GRANT` as `share`. `VACUUM`, `OPTIMIZE`, `RESTORE`, `COPY INTO`, `REORG` and `FSCK` are not in the pinned grammar and plan
+as `run`. `DESCRIBE HISTORY` is refused on both paths — a read's `STATEMENT_NOT_READ` and a plan's `CATEGORY_MISMATCH` —
+so v0.1.0 leaves it to the SQL editor. Each category commits only through its own tool.
 
 ## Known limits
 
@@ -75,6 +79,8 @@ text the grammar cannot parse is `run` too, including Databricks-only statements
 - **A view Unity Catalog will not describe needs a plan.** If `view_definition` or `view_dependencies` is not returned
   to a SELECT-only reader (live check L14), most such views answer `NEEDS_PLAN`. That is stricter than the design's
   "warning by default" and deliberate: the record alone is never enough.
+- **`DESCRIBE HISTORY` has no path here.** It is a statement, not a query, so a read refuses it; the statement table
+  calls it a read, so a plan refuses it too. Use the SQL editor for Delta history in v0.1.0.
 - **Some renderings are unverified.** A zone-less `TIMESTAMP` is shown zone-less, in the session's zone; the plugin
   never labels it UTC. `BINARY`, `INTERVAL` and `VARIANT` render as base64, `INTERVAL '…'` and JSON text from
   hand-written fixtures until live check L8 records Databricks' own.
@@ -98,3 +104,4 @@ text the grammar cannot parse is `run` too, including Databricks-only statements
 - [40] read_kafka and reflect — https://docs.databricks.com/aws/en/sql/language-manual/functions/read_kafka
 - [41] Spark's SQL grammar and history — https://github.com/apache/spark/blob/master/sql/api/src/main/antlr4/org/apache/spark/sql/catalyst/parser/SqlBaseLexer.g4
 - [42] Unity Catalog Python UDTFs — https://docs.databricks.com/aws/en/udf/udtf-unity-catalog
+- [43] current_date, current_timestamp, current_user — https://docs.databricks.com/aws/en/sql/language-manual/functions/current_date

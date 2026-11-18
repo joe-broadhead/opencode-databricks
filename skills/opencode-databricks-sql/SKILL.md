@@ -38,11 +38,13 @@ otherwise). The call form needs no path:
 | `POSITION('a' IN s)` | `position('a', s)` |
 | `SUBSTRING(s FROM 2 FOR 3)` | `substring(s, 2, 3)` |
 | `x BETWEEN a AND b` | `x >= a AND x <= b` |
-| `FIRST(v IGNORE NULLS)` | `first_value(v, true)` |
+| `FIRST(v IGNORE NULLS)` (and `LAST`, `ANY_VALUE`) | `first_value(v, true)` |
+| `count(*)` | `count(1)` |
+| a table named by one or two parts | `catalog.schema.table` |
 | `LATERAL VIEW explode(arr) v AS c` | `SELECT explode(arr) AS c FROM …` (one generator) |
 
-`current_date`, `current_timestamp` and `current_user` resolve before the path. Write them **without parentheses**:
-the pinned grammar refuses `current_date()` (`SQL_UNSUPPORTED`).
+`current_date`, `current_timestamp` and `current_user` are not path-sensitive. Write them **without parentheses**: the
+pinned grammar refuses `current_date()` (`SQL_UNSUPPORTED`).
 
 ## Allowed and not
 
@@ -52,9 +54,13 @@ the pinned grammar refuses `current_date()` (`SQL_UNSUPPORTED`).
   `http_request`, `remote_query`, every `ai_*` function, `vector_search`, any user-defined table function, and any
   Python or Scala function.
 - **Refused:** `secret`, `try_secret`, `list_secrets`, `reflect`, `java_method`, `try_reflect`, `TRANSFORM … USING`.
-- **Not in the pinned Spark grammar:** `VACUUM`, `OPTIMIZE`, `ZORDER`, `RESTORE`, `COPY INTO`, `CREATE STREAMING
-  TABLE`, `REORG`, `FSCK`, `DESCRIBE HISTORY`, `GRANT`. Reads refuse them (`SQL_UNSUPPORTED`); plans treat them as `run`,
-  the strictest category. Use the SQL editor for Delta maintenance, or plan them deliberately.
+- **Not in the pinned Spark grammar:** `VACUUM`, `OPTIMIZE`, `ZORDER`, `RESTORE`, `COPY INTO`, `REORG` and `FSCK`.
+  Reads refuse them (`SQL_UNSUPPORTED`); plans treat them as `run`, the strictest category. Use the SQL editor for Delta
+  maintenance, or plan them deliberately.
+- **In the grammar, but not the strictest category:** `CREATE STREAMING TABLE … AS SELECT` plans as `write`,
+  `CREATE OR REFRESH STREAMING TABLE` as `run`, and `GRANT` as `share`. Show the preview either way.
+- **No path at all:** `DESCRIBE HISTORY` is refused by a read (`STATEMENT_NOT_READ`) and by `databricks_plan`
+  (`CATEGORY_MISMATCH`); use the SQL editor in v0.1.0.
 
 ## Ten worked examples
 

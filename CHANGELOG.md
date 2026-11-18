@@ -54,6 +54,19 @@ All notable changes to this project are documented here. The format follows [Kee
 - `test/unit/automation/skill-examples.test.ts`: every SQL example in the skill, and the working skill's request, run
   through the real read path, the real client and the loopback fake.
 
+### Fixed
+
+- Review of package F (PR #10):
+  - `/databricks-cleanup` asserts every stop and cancel at Allowed as well as at Ask before changes, so a person's own
+    deny rule wins at both; a stop is offered only for a warehouse the ledger says this plugin started.
+  - Status and cleanup list only the identity's own statements, filtering Query History by the caller, so another
+    person's tagged statement is never treated as this plugin's.
+  - The context hook names only warehouses this plugin started, and escapes the warehouse name; the idle sweep is the
+    owner's alone, and a session that ended with nothing running is no longer reported as a failure.
+  - The reconcile statement reads `usage_metadata.warehouse_id`, the documented struct access, and says that
+    `system.billing.usage` lags up to 12 hours.
+  - The automation lock is a token lock whose holder keeps it, and orphan cancels no longer wait for it.
+
 ### Changed
 
 - The `sources` declaration holds the source-contract v0.2.0 keys a v0.1.x consumer refuses: `readsIdentity` on the

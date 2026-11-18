@@ -83,8 +83,11 @@ denied). These are the effects Jelly gives the same actions. Your own rules afte
   run are never cancelled there.
 - **`automation` is the consent for everything else, and in v0.1.0 there is nothing else:** no warehouse is stopped
   automatically. The option is kept for the next release, and "on" is documented as a standing yes to what it covers.
-- **`/databricks-cleanup` is yours.** At `ask-changes` each stop and cancel asks through OpenCode's permission prompt;
-  at `read-only` it reports and takes no action; at `all` typing the command is the confirmation. Nothing deletes.
+- **`/databricks-cleanup` is yours.** Every stop and cancel asserts its own `databricks.stop` or `databricks.cancel`.
+  At `ask-changes` that is a permission prompt only you answer; at `all` the default rules allow it, so typing the command
+  is the confirmation — but your own deny rule still wins, action by action. At `read-only` it reports and takes no
+  action. A stop is offered only for a warehouse this plugin started (the ledger's start record, a start in the last 24
+  hours). Nothing deletes.
 
 ## Headless modes
 

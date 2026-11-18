@@ -33,13 +33,15 @@ Column masks and row filters set by your admins run their own functions on every
 ## The read path
 
 A read is one query inside `SELECT * FROM (…)`. Write no `;` (a literal semicolon is `chr(59)`), no `IDENTIFIER(…)`,
-and no positional `?`: pass values as `:name` with `params`. Only built-in functions on the allowlist run in a read, and
-a name with any non-ASCII character is refused; a user function must be named in full, `catalog.schema.function`.
-Anything else answers `NEEDS_PLAN`: plan it instead. `retentionDays` and the rest are in the SQL skill.
+and no positional `?`: pass values as `:name` with `params`. Only built-in functions on the allowlist run in a read; a
+function, generator or keyword name with any non-ASCII character is refused, and a user function must be named in full,
+`catalog.schema.function`. Anything else answers `NEEDS_PLAN`: plan it instead. The SQL skill has the dialect.
 
-`enforcement` says which guarantee holds: `role` (proven by `/databricks-doctor`), `role-requested` (run the doctor),
-`identity` (your own privileges) or `service-principal`. Only the identity's privileges are enforced by Databricks;
-everything else the plugin checks is best-effort.
+`enforcement` says which guarantee holds. `role` means `/databricks-doctor` proved what the role allows; its claim is
+exactly "SQL writes refused on what doctor checked; secret scopes and serving endpoints not checked; job runs use each
+job's Run as identity". `role-requested` means run the doctor; `identity` is the person's own privileges;
+`service-principal` is an m2m account. Only the identity's privileges are enforced by Databricks; everything else the
+plugin checks is best-effort.
 
 ## Cost, in the skill's own words
 
@@ -59,12 +61,12 @@ reconciles the estimate with `system.billing.usage` when you have the grants, th
 ## Cleanup: do your part
 
 - After a long read, check `databricks_status`'s `running` and `cleanup`. Cancel a statement this plugin started with
-  `databricks_cancel({ statementId })` when its result is no longer needed.
+  `databricks_cancel({ account, statementId })` when its result is no longer needed.
 - A warehouse that is still running after you have finished with it keeps billing until it auto-stops. If the person
-  asked for the work and nobody else is using it, `databricks_stop({ warehouse })`; if you cannot stop it (Can use but
-  not Can manage), say so and name the cost per hour.
-- `/databricks-cleanup` is the person's command. Do not try to answer its permission prompt for them, and never claim
-  you ran it.
+  asked for the work and the plugin started that warehouse (`cleanup` lists it), and nobody else is using it,
+  `databricks_stop({ warehouse })`; if you cannot stop it (Can use but not Can manage), say so and name the cost per hour.
+- `/databricks-cleanup` is the person's command. Every action it takes asserts its own permission action; do not try to
+  answer a prompt for them, and never claim you ran it.
 - Automation cancels this plugin's own orphaned reads when a session ends, and stops nothing. At `access: "all"` changes
   run without asking, so cleanup is your job unless the person says otherwise.
 
@@ -72,10 +74,14 @@ reconciles the estimate with `system.billing.usage` when you have the grants, th
 
 - Show the preview before committing: category, statement kind, targets (with owner), tables and functions, the
   warehouse and its $/hour, and for a script "its statements are not known until it runs".
-- `databricks_delete` and `databricks_run` never offer Always; they ask every time at `ask-changes`. At `read-only` they
-  are denied.
+- `databricks_delete` and `databricks_run` are the strictest categories: at `ask-changes` they ask, and at `read-only`
+  they are denied.
 - `databricks_plan` sends no statement, never `EXPLAIN`. A different category or target set at commit is
   `PLAN_CHANGED`: plan again.
+- A plan's category comes from the pinned grammar's statement kind. Where the grammar lacks the form the plan is `run`;
+  where it parses, the statement keeps its own category: `CREATE STREAMING TABLE … AS SELECT` is `write`, `CREATE OR
+  REFRESH STREAMING TABLE` is `run`, and `GRANT` is `share`. `DESCRIBE HISTORY` has no path here: a read refuses it and
+  the statement table calls it a read, so use the SQL editor.
 - A job run carries an idempotency token, and a notebook run a timeout. Never re-plan and re-run a change that may have
   run: read Query History with `databricks_history` first.
 

@@ -11,6 +11,7 @@ import { automationOf, computeStatus, requestedScopes, statusHandler } from "../
 import type { HistoryQuery, Token, Warehouse } from "../../../src/ports.js"
 import { FakeAuth, FAKE_HOST, RecordingPermission, DUMMY_TOKEN } from "../../fake/ports.js"
 import { answerOf, asserted, harness, runningWarehouse } from "../reads/harness.js"
+import { startOf, withStarts } from "./support.js"
 import { loadOptions } from "../../../src/options.js"
 
 const NOW = 1_800_000_000_000
@@ -90,8 +91,10 @@ describe("databricks_status", () => {
         history({ queryId: "done", status: "FINISHED", queryTags: { oc_plugin: "databricks", oc_tool: "query" } }),
       ],
     })
+    withStarts(h.ledger, [startOf("wh-small", NOW - 60_000)])
     const out = await statusHandler({}, h.call(), h.deps)
-    expect(out.running.map((item) => item.id)).toEqual(["work:read-1", "work:change-1"])
+    // `account` is the accepted Day 0 amendment (review of F, request 3); the cast goes when it lands.
+    expect((out.running as unknown as { account: string; id: string }[]).map((item) => [item.account, item.id])).toEqual([["work", "read-1"], ["work", "change-1"]])
     const actions = out.cleanup ?? []
     expect(actions.some((action) => action.next.includes('databricks_cancel({ account: "work", statementId: "read-1" })'))).toBe(true)
     const change = actions.find((action) => action.what.includes("a write statement"))!
@@ -121,26 +124,56 @@ describe("databricks_status", () => {
   })
 
   it("reconciles the estimate with system.billing.usage through the read path, on a running warehouse only", async () => {
-    const h = setup({ submit: () => answerOf({ rows: [["2.5"]] }) })
+    const h = setup({ submit: () => answerOf({ rows: [["2.5", "2026-11-18"]] }) })
     const out = await statusHandler({ include: ["spend"] }, h.call(), h.deps)
     const sent = h.databricks.calls.find((entry) => entry.method === "submit")!.args[0] as Record<string, unknown>
     expect(String(sent.statement)).toContain("system.billing.usage")
-    expect(String(sent.statement)).toContain("usage_metadata:warehouse_id = :warehouse")
+    expect(String(sent.statement)).toContain("usage_metadata.warehouse_id = :warehouse")
+    expect(String(sent.statement)).toContain("current_date")
+    expect(String(sent.statement)).not.toContain("current_date()")
     expect((sent.parameters as { name: string }[])[0]?.name).toBe("warehouse")
     expect(sent.start).toBeUndefined()
     expect(sent.queryTags).toMatchObject({ oc_plugin: "databricks", oc_tool: "status" })
     expect(out.message).toContain("system.billing.usage reports 2.5 DBU")
+    expect(out.message).toContain("within 12 hours")
+    expect((out.spend as unknown as { reconciled?: unknown })?.reconciled).toEqual({ warehouse: "wh-small", usageDate: "2026-11-18", dbu: 2.5, complete: false })
     // The reconciliation read is charged like any read.
     expect((await h.ledger.totals("work")).dbuHoursToday).toBeGreaterThan(0)
   })
 
-  it("reports a reconciliation that cannot run, and still answers the rest", async () => {
+  it("reports a reconciliation that cannot run as a warning, and still answers the rest", async () => {
     const h = setup({ submit: () => ({ ...answerOf(), state: "FAILED", rows: undefined }) })
     const out = await statusHandler({ include: ["spend"] }, h.call(), h.deps)
     expect(out.state).toBe("ok")
     expect(out.accounts).toHaveLength(1)
     expect(out.message).toContain("did not return a figure")
+    expect(out.warnings?.map((warning) => warning.code)).toEqual(["ESTIMATE_ONLY", "SPEND_UNAVAILABLE"])
     expect(out.next).toContain("/databricks-status")
+  })
+
+  it("M4: lists only this identity's own statements, never another user's tagged statement", async () => {
+    const h = setup({
+      items: [
+        history({ queryId: "mine", userId: 42, queryTags: { oc_plugin: "databricks", oc_tool: "query" } }),
+        history({ queryId: "someone-else", userId: 7, queryTags: { oc_plugin: "databricks", oc_tool: "query" } }),
+      ],
+    })
+    const out = await statusHandler({}, h.call(), h.deps)
+    expect((out.running as unknown as { id: string }[]).map((item) => item.id)).toEqual(["mine"])
+    const asked = h.databricks.calls.find((entry) => entry.method === "history")!.args[1] as { userIds?: readonly number[] }
+    expect(asked.userIds).toEqual([42])
+  })
+
+  it("scans and asserts only the account it is given", async () => {
+    const h = setup({
+      options: { accounts: { work: { warehouse: "wh-small" }, other: { warehouse: "wh-small" } } },
+      auth: new FakeAuth([account(), account({ alias: "other" })]),
+    })
+    const before = h.databricks.calls.length
+    const out = await statusHandler({ account: "other" }, h.call(), h.deps)
+    expect(out.accounts.map((account) => account.alias)).toEqual(["other"])
+    expect(asserted(h.permission)).toEqual(["databricks.status on other:scim.me.get"])
+    expect(h.databricks.calls.length).toBeGreaterThan(before)
   })
 
   it("answers before a sign-in, with the workspace listed and the refusal as a problem", async () => {

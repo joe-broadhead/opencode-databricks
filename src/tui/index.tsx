@@ -177,7 +177,7 @@ export default {
       void context.client.session
         .command({ sessionID: route.sessionID, name: CLEANUP_COMMAND, text: "" })
         .then(
-          () => context.ui.toast.show({ title: DISPLAY_NAME, message: `The cleanup report is in this session; each action asks you first unless access is Allowed.`, variant: "info" }),
+          () => context.ui.toast.show({ title: DISPLAY_NAME, message: `The cleanup report is in this session; each action asks you first unless access is Allowed, where this key is the confirmation and your deny rules still win.`, variant: "info" }),
           () => context.ui.toast.show({ title: DISPLAY_NAME, message: `/${CLEANUP_COMMAND} could not run in this session.`, variant: "error" }),
         )
     }

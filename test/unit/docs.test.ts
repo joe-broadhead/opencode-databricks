@@ -107,7 +107,7 @@ describe("the docs", () => {
       "Non-ASCII names are refused",
       "The dependency set is the union",
       "The parser is Spark's, not Databricks'",
-      "Keyword forms follow the path",
+      "These forms follow the path",
       "A start bills",
       "Stopping needs Can manage",
       "Single-use refresh tokens",
@@ -127,8 +127,9 @@ describe("the docs", () => {
     const config = read("docs/configuration.md")
     expect(read("README.md")).toContain("/databricks-status")
     for (const text of [read("README.md"), costs, config]) expect(text).toContain("/databricks-cleanup")
-    expect(costs).toMatch(/At `ask-changes` each action is a permission prompt only you answer/u)
-    expect(costs).toMatch(/at `read-only` it reports and does nothing/u)
+    expect(costs).toMatch(/Every action asserts its own `databricks\.stop` or `databricks\.cancel` at `all` and at `ask-changes`/u)
+    expect(costs).toMatch(/your own deny rule refuses it/u)
+    expect(costs).toMatch(/At `read-only` it reports and does nothing/u)
     expect(costs).toContain("Nothing in any layer deletes")
     expect(read("docs/scripting.md")).toMatch(/neither is `\/databricks-cleanup`/u)
   })

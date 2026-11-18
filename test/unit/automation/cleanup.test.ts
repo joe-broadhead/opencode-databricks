@@ -8,16 +8,17 @@ import { describe, expect, it } from "vitest"
 import { planCleanup, registerCleanup } from "../../../src/automation/cleanup.js"
 import type { HistoryQuery } from "../../../src/ports.js"
 import { harness, runningWarehouse } from "../reads/harness.js"
+import { startOf, withStarts } from "./support.js"
 
 const NOW = 1_800_000_000_000
 const history = (over: Partial<HistoryQuery> = {}): HistoryQuery => ({ queryId: "q-1", status: "RUNNING", warehouseId: "wh-small", queryStartTimeMs: NOW - 60_000, ...over })
 
-function setup(access: "all" | "ask-changes" | "read-only", items: HistoryQuery[] = []) {
+function setup(access: "all" | "ask-changes" | "read-only", items: HistoryQuery[] = [], warehouses = [runningWarehouse(), { ...runningWarehouse(), id: "wh-stopped", name: "stopped", state: "STOPPED" as const }]) {
   const h = harness({
     options: { access },
     answers: {
       me: () => ({ id: "42", userName: "ada@example.com" }),
-      listWarehouses: () => [runningWarehouse(), { ...runningWarehouse(), id: "wh-stopped", name: "stopped", state: "STOPPED" }],
+      listWarehouses: () => warehouses,
       history: () => ({ items }),
       cancelStatement: () => Promise.resolve(undefined),
       stopWarehouse: () => Promise.resolve(undefined),
@@ -42,6 +43,7 @@ function setup(access: "all" | "ask-changes" | "read-only", items: HistoryQuery[
     },
     session: { synthetic: async (input: { sessionID: string; text: string }) => void messages.push(input) },
   }
+  withStarts(h.ledger, [startOf("wh-small", NOW - 60_000)])
   return { h, ctx: ctx as never, commands, messages, asserts, deny: () => void (allow = false) }
 }
 
@@ -102,14 +104,33 @@ describe("/databricks-cleanup", () => {
     expect(messages[1]!.text).toContain("not done: stop warehouse")
   })
 
-  it("at Allowed, the typed command is the confirmation: it asserts nothing and acts", async () => {
+  it("at Allowed, the typed command is the confirmation, and every action still asserts so a person's rule wins", async () => {
     const { h, ctx, commands, messages, asserts } = setup("all", [read])
     await registerCleanup(ctx, h.deps)
     await commands[0]!.execute({ sessionID: "ses_test", delivery: "immediate" })
-    expect(asserts).toEqual([])
+    expect(asserts.map((input) => input.action)).toEqual(["databricks.cancel", "databricks.stop"])
     expect(h.databricks.calls.some((entry) => entry.method === "cancelStatement")).toBe(true)
     expect(h.databricks.calls.some((entry) => entry.method === "stopWarehouse")).toBe(true)
     expect(messages[1]!.text).toContain("done:")
+  })
+
+  it("M3: at Allowed a person's deny rule stops the action, even though the command is the confirmation", async () => {
+    const { h, ctx, commands, messages, asserts, deny } = setup("all", [read])
+    deny()
+    await registerCleanup(ctx, h.deps)
+    await commands[0]!.execute({ sessionID: "ses_test", delivery: "immediate" })
+    expect(asserts.map((input) => input.action)).toEqual(["databricks.cancel", "databricks.stop"])
+    expect(h.databricks.calls.filter((entry) => entry.method === "cancelStatement" || entry.method === "stopWarehouse")).toEqual([])
+    expect(messages[1]!.text).toContain("not done")
+  })
+
+  it("M5: offers a stop only for a warehouse this plugin started", async () => {
+    const other = { ...runningWarehouse(), id: "wh-other", name: "someone-elses" }
+    const { h, ctx, commands, messages } = setup("all", [read], [runningWarehouse(), other])
+    await registerCleanup(ctx, h.deps)
+    await commands[0]!.execute({ sessionID: "ses_test", delivery: "immediate" })
+    expect(h.databricks.calls.filter((entry) => entry.method === "stopWarehouse").map((entry) => entry.args[1])).toEqual(["wh-small"])
+    expect(messages[0]!.text).toContain("not started by this plugin, so no stop is offered here")
   })
 
   it("acts on nothing but stops and cancels: it cannot delete, and it never cancels a change", async () => {

@@ -66,4 +66,4 @@ Every error has the form `CODE: What happened. Next step: What to do.` Databrick
 
 ## Warnings
 
-Warnings come in a result's `warnings` and never refuse: `ESTIMATE_ONLY`, `SAVE_INLINE_FALLBACK`, `PII_SOURCE`, `MASKED_COLUMNS`, `ROW_FILTERED`, `DEPENDENCIES_UNKNOWN`, `AUTO_STOP_OFF`, `AUTO_STOP_LONG`, `SCOPE_WIDER_THAN_FEATURES`, `HEADLESS_IDENTITY`, `ROLE_CAN_WRITE`, `VIEW_BODY_UNREAD`, `STARTED_WAREHOUSE`, `CLASSIFICATION_DRIFT`, `BUDGET_OVER`, `PATH_READ`.
+Warnings come in a result's `warnings` and never refuse: `ESTIMATE_ONLY`, `SAVE_INLINE_FALLBACK`, `PII_SOURCE`, `MASKED_COLUMNS`, `ROW_FILTERED`, `DEPENDENCIES_UNKNOWN`, `AUTO_STOP_OFF`, `AUTO_STOP_LONG`, `SCOPE_WIDER_THAN_FEATURES`, `HEADLESS_IDENTITY`, `ROLE_CAN_WRITE`, `VIEW_BODY_UNREAD`, `STARTED_WAREHOUSE`, `CLASSIFICATION_DRIFT`, `BUDGET_OVER`, `PATH_READ`, `SPEND_UNAVAILABLE` (the spend reconciliation could not run: no grant, no running default warehouse, or the statement failed; status still answers `ok`).

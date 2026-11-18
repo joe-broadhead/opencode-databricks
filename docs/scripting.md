@@ -17,8 +17,10 @@ before the method runs, and only `allow` runs. The methods are the 14 read tools
 or cancels.
 
 `status` returns the same shape as the tool (`accounts`, `running`, `spend`, `automation`, `cleanup`); every warehouse
-and Query History call it makes is free. `include: ["spend"]` is the exception: it runs one reconciliation statement
-through the read path, on a warehouse that is already running, and it is charged like any read.
+and Query History call it makes is free. Each `running` item names its `account` and the bare statement id. `include:
+["spend"]` is the exception: it runs one reconciliation statement through the read path, on a warehouse that is already
+running, and it is charged like any read; its figure is `spend.reconciled` (`complete: false`, because `system.billing.usage`
+lags up to 12 hours), and a failure is the `SPEND_UNAVAILABLE` warning, never a failed status.
 
 Codes the transport itself returns: `SESSION_UNKNOWN`, `SESSION_AGENT_REQUIRED`, `PERMISSION_DENIED`, `CANCELLED` and
 `RESOURCE_UNRESOLVED`. The plugin's own codes are in [Errors](errors.md).
