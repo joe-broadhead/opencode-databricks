@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 import { signInMetadata } from "../../src/auth/credential.js"
-import { cleanup, startHost, until, type Host } from "./harness.js"
+import { cleanup, START_HOOK_MS, startHost, until, type Host } from "./harness.js"
 
 const WORK = "databricks-work"
 const HOST = "https://fake-workspace.cloud.databricks.com"
@@ -17,10 +17,10 @@ let host: Host
 beforeAll(async () => {
   // The doctor's checks reach for Databricks, and this host has no fake behind the router: the calls are blocked, the
   // report says they were unavailable, and the tests assert that.
+  // The first host in this process: it pays the cold start, so the hook takes the harness's start bound (START_HOOK_MS)
+  // instead of bun's 5 s default, and a host that never settles fails with the harness's error naming its version.
   host = await startHost({ options: { accounts: { work: { warehouse: "wh-small" } } }, expectBlocked: true })
-  // Starting a real host takes about 4 s on an idle runner: bun's default 5 s hook timeout failed it on a busy one
-  // (CI's macos-26, and loaded machines). The budget plugin.test.ts gives the same start.
-}, 120_000)
+}, START_HOOK_MS)
 
 afterAll(async () => {
   await host?.close()
