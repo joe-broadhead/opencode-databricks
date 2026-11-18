@@ -29,12 +29,15 @@ import type {
   FunctionInfo,
   HistoryQuery,
   Identity,
+  JobCompute,
+  JobInfo,
   Page,
   RunInfo,
   StatementAnswer,
   StatementRequest,
   TableInfo,
   Warehouse,
+  WarehouseEdit,
   WarehouseState,
 } from "../ports.js"
 import { type Fetch, type QueryValue, Statements, WorkspaceHttp } from "./http.js"
@@ -171,6 +174,148 @@ export function toRun(value: unknown): RunInfo {
   }
 }
 
+/** A cluster's documented compute fields: `node_type_id`, `num_workers`, or `autoscale`'s min and max. */
+function clusterCompute(cluster: Record<string, unknown>): { nodeTypeId?: string; numWorkers?: number; autoscale?: { min: number; max: number } } | undefined {
+  const nodeTypeId = maybeText(cluster.node_type_id)
+  const numWorkers = count(cluster.num_workers)
+  const autoscale = record(cluster.autoscale)
+  const min = count(autoscale.min_workers)
+  const max = count(autoscale.max_workers)
+  if (nodeTypeId === undefined && numWorkers === undefined && !(min !== undefined && max !== undefined)) return undefined
+  return { ...(nodeTypeId ? { nodeTypeId } : {}), ...(numWorkers !== undefined ? { numWorkers } : {}), ...(min !== undefined && max !== undefined ? { autoscale: { min, max } } : {}) }
+}
+
+/** The SQL warehouse a task runs on, from the documented `warehouse_id` of a SQL, dbt or notebook task. */
+function taskWarehouse(task: Record<string, unknown>): string | undefined {
+  for (const key of ["sql_task", "dbt_task", "notebook_task"]) {
+    const warehouse = maybeText(record(task[key]).warehouse_id)
+    if (warehouse) return warehouse
+  }
+  return undefined
+}
+
+/** The task types `JobTaskSettings` documents (Jobs API 2.2, `TaskSettings`). */
+const TASK_TYPES: ReadonlySet<string> = new Set([
+  "notebook_task",
+  "spark_python_task",
+  "python_wheel_task",
+  "spark_jar_task",
+  "spark_submit_task",
+  "pipeline_task",
+  "sql_task",
+  "dbt_task",
+  "run_job_task",
+  "condition_task",
+  "for_each_task",
+  "alert_task",
+  "dashboard_task",
+  "power_bi_task",
+  "ai_runtime_task",
+  "ai_function_task",
+  "clean_rooms_notebook_task",
+])
+
+/**
+ * The task types Databricks documents as supporting serverless compute: "Serverless compute is supported with the
+ * notebook, Python script, dbt, Python wheel, and JAR task types"
+ * (https://docs.databricks.com/aws/en/jobs/run-serverless-jobs).
+ */
+const SERVERLESS_TASK_TYPES: ReadonlySet<string> = new Set(["notebook_task", "spark_python_task", "python_wheel_task", "spark_jar_task", "spark_submit_task", "dbt_task"])
+
+/**
+ * Where one task of a job runs, from `GET /api/2.2/jobs/get`'s `JobTaskSettings`
+ * (https://docs.databricks.com/api/jobs/v2/get-job.md). The rules, in order:
+ *
+ * - `condition_task` needs no compute; `run_job_task` runs on the other job's; `pipeline_task` on its pipeline's; a
+ *   `for_each_task` runs its inner task once per iteration, so its compute is the inner task's (recursively).
+ * - `existing_cluster_id` is that all-purpose cluster; `new_cluster` is a job cluster with its `node_type_id` and
+ *   `num_workers` or `autoscale`; `job_cluster_key` is "the cluster specified in `job.settings.job_clusters`" (a key the
+ *   settings do not hold is undetermined).
+ * - A SQL warehouse task (`sql_task.warehouse_id`, `dbt_task.warehouse_id`, a notebook's `warehouse_id`) runs there.
+ * - `environment_key` selects serverless compute. A notebook, Python script, Python wheel, JAR or dbt task with no
+ *   compute field at all also runs on serverless, as the page above documents.
+ * - **Absence is never read as serverless otherwise**: an unrecognised task type, a task with no task type, or a task
+ *   type whose compute this version does not map is `unknown`, with a reason the preview states plainly.
+ */
+export function toJobCompute(value: unknown, jobSettings: unknown = {}): JobCompute {
+  const task = record(value)
+  const typeFields = Object.keys(task).filter((key) => key.endsWith("_task"))
+  const unknownType = typeFields.find((key) => !TASK_TYPES.has(key))
+  if (unknownType !== undefined) return { kind: "unknown", reason: `its task type ${unknownType} is not one this version knows` }
+  if (typeFields.length === 0) return { kind: "unknown", reason: "the task names no task type" }
+  if (typeFields.length > 1) return { kind: "unknown", reason: `the task names more than one task type (${typeFields.join(", ")})` }
+  const type = typeFields[0]!
+  if (type === "condition_task") return { kind: "none", what: "a condition task needs no compute" }
+  if (type === "run_job_task") {
+    const jobId = count(record(task.run_job_task).job_id)
+    return jobId === undefined ? { kind: "unknown", reason: "its run_job_task names no job" } : { kind: "job", jobId }
+  }
+  if (type === "pipeline_task") {
+    const pipelineId = maybeText(record(task.pipeline_task).pipeline_id)
+    return { kind: "pipeline", ...(pipelineId ? { pipelineId } : {}) }
+  }
+  if (type === "for_each_task") {
+    const inner = record(task.for_each_task).task
+    if (inner === undefined) return { kind: "unknown", reason: "its for_each_task names no inner task" }
+    return { kind: "for-each", compute: toJobCompute(inner, jobSettings) }
+  }
+  const existing = maybeText(task.existing_cluster_id)
+  if (existing) return { kind: "existing", clusterId: existing }
+  const inline = clusterCompute(record(task.new_cluster))
+  if (inline) return { kind: "job-cluster", ...inline }
+  const key = maybeText(task.job_cluster_key)
+  if (key) {
+    const shared = list(record(jobSettings).job_clusters)
+      .map(record)
+      .find((cluster) => maybeText(cluster.job_cluster_key) === key)
+    const sharedCompute = shared === undefined ? undefined : clusterCompute(record(shared.new_cluster))
+    if (sharedCompute) return { kind: "job-cluster", jobClusterKey: key, ...sharedCompute }
+    return { kind: "unknown", reason: `its job cluster ${key} is not in the job's settings` }
+  }
+  const warehouse = taskWarehouse(task)
+  if (warehouse) return { kind: "warehouse", warehouseId: warehouse }
+  if (type === "sql_task") return { kind: "unknown", reason: "its SQL task names no warehouse" }
+  if (maybeText(task.environment_key)) return { kind: "serverless" }
+  if (SERVERLESS_TASK_TYPES.has(type)) return { kind: "serverless" }
+  return { kind: "unknown", reason: `its ${type.replace(/_task$/u, "")} task does not document the compute it uses` }
+}
+
+/** One job's settings (`GET /api/2.2/jobs/get`); `timeout_seconds` 0 is documented as "no timeout". */
+export function toJobInfo(value: unknown): JobInfo {
+  const job = record(value)
+  const settings = record(job.settings)
+  const timeout = count(settings.timeout_seconds)
+  return {
+    jobId: count(job.job_id) ?? 0,
+    name: text(settings.name),
+    ...(maybeText(job.creator_user_name) ? { creatorUserName: maybeText(job.creator_user_name) } : {}),
+    ...(maybeText(job.run_as_user_name) ? { runAsUserName: maybeText(job.run_as_user_name) } : {}),
+    ...(timeout !== undefined ? { timeoutSeconds: timeout } : {}),
+    tasks: list(settings.tasks)
+      .map(record)
+      .map((task) => {
+        const taskTimeout = count(task.timeout_seconds)
+        return { taskKey: text(task.task_key), compute: toJobCompute(task, settings), ...(taskTimeout !== undefined ? { timeoutSeconds: taskTimeout } : {}) }
+      }),
+  }
+}
+
+/**
+ * The fields `POST /api/2.0/sql/warehouses/{id}/edit` documents
+ * (https://docs.databricks.com/api/warehouses/v1/edit-warehouse.md). The body is a set of optional fields whose omitted
+ * ones take documented defaults (`auto_stop_mins` defaults to 120, `enable_photon` to true, …), so the client sends the
+ * warehouse read back with only the changed fields replaced: a partial body would silently reset the rest.
+ */
+/** How many `jobs/get` array pages one call reads: 10 pages of 100 tasks is far beyond a job this plugin should run. */
+const JOB_PAGES_MAX = 10
+
+/** One page of `models` asks for the documented maximum (its `max_results` is at most 100). */
+const MODEL_PAGE = 100
+/** How many pages one `listModels` reads before it gives up: 10,000 models in one schema is more than a CASCADE should drop. */
+const MODEL_PAGES_MAX = 100
+
+const WAREHOUSE_EDIT_FIELDS = ["name", "cluster_size", "min_num_clusters", "max_num_clusters", "auto_stop_mins", "creator_name", "instance_profile_arn", "tags", "spot_instance_policy", "enable_photon", "channel", "enable_serverless_compute", "warehouse_type", "statement_timeout"] as const
+
 /** Base64 → text, for `workspace/export`'s `content`. */
 function decodeBase64(value: string): string {
   try {
@@ -269,14 +414,52 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       }
     },
 
-    // Contract amendment for package D (review of #7, requests 1 and 2): the port has `editWarehouse` and `getJob`;
-    // package B builds both from their documented pages. Until then they refuse, and send nothing.
-    async editWarehouse(): Promise<void> {
-      throw new DatabricksError("NOT_IMPLEMENTED", "Editing a warehouse is not built yet (package B: sql.warehouses.edit).")
+    /**
+     * `POST /api/2.0/sql/warehouses/{id}/edit` (`sql.warehouses.edit`): the warehouse read back with the plan's fields
+     * replaced, because the body's omitted fields take documented defaults (see `WAREHOUSE_EDIT_FIELDS`). A 404 is
+     * `NOT_FOUND` and a 403 `PERMISSION_DENIED`, as everywhere else in this client.
+     */
+    async editWarehouse(account: string, id: string, edit: WarehouseEdit, signal: AbortSignal): Promise<void> {
+      const current = record(await call(account, "sql.warehouses.get", "GET", `/api/2.0/sql/warehouses/${encodeURIComponent(id)}`, { idempotent: true, signal }))
+      const body: Record<string, unknown> = {}
+      for (const field of WAREHOUSE_EDIT_FIELDS) if (current[field] !== undefined) body[field] = current[field]
+      if (edit.clusterSize !== undefined) body.cluster_size = edit.clusterSize
+      if (edit.autoStopMins !== undefined) body.auto_stop_mins = edit.autoStopMins
+      if (edit.minNumClusters !== undefined) body.min_num_clusters = edit.minNumClusters
+      if (edit.maxNumClusters !== undefined) body.max_num_clusters = edit.maxNumClusters
+      await call(account, "sql.warehouses.edit", "POST", `/api/2.0/sql/warehouses/${encodeURIComponent(id)}/edit`, { body, idempotent: true, signal })
     },
 
-    async getJob(): Promise<never> {
-      throw new DatabricksError("NOT_IMPLEMENTED", "Reading a job's settings is not built yet (package B: jobs.jobs.get).")
+    /**
+     * `GET /api/2.2/jobs/get` (`jobs.jobs.get`): one job's settings and each task's compute. The reference paginates
+     * the array properties — "a request for a single job will return … the first 100 elements of array properties
+     * (`tasks`, `job_clusters`, …); use the `next_page_token` field … and pass its value as the `page_token`" — so every
+     * page is read and the arrays merged (https://docs.databricks.com/api/jobs/v2/get-job.md).
+     */
+    async getJob(account: string, jobId: number, signal: AbortSignal): Promise<JobInfo> {
+      const pages: Record<string, unknown>[] = []
+      let pageToken: string | undefined
+      for (let page = 0; page < JOB_PAGES_MAX; page++) {
+        const answer = record(
+          await call(account, "jobs.jobs.get", "GET", "/api/2.2/jobs/get", { query: { job_id: jobId, ...(pageToken === undefined ? {} : { page_token: pageToken }) }, idempotent: true, signal }),
+        )
+        pages.push(answer)
+        const next = maybeText(answer.next_page_token)
+        if (next === undefined) break
+        pageToken = next
+        if (page === JOB_PAGES_MAX - 1) throw new DatabricksError("UNAVAILABLE", `Job ${jobId} has more array pages than this client reads in one call.`, "Read it in Databricks, or split its tasks into fewer jobs.")
+      }
+      const first = pages[0] ?? {}
+      const settings = pages.reduce<Record<string, unknown>>((merged, page) => {
+        const current = record(page.settings)
+        return {
+          ...merged,
+          ...current,
+          tasks: [...list(merged.tasks), ...list(current.tasks)],
+          job_clusters: [...list(merged.job_clusters), ...list(current.job_clusters)],
+        }
+      }, {})
+      return toJobInfo({ ...first, settings })
     },
 
     async stopWarehouse(account: string, id: string, signal: AbortSignal): Promise<void> {
@@ -387,6 +570,37 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
 
     async getFunction(account: string, fullName: string, signal: AbortSignal): Promise<FunctionInfo> {
       return toFunction(await call(account, "unity-catalog.functions.get", "GET", `/api/2.1/unity-catalog/functions/${encodeURIComponent(fullName)}`, { idempotent: true, signal }))
+    },
+
+    /**
+     * `GET /api/2.1/unity-catalog/models?catalog_name=&schema_name=` (`unity-catalog.registered-models.list`): every
+     * page, because "clients must continue reading pages until next_page_token is absent", and a page may hold zero
+     * models while still carrying a token
+     * (https://docs.databricks.com/api/uc-registered-models/v1/list-registered-models.md). A 404 is `NOT_FOUND` and a
+     * 403 `PERMISSION_DENIED`, as everywhere else in this client.
+     */
+    async listModels(account: string, catalog: string, schema: string, signal: AbortSignal): Promise<readonly { readonly name: string; readonly fullName?: string }[]> {
+      const models: { name: string; fullName?: string }[] = []
+      let pageToken: string | undefined
+      for (let page = 0; page < MODEL_PAGES_MAX; page++) {
+        const answer = record(
+          await call(account, "unity-catalog.registered-models.list", "GET", "/api/2.1/unity-catalog/models", {
+            query: { catalog_name: catalog, schema_name: schema, max_results: MODEL_PAGE, ...(pageToken === undefined ? {} : { page_token: pageToken }) },
+            idempotent: true,
+            signal,
+          }),
+        )
+        for (const entry of list(answer.registered_models)) {
+          const model = record(entry)
+          const name = text(model.name)
+          if (name === "") continue
+          models.push({ name, ...(maybeText(model.full_name) ? { fullName: maybeText(model.full_name) } : {}) })
+        }
+        const next = maybeText(answer.next_page_token)
+        if (next === undefined) return models
+        pageToken = next
+      }
+      throw new DatabricksError("UNAVAILABLE", `Registered models in ${catalog}.${schema} have more than ${MODEL_PAGES_MAX * MODEL_PAGE} entries, more than this client reads in one call.`, "List them in Databricks, or narrow the schema.")
     },
 
     async listVolumes(account: string, catalog: string, schema: string, pageInput, signal: AbortSignal): Promise<Page<{ name: string; volumeType: string }>> {

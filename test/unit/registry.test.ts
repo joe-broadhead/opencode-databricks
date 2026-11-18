@@ -1,5 +1,7 @@
 // Every tool asserts its own dotted action first, before any Databricks call (design §10.1, §15.3), and asserted equals
-// declared. databricks_plan for SQL and the commit tools' routing are real on Day 0.
+// declared. Package D's plan and commit tools are real here, so the routing tests below run against a harness whose
+// warehouse is running and whose `tables.get` answers NOT_FOUND: a plan is a set of free reads, and its commit is the one
+// statement (design §5.5).
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -11,6 +13,7 @@ import { HANDLERS, PRIMARY_OPERATION, REGISTERED } from "../../src/registry.js"
 import { errorResult, runTool } from "../../src/tool-spec.js"
 import { methods } from "../../src/tools-rpc.js"
 import { call, fakeDatabricks, fakeDeps, RecordingPermission } from "../fake/ports.js"
+import { harness } from "./reads/harness.js"
 
 const INPUTS: Record<ToolName, unknown> = {
   status: {},
@@ -94,28 +97,29 @@ describe("the registry", () => {
   })
 })
 
-describe("plan → commit routing (Day 0)", () => {
-  it("plans a drop as delete, sends nothing, and commits only through databricks_delete, once", async () => {
-    const fake = fakeDeps()
+describe("plan → commit routing", () => {
+  it("plans a drop as delete, sends no statement, and commits only through databricks_delete, once", async () => {
+    const fake = harness()
     const planned = await runTool("plan", { sql: "DROP TABLE main.sales.orders" }, call(), fake.deps, HANDLERS)
     expect(planned).toMatchObject({ state: "planned", category: "delete", commitWith: "databricks_delete" })
-    expect(fake.databricks.calls).toEqual([])
+    // A plan's reads are free control-plane calls; what it never does is send a statement (design §5.5 step 3).
+    expect(fake.databricks.calls.filter((entry) => entry.method === "submit")).toEqual([])
     const planId = planned.planId as string
     expect(await runTool("write", { planId }, call("c2"), fake.deps, HANDLERS)).toMatchObject({ error: "CATEGORY_MISMATCH", next: expect.stringContaining("databricks_delete") })
     expect(await runTool("delete", { planId }, call("c3", "ses_other"), fake.deps, HANDLERS)).toMatchObject({ error: "PLAN_CALLER_MISMATCH" })
-    expect(await runTool("delete", { planId }, call("c4"), fake.deps, HANDLERS)).toMatchObject({ error: "NOT_IMPLEMENTED" })
+    expect(await runTool("delete", { planId }, call("c4"), fake.deps, HANDLERS)).toMatchObject({ state: "ok" })
     expect(await runTool("delete", { planId }, call("c5"), fake.deps, HANDLERS)).toMatchObject({ error: "PLAN_ALREADY_USED" })
   })
 
   it("expires a plan after planTtlSeconds", async () => {
-    const fake = fakeDeps()
+    const fake = harness()
     const planned = await runTool("plan", { sql: "insert into main.s.t select 1" }, call(), fake.deps, HANDLERS)
     fake.clock.advance(300_000)
     expect(await runTool("write", { planId: planned.planId }, call("c2"), fake.deps, HANDLERS)).toMatchObject({ error: "PLAN_EXPIRED" })
   })
 
   it("refuses reads, session statements and secrets at plan time, and needs a reason for admin plans", async () => {
-    const fake = fakeDeps()
+    const fake = harness()
     expect(await runTool("plan", { sql: "select 1" }, call(), fake.deps, HANDLERS)).toMatchObject({ error: "CATEGORY_MISMATCH" })
     expect(await runTool("plan", { sql: "SET PATH = main.evil" }, call(), fake.deps, HANDLERS)).toMatchObject({ error: "SESSION_STATEMENT_REFUSED" })
     expect(await runTool("plan", { sql: "select secret('s', 'k')" }, call(), fake.deps, HANDLERS)).toMatchObject({ error: "SECRET_FUNCTION_REFUSED" })
@@ -124,7 +128,7 @@ describe("plan → commit routing (Day 0)", () => {
   })
 
   it("uses the plan id as the run's idempotency token shape (pln_<uuid>)", async () => {
-    const fake = fakeDeps()
+    const fake = harness()
     const planned = await runTool("plan", { sql: "CALL main.s.p()" }, call(), fake.deps, HANDLERS)
     expect(planned).toMatchObject({ category: "run" })
     expect(planned.planId).toMatch(/^pln_[0-9a-f-]{36}$/)

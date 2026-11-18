@@ -246,8 +246,24 @@ export interface RunInfo {
 /** Where one task of a job runs (review of #7, request 1). `existing` is an all-purpose cluster. */
 export type JobCompute =
   | { readonly kind: "serverless" }
-  | { readonly kind: "job-cluster"; readonly nodeTypeId?: string; readonly numWorkers?: number; readonly autoscale?: { readonly min: number; readonly max: number } }
+  /**
+   * A job cluster: `new_cluster` inline, or `job_cluster_key` resolved from the job's `settings.job_clusters` (then the
+   * key is kept, so the preview can say it is shared).
+   */
+  | { readonly kind: "job-cluster"; readonly jobClusterKey?: string; readonly nodeTypeId?: string; readonly numWorkers?: number; readonly autoscale?: { readonly min: number; readonly max: number } }
   | { readonly kind: "existing"; readonly clusterId: string }
+  /** A SQL warehouse task (`sql_task.warehouse_id`, `dbt_task.warehouse_id`, a notebook's `warehouse_id`). */
+  | { readonly kind: "warehouse"; readonly warehouseId: string }
+  /** A task that needs no compute (`condition_task`). */
+  | { readonly kind: "none"; readonly what: string }
+  /** A `run_job_task`: its compute is the other job's. */
+  | { readonly kind: "job"; readonly jobId: number }
+  /** A `pipeline_task`: its compute belongs to the pipeline. */
+  | { readonly kind: "pipeline"; readonly pipelineId?: string }
+  /** A `for_each_task`: every iteration runs the inner task, so its compute is the inner task's. */
+  | { readonly kind: "for-each"; readonly compute: JobCompute }
+  /** The task's compute cannot be determined from its settings; the preview says so rather than guessing. */
+  | { readonly kind: "unknown"; readonly reason: string }
 
 /** One job's settings, from `GET /api/2.2/jobs/get` (`jobs.jobs.get`). `timeoutSeconds` 0 means no timeout. */
 export interface JobInfo {
@@ -310,6 +326,12 @@ export interface DatabricksPort {
   listFunctions(account: string, catalog: string, schema: string, page: { readonly pageToken?: string }, signal: AbortSignal): Promise<Page<{ readonly name: string; readonly routineBody: string }>>
   getFunction(account: string, fullName: string, signal: AbortSignal): Promise<FunctionInfo>
   listVolumes(account: string, catalog: string, schema: string, page: { readonly pageToken?: string }, signal: AbortSignal): Promise<Page<{ readonly name: string; readonly volumeType: string }>>
+  /**
+   * Every registered model in a schema (`GET /api/2.1/unity-catalog/models?catalog_name=&schema_name=`, operation
+   * `unity-catalog.registered-models.list`, free). Package B follows `next_page_token` to its end — a page may hold zero
+   * models and still carry a token (https://docs.databricks.com/api/uc-registered-models/v1/list-registered-models.md).
+   */
+  listModels(account: string, catalog: string, schema: string, signal: AbortSignal): Promise<readonly { readonly name: string; readonly fullName?: string }[]>
   /** UC effective permissions on a securable, for one `principal` when given; package B pages to the end. `USE_CONNECTION` is read with `{ type: "connection" }`. */
   effectivePermissions(account: string, securable: { readonly type: string; readonly fullName: string }, signal: AbortSignal, principal?: string): Promise<readonly { readonly principal: string; readonly privileges: readonly string[] }[]>
   /** UC connections (`unity-catalog.connections.list`). */

@@ -3,9 +3,8 @@
  * does what every tool must do first, and nothing more:
  * 1. assert its own dotted action, `databricks.<tool>`, on `<account>:<operation>`, before any Databricks call;
  * 2. answer NOT_IMPLEMENTED.
- * `databricks_plan` for SQL and the commit tools' routing are real on Day 0: a plan is classified by the statement
- * table and stored, and a commit takes it once with the right tool (CATEGORY_MISMATCH otherwise). Running the commit
- * is package D's.
+ * Package C's eight reads and package D's plan, commit, run and workspace tools are real; package E's and F's tools
+ * still answer NOT_IMPLEMENTED.
  *
  * A package replaces its stubs in its own file under src/tools/ and wires it here in one line (`HANDLERS`); it never
  * edits another package's file.
@@ -18,6 +17,7 @@ import { classifyPlan } from "./domain/statements.js"
 import type { Options } from "./options.js"
 import type { AuthPort, Clock, DatabricksPort, LedgerPort, PermissionPort, ReadGuardPort } from "./ports.js"
 import { statusHandler } from "./status.js"
+import { CHANGE_HANDLERS } from "./tools/changes/index.js"
 import { READ_HANDLERS } from "./tools/reads/index.js"
 import save from "./tools/save/index.js"
 import { SOURCE_HANDLERS } from "./sources/index.js"
@@ -108,53 +108,10 @@ const stub = <T extends ToolName>(tool: T): Handler<T> =>
     throw new DatabricksError("NOT_IMPLEMENTED", `databricks_${tool} is declared but not built yet (package ${OWNER[tool]}).`)
   }) as Handler<T>
 
-/** `databricks_plan` for SQL (Day 0): classify, store, preview. Target checks, jobs, notebooks and warehouses are D's. */
-const plan: Handler<"plan"> = async (input, call, deps) => {
-  const account = accountOf(input, deps)
-  await assertTool("plan", account, call, deps)
-  if (!input.sql) throw new DatabricksError("NOT_IMPLEMENTED", "Plans of jobs, notebooks and warehouse edits are not built yet (package D).")
-  const classified = classifyPlan(input.sql)
-  if (!classified.ok) throw new DatabricksError(classified.code, classified.detail)
-  if (classified.category === "admin" && deps.options.admin.requireReason && !input.reason) throw new DatabricksError("ADMIN_REASON_REQUIRED")
-  const warehouse = typeof input.warehouse === "string" ? input.warehouse : (deps.options.accounts?.[account]?.warehouse ?? "")
-  if (!warehouse) throw new DatabricksError("WAREHOUSE_REQUIRED")
-  const commitWith = `databricks_${COMMIT_TOOL[classified.category]}`
-  const preview = {
-    kind: classified.kind,
-    parsed: classified.parsed,
-    targets: [],
-    tables: classified.tables.map((parts) => parts.join(".")),
-    functions: [...classified.functions],
-    notes: [...classified.notes, ...(classified.raisedBy.length ? [`Raised to run by ${classified.raisedBy.join(", ")}.`] : [])],
-    ...(input.reason ? { reason: input.reason } : {}),
-  }
-  const stored = deps.plans.create({
-    category: classified.category,
-    kind: classified.kind,
-    account,
-    sessionId: call.sessionID,
-    agentId: call.agent,
-    payload: { kind: "sql", sql: input.sql, warehouse, ...(input.params ? { params: input.params } : {}), ...(input.catalog ? { catalog: input.catalog } : {}), ...(input.schema ? { schema: input.schema } : {}) },
-    preview,
-    fingerprint: { targets: preview.tables, warehouse },
-    ...(input.reason ? { reason: input.reason } : {}),
-  })
-  return { state: "planned", planId: stored.id, expiresAt: new Date(stored.expiresAt).toISOString(), category: classified.category, commitWith, preview, next: `Show the preview, then ${commitWith}({ planId: "${stored.id}" }).` }
-}
-
-/** A commit tool on Day 0: assert, take the plan once with the right tool (routing), then NOT_IMPLEMENTED. */
-const commit = <T extends "write" | "delete" | "share" | "export" | "run" | "admin">(tool: T): Handler<T> =>
-  (async (input, call, deps) => {
-    const peeked = deps.plans.peek(input.planId)
-    const account = peeked?.plan.account ?? accountOf({}, deps)
-    await assertTool(tool, account, call, deps)
-    deps.plans.take(input.planId, tool, { sessionId: call.sessionID, agentId: call.agent, account })
-    throw new DatabricksError("NOT_IMPLEMENTED", `Committing a ${tool} plan is not built yet (package D).`)
-  }) as Handler<T>
-
 /**
- * Every tool's handler. A package swaps its own entries here when it lands: `catalog`, `table`, `warehouses`, `explain`,
- * `query`, `statement`, `history` and `profile` are package C's (`src/tools/reads/`), and the rest are still Day 0 stubs.
+ * Every tool's handler. `catalog`, `table`, `warehouses`, `explain`, `query`, `statement`, `history` and `profile` are
+ * package C's (`src/tools/reads/`); `plan`, the six commit tools, `cancel`, `stop`, `jobs` and `workspace` are package
+ * D's (`src/tools/changes/`); the rest are still Day 0 stubs.
  */
 export const HANDLERS: Handlers = {
   status: statusHandler,
@@ -166,20 +123,20 @@ export const HANDLERS: Handlers = {
   statement: READ_HANDLERS.statement,
   history: READ_HANDLERS.history,
   profile: READ_HANDLERS.profile,
-  jobs: stub("jobs"),
-  workspace: stub("workspace"),
-  plan,
+  jobs: CHANGE_HANDLERS.jobs,
+  workspace: CHANGE_HANDLERS.workspace,
+  plan: CHANGE_HANDLERS.plan,
   events_list: SOURCE_HANDLERS.events_list,
   saved_read: SOURCE_HANDLERS.saved_read,
   save,
-  write: commit("write"),
-  delete: commit("delete"),
-  share: commit("share"),
-  export: commit("export"),
-  run: commit("run"),
-  admin: commit("admin"),
-  cancel: stub("cancel"),
-  stop: stub("stop"),
+  write: CHANGE_HANDLERS.write,
+  delete: CHANGE_HANDLERS.delete,
+  share: CHANGE_HANDLERS.share,
+  export: CHANGE_HANDLERS.export,
+  run: CHANGE_HANDLERS.run,
+  admin: CHANGE_HANDLERS.admin,
+  cancel: CHANGE_HANDLERS.cancel,
+  stop: CHANGE_HANDLERS.stop,
 }
 
 /** The registry's tool names, in the table's order. */

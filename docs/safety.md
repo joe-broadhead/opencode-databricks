@@ -68,6 +68,18 @@ the strictest: `CREATE STREAMING TABLE … AS SELECT` plans as `write`, `CREATE 
 as `run`. `DESCRIBE HISTORY` is refused on both paths — a read's `STATEMENT_NOT_READ` and a plan's `CATEGORY_MISMATCH` —
 so v0.1.0 leaves it to the SQL editor. Each category commits only through its own tool.
 
+### What a change's targets are
+
+Every change asserts its own dotted action first, then each target it names, under that action: a table or view as
+`<account>:table:<catalog>.<schema>.<object>`, a function as `<account>:function:<c>.<s>.<f>`, a volume as
+`<account>:volume:<c>.<s>.<v>`, a registered model as `<account>:model:<c>.<s>.<m>`, and a warehouse edit as
+`<account>:warehouse:<id>`. A schema target is asserted as `<account>:table:<c>.<s>.*`, which a rule such as `*.hr.*`
+matches; `DROP SCHEMA … CASCADE` and `DROP CATALOG … CASCADE` also list every object they would drop — tables and views,
+functions, volumes and registered models — and assert each by name, so a rule that names one of them reaches it. When
+such a list cannot be read, or is larger than the plugin will drop in one change, the plan is refused rather than
+falling back to the schema or catalog wildcard alone. A name the plugin cannot fully qualify is refused too: Databricks
+would resolve it against a default the plugin cannot see.
+
 ## Known limits
 
 - **Best-effort, said plainly.** The wrapper is a guarantee over the text the plugin builds; everything past it — the

@@ -57,6 +57,8 @@ export interface FakeState {
   readonly notebooks: Map<string, string>
   /** Files API listings by directory path. */
   readonly directories: Map<string, readonly { readonly path: string; readonly isDirectory: boolean; readonly size?: number; readonly modifiedAt?: number }[]>
+  /** Registered models by `<catalog>.<schema>` (`GET /api/2.1/unity-catalog/models`). */
+  readonly models: Map<string, readonly { readonly name: string; readonly fullName?: string }[]>
   readonly jobs: Map<number, { readonly name: string; readonly creatorUserName?: string }>
 }
 

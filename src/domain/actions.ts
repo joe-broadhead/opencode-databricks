@@ -124,6 +124,7 @@ export const OPERATIONS = [
   "unity-catalog.functions.list",
   "unity-catalog.functions.get",
   "unity-catalog.volumes.list",
+  "unity-catalog.registered-models.list",
   "unity-catalog.effective-permissions.get",
   "unity-catalog.connections.list",
   "unity-catalog.current-metastore-assignment.get",
