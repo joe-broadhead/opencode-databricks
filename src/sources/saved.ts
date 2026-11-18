@@ -10,14 +10,16 @@
  * - `saved_list` is the bind-time suggestion: the account's saved queries, each with its name, warehouse, SQL and
  *   sha256, so the person sees the SQL at consent.
  *
- * The two operations are asserted under the method's own action (`databricks.saved_read` / `databricks.saved_list`) on
- * the operations they use; `saved_list` also asserts the contract's operation grant (`databricks.read` on
- * `sql.queries.list`), the rule a consumer's bind session holds.
+ * Each method asserts its own action on `*` (`databricks.saved_read` / `databricks.saved_list`), then the contract's
+ * operation grant, `databricks.read` on `<account>:<operation>`, for every operation it calls (`assert.ts`): exactly the
+ * rules a consumer's source and bind sessions hold. The model's `databricks_saved_read` keeps the family's rule.
  */
 import { createHash } from "node:crypto"
-import { assertOperation, assertSourceRead } from "./assert.js"
+import { assertOperation, assertRead, type ReadMode } from "./assert.js"
 import { sourceError, sourceErrorOf } from "./errors.js"
 import { typedCell } from "../tools/save/inline.js"
+import { chargeStatement } from "../guards/budget.js"
+import { sizeOf } from "../guards/warehouse.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { StatementAnswer } from "../ports.js"
 import type { Deps } from "../registry.js"
@@ -57,11 +59,11 @@ export interface SavedInput {
 }
 
 /** `saved_read`: the snapshot, after the read path, on a warehouse that is already running. */
-export async function savedRead(deps: Deps, input: SavedInput, call: Call): Promise<SnapshotAnswer> {
+export async function savedRead(deps: Deps, input: SavedInput, call: Call, mode: ReadMode = "source"): Promise<SnapshotAnswer> {
   if (typeof input.query !== "string" || input.query.length === 0 || input.query.length > 128 || !/^[0-9a-f]{64}$/u.test(input.sha ?? "")) {
     throw sourceError("INPUT_INVALID", "The saved_read input is invalid.", "Pass the saved query's id and the sha256 saved_list returned for it.")
   }
-  await assertSourceRead(deps.permission, call, "databricks.saved_read", ["sql.queries.get", "sql.warehouses.get", "sql.statements.query", "sql.statements.get"], input.account)
+  await assertRead(mode, deps.permission, call, "databricks.saved_read", ["sql.queries.get", "sql.warehouses.get", "sql.statements.query", "sql.statements.get"], input.account)
   let query
   try {
     query = await deps.databricks.getQuery(input.account, input.query, call.signal)
@@ -97,6 +99,7 @@ export async function savedRead(deps: Deps, input: SavedInput, call: Call): Prom
     call.signal,
   )
   let answer: StatementAnswer
+  const startedAt = deps.clock.now()
   try {
     answer = await deps.databricks.submit(
       {
@@ -118,6 +121,23 @@ export async function savedRead(deps: Deps, input: SavedInput, call: Call): Prom
     if (answer.state === "PENDING" || answer.state === "RUNNING") answer = await deps.databricks.waitForStatement(input.account, answer.statementId, { untilMs: deps.clock.now() + deps.options.maxRunSeconds * 1000 }, call.signal)
   } catch (error) {
     throw sourceErrorOf(error)
+  }
+  // A terminal statement is charged to the spend ledger as every read's is (design §6.2: saved-source reads count the
+  // same way). The ledger never throws: the statement already ran.
+  if (answer.state === "SUCCEEDED" || answer.state === "FAILED" || answer.state === "CANCELED") {
+    const size = sizeOf(prepared.warehouse)
+    if (size) {
+      await chargeStatement(deps.ledger, deps.clock, deps.options, {
+        account: input.account,
+        sessionId: call.sessionID,
+        warehouseId: prepared.warehouseId,
+        statementId: answer.statementId,
+        size,
+        autoStopMinutes: prepared.warehouse.autoStopMins,
+        clusters: Math.max(1, prepared.warehouse.numClusters ?? prepared.warehouse.minNumClusters ?? 1),
+        durationMs: Math.max(0, deps.clock.now() - startedAt),
+      })
+    }
   }
   if (answer.state !== "SUCCEEDED") {
     if (answer.state === "FAILED") throw sourceError("UNAVAILABLE", "The saved query failed on its warehouse.", "Fix the query in Databricks; its error is in the SQL editor's history.")

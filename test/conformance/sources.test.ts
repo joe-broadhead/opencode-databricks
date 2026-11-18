@@ -3,10 +3,16 @@
 // REST fakes — no Databricks call. The report is written to reports/conformance-report.json for the release job, whose
 // script reads exactly `ok`, `plugin` and `version` from it (scripts/release-rules.mjs).
 //
-// Every check the kit runs either runs or does not apply: `noExpiry` is **not** set (both event sources lose history to
-// Query History's 30-day window and to run history's 60 days, so the expiry check applies), and neither source claims
-// `atomicPages` (runs' `failed[]` is exercised for real). A check that applies and does not run leaves the report
-// incomplete, and the test fails.
+// The kit runs under the grants the declaration derives (`sessionRules`, `probeRules` and the bind rules: no `grants`
+// option), so every read must assert exactly what a consumer's session allows. Every check either runs or does not
+// apply: `noExpiry` is **not** set (Query History's 30-day window and run history's 60 days lose history, so the expiry
+// check applies), and both event sources claim `atomicPages`, honestly: every provider call a page makes either
+// succeeds or fails the whole page, and a tracked run that is gone is dropped, so no page carries `failed[]`. A check
+// that applies and does not run leaves the report incomplete, and the test fails.
+//
+// The kit runs twice: on the declaration as shipped, and on it without the keys only a v0.2.0 consumer reads
+// (`readsIdentity`, a price's `min` and `conditions`), which the contract keeper removes separately; the sources must
+// pass both.
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -54,37 +60,17 @@ const ACTIVE_RUNS = Array.from({ length: 60 }, (_, index) => jobRun({ id: 950_00
 
 const iso = (ms: number) => new Date(ms).toISOString()
 const RHECT_RUNS = () => [...RECENT_RUNS, ...ACTIVE_RUNS]
-/** The running session's grants, as this plugin asserts them: its method action on `*` and on each operation, and the
- * source contract's operation grant for the probe and the bind session (`databricks.read`). No extra grant is declared:
- * the kit fails an unused one. */
-const grantsFor = (source: "queries" | "runs" | "saved") => {
-  const events = { action: "databricks.events_list", resource: "*" }
-  const probe = [{ action: "databricks.probe", resource: "*" }, { action: "databricks.read", resource: "{account}:scim.me.get" }]
-  if (source === "queries") {
-    return [events, { action: "databricks.events_list", resource: "{account}:sql.history.queries.list" }, { action: "databricks.events_list", resource: "{account}:scim.me.get" }, ...probe]
-  }
-  if (source === "runs") {
-    return [events, { action: "databricks.events_list", resource: "{account}:jobs.runs.list" }, { action: "databricks.events_list", resource: "{account}:jobs.runs.get" }, ...probe]
-  }
-  return [
-    { action: "databricks.saved_read", resource: "*" },
-    { action: "databricks.saved_read", resource: "{account}:sql.queries.get" },
-    { action: "databricks.saved_read", resource: "{account}:sql.warehouses.get" },
-    { action: "databricks.saved_read", resource: "{account}:sql.statements.query" },
-    { action: "databricks.saved_read", resource: "{account}:sql.statements.get" },
-    ...probe,
-  ]
-}
 
 /** A cursor past the source's retention: 31 days for Query History, 61 for run history. */
 const expiredCursor = (source: "queries" | "runs") => {
   const days = source === "queries" ? 31 : 61
-  return encodeBoundCursor(bindingOf(source, "work", undefined), { w: NOW - days * DAY, f: NOW - days * DAY - 49 * 3_600_000, h: "" })
+  return encodeBoundCursor(bindingOf(source, "work", undefined), { e: NOW - days * DAY, l: NOW - days * DAY - 3_600_000 })
 }
-const foreignPlugin = (source: "queries" | "runs") => encodeBoundCursor({ plugin: "other-plugin", source, account: "work" }, { w: NOW, f: NOW - 3_600_000, h: "" })
-const otherAccount = (source: "queries" | "runs") => encodeBoundCursor(bindingOf(source, "other", undefined), { w: NOW, f: NOW - 3_600_000, h: "" })
-const otherSource = (source: "queries" | "runs") => encodeBoundCursor(bindingOf(source === "queries" ? "runs" : "queries", "work", undefined), { w: NOW, f: NOW - 3_600_000, h: "" })
-const pendingCursor = () => encodeBoundCursor(bindingOf("runs", "work", undefined), { w: NOW, f: NOW - 3_600_000, h: "", z: (9_999_999).toString(36) })
+const foreignPlugin = (source: "queries" | "runs") => encodeBoundCursor({ plugin: "other-plugin", source, account: "work" }, { e: NOW - 3_600_000, l: NOW - 3_600_000 })
+const otherAccount = (source: "queries" | "runs") => encodeBoundCursor(bindingOf(source, "other", undefined), { e: NOW - 3_600_000, l: NOW - 3_600_000 })
+const otherSource = (source: "queries" | "runs") => encodeBoundCursor(bindingOf(source === "queries" ? "runs" : "queries", "work", undefined), { e: NOW - 3_600_000, l: NOW - 3_600_000 })
+/** A runs cursor tracking one run still active when it was written (455644833, which has finished since). */
+const pendingCursor = () => encodeBoundCursor(bindingOf("runs", "work", undefined), { e: NOW - 4 * 3_600_000, l: NOW - 4 * 3_600_000 + 1, z: (455644833).toString(36) })
 
 async function casesFor(source: "queries" | "runs"): Promise<PageCase[]> {
   const done = await eventsPage(depsFor(fakeRest({ history: RECENT_QUERIES, runs: RHECT_RUNS() }), { assert: async () => undefined } as never), {
@@ -119,6 +105,47 @@ async function casesFor(source: "queries" | "runs"): Promise<PageCase[]> {
 
 const reports: ConformanceReport[] = []
 
+/** The override the report records for the release job and the planner (review of #8, M3). */
+const SAVED_COST_NOTE =
+  "databricks.saved is declared cost.class billed. source-contract v0.2.0's billed-cost check runs only for an events source, so a billed snapshot is neither checked nor not-applicable and the report could never be complete; the kit checks this snapshot as metered (the same price table) until the contract's patch (review of opencode-databricks #8, contract request 2) ships. The declaration test validates the declared billed block."
+
+/** The declaration without the keys a v0.1.x consumer refuses, as the contract keeper's separate change leaves it. */
+function withoutHeldKeys<T>(source: T): T {
+  const copy = JSON.parse(JSON.stringify(source)) as { permission?: Record<string, unknown>; cost?: { units?: Record<string, unknown>[] } }
+  if (copy.permission) delete copy.permission.readsIdentity
+  for (const unit of copy.cost?.units ?? []) {
+    delete unit.min
+    delete unit.conditions
+  }
+  return copy as T
+}
+
+async function runKit(source: (typeof sources.items)[number]) {
+  const name = source.id.split(".")[1] as "queries" | "runs" | "saved"
+  const rest = fakeRest({ history: [...RECENT_QUERIES, ...OLD_QUERIES], runs: [...RECENT_RUNS, ...OLD_RUNS, ...ACTIVE_RUNS], saved: [SAVED] })
+  if (name === "queries") rest.failHistoryOnce(new DatabricksError("RATE_LIMITED"))
+  // Each call's dependencies hold the probe record a consumer's bind leaves (the harness's default store).
+  const deps = (context: SessionContext) => depsFor(rest, { assert: async (request: { action: string; resource: string }) => context.permission.assert({ action: request.action, resources: [request.resource] }) } as never)
+  const underTest = name === "saved" && source.cost?.class === "billed" ? { ...source, cost: { ...source.cost, class: "metered" as const } } : source
+  return sourceConformance({
+    plugin: PLUGIN_ID,
+    source: underTest as typeof source,
+    tools,
+    account: "work",
+    sources: { rpc: sources.rpc, probe: sources.probe },
+    describe: { id: TOOLS_RPC_ID },
+    ...(name === "saved" ? {} : { atomicPages: { reason: "every provider call a page makes either succeeds or fails the whole page; a tracked run that is gone is dropped, so no item fails on its own" } }),
+    calls: {
+      list: (input, context) => eventsPage(deps(context), { ...(input as Record<string, unknown>), account: "work", call: call() } as never),
+      probe: (input, context) => probe(deps(context), input, call()),
+      snapshot: (_input, context) => savedRead(deps(context), { account: "work", query: SAVED.id, sha: sha256(SAVED.queryText) }, call()),
+      suggest: (input, context) => savedList(deps(context), input as { account?: string }, call()),
+    },
+    cases: name === "saved" ? [] : await casesFor(name),
+    snapshotCases: name === "saved" ? [{ query: SAVED.id, sha: sha256(SAVED.queryText) }] : [],
+  })
+}
+
 describe("the source contract's conformance kit", () => {
   test("the declaration validates as a consumer reads it", () => {
     expect(declarationProblems(pkg.sources, { tools })).toEqual([])
@@ -127,41 +154,20 @@ describe("the source contract's conformance kit", () => {
   })
 
   for (const source of sources.items) {
-    test(`${source.id} keeps the contract`, async () => {
-      const name = source.id.split(".")[1] as "queries" | "runs" | "saved"
-      const rest = fakeRest({ history: [...RECENT_QUERIES, ...OLD_QUERIES], runs: [...RECENT_RUNS, ...OLD_RUNS, ...ACTIVE_RUNS], saved: [SAVED] })
-      if (name === "queries") rest.failHistoryOnce(new DatabricksError("RATE_LIMITED"))
-      const deps = (context: SessionContext) => depsFor(rest, { assert: async (request: { action: string; resource: string }) => context.permission.assert({ action: request.action, resources: [request.resource] }) } as never)
-      // v0.2.0's `billed-cost` check runs only for an events source whose cost is `billed`, and is not applicable only
-      // when the class is not `billed`: a billed *snapshot* leaves it neither run nor not-applicable, so a complete
-      // report is impossible for it as declared (a contract request). The snapshot is checked as `metered`, which is the
-      // same price table and the class the kit can check; the declaration test still validates the declared block.
-      const underTest = name === "saved" && source.cost?.class === "billed" ? { ...source, cost: { ...source.cost, class: "metered" as const } } : source
-      const report = await sourceConformance({
-        plugin: PLUGIN_ID,
-        source: underTest as typeof source,
-        tools,
-        account: "work",
-        grants: grantsFor(name),
-        sources: { rpc: sources.rpc, probe: sources.probe },
-        describe: { id: TOOLS_RPC_ID },
-        // Query History answers events from list calls only: a failed call fails the whole read before a page exists,
-        // so no single item can fail. This is the design's own reason for the queries source (§11.1).
-        ...(name === "queries" ? { atomicPages: { reason: "events are built only from list answers; a failed call fails the whole read, so no single item can fail" } } : {}),
-        calls: {
-          list: (input, context) => eventsPage(deps(context), { ...(input as Record<string, unknown>), account: "work", call: call() } as never),
-          probe: (input, context) => probe(deps(context), input, call()),
-          snapshot: (_input, context) => savedRead(deps(context), { account: "work", query: SAVED.id, sha: sha256(SAVED.queryText) }, call()),
-          suggest: (input, context) => savedList(deps(context), input as { account?: string }, call()),
-        },
-        cases: name === "saved" ? [] : await casesFor(name),
-        snapshotCases: name === "saved" ? [{ query: SAVED.id, sha: sha256(SAVED.queryText) }] : [],
-      })
+    test(`${source.id} keeps the contract, under the grants the declaration derives`, async () => {
+      const report = await runKit(source)
       assertConformance(report)
       reports.push(report)
       expect(report.ok).toBe(true)
       expect(report.incomplete).toBe(false)
       for (const check of report.checks) expect(check.ran || check.notApplicable, `${check.name}: ${check.problems.join("; ")}`).toBe(true)
+    })
+
+    test(`${source.id} keeps the contract without the v0.2.0-only keys (readsIdentity, a price's min and conditions)`, async () => {
+      const report = await runKit(withoutHeldKeys(source))
+      assertConformance(report)
+      expect(report.ok).toBe(true)
+      expect(report.incomplete).toBe(false)
     })
   }
 
@@ -171,6 +177,7 @@ describe("the source contract's conformance kit", () => {
       plugin: pkg.name,
       version: pkg.version,
       contract: { package: "@we-the-rebel-alliance/source-contract", tag: "v0.2.0" },
+      notes: [SAVED_COST_NOTE],
       sources: reports,
     }
     mkdirSync(join(root, "reports"), { recursive: true })

@@ -5,16 +5,24 @@ import { loadOptions } from "../../../src/options.js"
 import type { Deps } from "../../../src/registry.js"
 import type { PermissionPort } from "../../../src/ports.js"
 import { FakeAuth, FakeReads, MemoryLedger, call as fakeCall, fakeClock, fakeDatabricks } from "../../fake/ports.js"
-import { fakeRest, type FakeRest } from "./fake-rest.js"
+import { memoryRecords, useRecords, type RecordStore } from "../../../src/sources/records.js"
+import { FAKE_HOST, ME, fakeRest, type FakeRest } from "./fake-rest.js"
 
 /** The fixed clock every source test runs at: 2027-01-15T08:00:00Z. */
 export const NOW = 1_800_000_000_000
 export const DAY = 86_400_000
 
-export function depsFor(rest: FakeRest, permission: PermissionPort, options: Record<string, unknown> = {}): Deps {
+/** The record `probe` writes for the fake's signed-in person (Sam), as a consumer's bind leaves it. */
+export const probed = (): RecordStore => memoryRecords([{ account: "work", host: FAKE_HOST, record: { userId: ME.id, userName: ME.userName, displayName: ME.displayName, at: NOW } }])
+
+/**
+ * Dependencies over a REST fake. `records` is the probe record store: by default one where the account was probed, as a
+ * consumer's bind leaves it; pass `memoryRecords()` for an account never probed.
+ */
+export function depsFor(rest: Pick<FakeRest, "answers">, permission: PermissionPort, options: Record<string, unknown> = {}, records: RecordStore = probed()): Deps {
   const loaded = loadOptions({ accounts: { work: { warehouse: "wh-small" } }, ...options })
   const clock = fakeClock(NOW)
-  return {
+  const deps: Deps = {
     options: loaded,
     access: loaded.access,
     auth: new FakeAuth(),
@@ -25,6 +33,8 @@ export function depsFor(rest: FakeRest, permission: PermissionPort, options: Rec
     permission,
     clock,
   }
+  useRecords(deps, records)
+  return deps
 }
 
 /** A permission that lets everything and records nothing: for a plain read test. */

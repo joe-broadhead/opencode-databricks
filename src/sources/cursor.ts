@@ -1,43 +1,55 @@
 /**
- * The two event sources' cursor (design §11.1, §11.2, source-contract's `cursor`): a version 2 bound cursor, so another
- * plugin's, source's, account's or scope's cursor is `CURSOR_INVALID` before anything is read. The state is this
- * plugin's own and is never shown:
+ * The two event sources' cursor (source-contract's `cursor`): a version 2 bound cursor, so another plugin's, source's,
+ * account's or scope's cursor is `CURSOR_INVALID` before anything is read. The state is this plugin's own and is never
+ * shown. It describes **what has been listed by end time, and where unlisted items can still be**, never a set of every
+ * id listed (a hash set overflows under ordinary load, which is what the first design did):
  *
- * - `w`: the window's end, a start-time watermark in ms: every item that starts at or before it has been looked at;
- * - `f`: the window's start, a start-time line in ms: the oldest item this window reads (the lookback, or a gap line
- *   carried from a shortening — never recomputed from "now", the sliding-gap bug);
- * - `h`: base64url of 6-byte hashes of the ids already emitted, newest last, at most 40: the de-duplication that lets
- *   the lookback re-read a window and still deliver each item once (a 1,024-character cap leaves no room for 40 UUIDs);
- * - `g`: the window start whose truncation has already been announced, so a gap is reported once per shortening and
- *   never once per read;
- * - `z`: the ids of runs still active when the watermark passed them (at most 200), which each read checks with
- *   `runs/get` — a run can last days, so its end cannot be predicted.
+ * - `e`, `k`: the **listing line**. Every final item whose `(end, id hash)` is at or before `(e, k)` has been listed (or
+ *   was covered by a gap). `k` is the 12-hex id hash of the last item listed at `e` when a page was cut there; without
+ *   `k` every item ending at `e` is listed. Ties at one millisecond are walked by the id hash, so the order is total.
+ * - `l`: the **running floor**. Every item still running at the last full page, behind the line and not in `z`,
+ *   started at or after `l`. A statement or run that started long before it finished is found again by scanning from
+ *   `l` by start time, the only filter both APIs have.
+ * - `z`: the **tracked ids**: items not yet listed whose start fell so far behind that scanning back to it would cost
+ *   too much, read back by id (Query History's `statement_ids` filter, Jobs' `runs/get`): a running one on every full
+ *   page, a finished one, whose end is kept with it (`@` and base36), once it is due. Statement ids as 16 bytes of
+ *   base64url, run ids in base36, joined by `.`; at most `Z_CHARS` characters.
+ * - `n`: the **finished floor**: every finished item not yet listed (and not in `z`) started at or after `n`. A page
+ *   cut by `limit` leaves a few of them just behind the line.
+ * - `m`: the **visibility line** of the last full page: nothing that was still running behind the line then can be
+ *   final, visibly, before `m`. A page whose slice ends before `m` reads `[n, t]` alone, so a backlog is read once,
+ *   slice by slice, instead of re-reading everything behind the line for every page.
+ * - `d`: the **slice width**: the next slice ends at `e + d`, sized to what a page took or to half a walk.
+ * - `g`: 1 when this read (pages up to `more: false`) already answered a gap, so it is not answered again.
+ *
+ * Worst case: `Z_CHARS` (560) of tracked ids, plus the numbers, the tie hash and the binding, is 964 characters (see
+ * `test/unit/sources/cursor.test.ts`), under the contract's 1,024.
  */
 import { MAX_CURSOR_LENGTH, canonicalScope, decodeBoundCursor, encodeBoundCursor, type Scope } from "@we-the-rebel-alliance/source-contract/cursor"
 import { NAMESPACE } from "../constants.js"
 import { sourceError } from "./errors.js"
 
-/** The most details a source's state keeps; the rest is a gap, never silent loss. */
-export const MAX_HASHES = 64
-/** The cursor's 1,024-character cap holds this many pending run ids; beyond it a gap is announced. */
-export const MAX_PENDING = 40
+/** The tracked ids' budget, in characters of the packed string. */
+export const Z_CHARS = 560
 export const HASH_BYTES = 6
 
 export interface CursorState {
-  /** The window's end, ms. */
-  w: number
-  /** The window's start, ms. */
-  f: number
-  /** The emitted ids' hashes, base64url. */
-  h: string
-  /** 1 when a gap was announced for this cursor chain, so the next page does not repeat it. */
-  g?: number
-  /** The last emitted position in the window: `(occurred_at ms, id hash)`, so a burst larger than the hash set drains. */
-  p?: { readonly e: number; readonly h: string }
-  /** A run walk's next page token, `<jobId or empty>|<token>`: a same-start burst larger than the walk cap resumes here. */
-  t?: string
-  /** The runs still active when the window ended, base36 ids joined by commas. */
+  /** The listing line, ms. */
+  e: number
+  /** The tie hash at `e` (12 hex); absent: every item ending at `e` is listed. */
+  k?: string
+  /** The scan floor, ms. */
+  l: number
+  /** The finished floor, ms. */
+  n?: number
+  /** The visibility line of the last full page, ms. */
+  m?: number
+  /** The tracked ids, packed. */
   z?: string
+  /** The slice width, ms. */
+  d?: number
+  /** This read already answered a gap. */
+  g?: 1
 }
 
 /** The cursor's binding: this plugin, one source, one account, and the scope the person confirmed. */
@@ -56,17 +68,30 @@ export const bindingOf = (source: string, account: string, scope: Scope | undefi
 })
 
 export function encodeState(binding: Binding, state: CursorState): string {
+  const plain: Record<string, unknown> = { e: state.e, l: state.l }
+  if (state.k !== undefined) plain.k = state.k
+  if (state.n !== undefined) plain.n = state.n
+  if (state.m !== undefined) plain.m = state.m
+  if (state.z) plain.z = state.z
+  if (state.d !== undefined) plain.d = state.d
+  if (state.g === 1) plain.g = 1
   try {
-    return encodeBoundCursor(binding, state as unknown as Readonly<Record<string, unknown>>)
+    return encodeBoundCursor(binding, plain)
   } catch {
-    // A cursor over the cap is a bug in this source, not in the person's call.
-    throw sourceError("TOO_LARGE", "The read's position is too large to keep in a cursor.", "Read fewer items per page with limit, or start again with since.")
+    // The state is bounded by construction (`Z_CHARS`), so this is a bug in this source, not in the person's call.
+    throw sourceError("UNAVAILABLE", "The read's position did not fit in a cursor.", "Start again with since.")
   }
 }
 
-export type Decoded = { readonly ok: true; readonly state: CursorState } | { readonly ok: false; readonly code: "CURSOR_INVALID" | "CURSOR_EXPIRED"; readonly what: string }
+export type Decoded = { readonly ok: true; readonly state: CursorState } | { readonly ok: false; readonly code: "CURSOR_INVALID"; readonly what: string }
 
-/** The state a cursor holds for this binding, or the contract code it is refused with. */
+const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)
+
+/**
+ * The state a cursor holds for this binding, or `CURSOR_INVALID`. Only a cursor of another binding, or one this plugin
+ * never wrote, is refused: an odd optional field is dropped rather than refused, so the plugin never refuses its own
+ * cursor.
+ */
 export function decodeState(binding: Binding, cursor: string): Decoded {
   if (cursor.length > MAX_CURSOR_LENGTH) return { ok: false, code: "CURSOR_INVALID", what: "The cursor is longer than a cursor can be." }
   const decoded = decodeBoundCursor(binding, cursor)
@@ -77,26 +102,25 @@ export function decodeState(binding: Binding, cursor: string): Decoded {
       what: decoded.reason === "foreign" ? "The cursor belongs to another source, account or scope." : "The cursor is not one this plugin wrote.",
     }
   }
-  const state = decoded.state as Partial<CursorState>
-  if (typeof state.w !== "number" || typeof state.f !== "number" || typeof state.h !== "string") {
-    return { ok: false, code: "CURSOR_INVALID", what: "The cursor does not carry this source's position." }
-  }
-  const position = state.p as { e?: unknown; h?: unknown } | undefined
+  const raw = decoded.state as Record<string, unknown>
+  if (!finite(raw.e) || !finite(raw.l)) return { ok: false, code: "CURSOR_INVALID", what: "The cursor does not carry this source's position." }
+  const l = Math.min(raw.l, raw.e + 1)
   return {
     ok: true,
     state: {
-      w: state.w,
-      f: state.f,
-      h: state.h,
-      ...(typeof state.g === "number" ? { g: state.g } : {}),
-      ...(typeof state.z === "string" ? { z: state.z } : {}),
-      ...(position !== undefined && typeof position.e === "number" && typeof position.h === "string" ? { p: { e: position.e, h: position.h } } : {}),
-      ...(typeof state.t === "string" ? { t: state.t } : {}),
+      e: raw.e,
+      l,
+      ...(finite(raw.n) ? { n: Math.min(raw.n, raw.e + 1) } : {}),
+      ...(finite(raw.m) ? { m: raw.m } : {}),
+      ...(typeof raw.k === "string" && /^[0-9a-f]{12}$/u.test(raw.k) ? { k: raw.k } : {}),
+      ...(typeof raw.z === "string" && raw.z.length > 0 && raw.z.length <= Z_CHARS ? { z: raw.z } : {}),
+      ...(finite(raw.d) && raw.d >= 1 ? { d: raw.d } : {}),
+      ...(raw.g === 1 ? { g: 1 as const } : {}),
     },
   }
 }
 
-/** A stable 6-byte FNV-1a hash of an id, as hex: a cursor keeps hashes, not the ids. */
+/** A stable 6-byte FNV-1a hash of an id, as 12 hex digits: the tie-break inside one millisecond. */
 export function hashOf(id: string): string {
   let hash = 0xcbf29ce484222325n
   const prime = 0x100000001b3n
@@ -107,51 +131,62 @@ export function hashOf(id: string): string {
   return hash.toString(16).padStart(16, "0").slice(-HASH_BYTES * 2)
 }
 
-const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-
-/** The packed hashes as base64url: 6 bytes each, 8 characters in base64url after the bit packing below. */
-export function packHashes(hashes: readonly string[]): string {
-  let bits = ""
-  for (const hash of hashes) for (const nibble of hash) bits += parseInt(nibble, 16).toString(2).padStart(4, "0")
-  let out = ""
-  for (let index = 0; index < bits.length; index += 6) out += BASE64URL[Number.parseInt(bits.slice(index, index + 6).padEnd(6, "0"), 2)]
-  return out
-}
-
-/** The hashes a packed string holds; an unreadable one is an empty list (the cursor is still bound and valid). */
-export function unpackHashes(packed: string): string[] {
-  let bits = ""
-  for (const character of packed) {
-    const value = BASE64URL.indexOf(character)
-    if (value < 0) return []
-    bits += value.toString(2).padStart(6, "0")
-  }
-  const hashes: string[] = []
-  const per = HASH_BYTES * 2
-  for (let index = 0; index + per * 4 <= bits.length; index += per * 4) {
-    let hex = ""
-    for (let nibble = 0; nibble < per; nibble++) hex += Number.parseInt(bits.slice(index + nibble * 4, index + nibble * 4 + 4), 2).toString(16)
-    hashes.push(hex)
-  }
-  return hashes
-}
-
-/** The hashes with `added`, keeping the newest `MAX_HASHES`; `dropped` is true when an older hash had to go. */
-export function withHashes(packed: string, added: readonly string[]): { packed: string; dropped: boolean } {
-  const kept = [...unpackHashes(packed), ...added]
-  const dropped = kept.length > MAX_HASHES
-  return { packed: packHashes(kept.slice(Math.max(0, kept.length - MAX_HASHES))), dropped }
-}
+/** True when `(end, hash)` is after the listing line `(e, k)`. */
+export const after = (end: number, hash: string, e: number, k: string | undefined): boolean => end > e || (end === e && k !== undefined && hash > k)
 
 export const iso = (ms: number): string => new Date(ms).toISOString()
 
-/** The pending run ids `z` holds, as numbers. */
-export const pendingOf = (state: CursorState): number[] =>
-  (state.z ?? "")
-    .split(",")
-    .filter(Boolean)
-    .map((id) => Number.parseInt(id, 36))
-    .filter((id) => Number.isFinite(id))
+// ── tracked ids ──────────────────────────────────────────────────────────
 
-/** A pending list as the cursor stores it: base36, comma-joined, newest first, at most `MAX_PENDING`. */
-export const pendingString = (ids: readonly number[]): string => [...new Set(ids)].slice(0, MAX_PENDING).map((id) => id.toString(36)).join(",")
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+
+/** One id as the cursor keeps it: a run id in base36, a UUID as 16 bytes of base64url, anything else as `~` + base64url. */
+export function packId(id: string): string {
+  if (/^[1-9][0-9]{0,18}$/u.test(id)) return BigInt(id).toString(36)
+  if (UUID.test(id)) return Buffer.from(id.replaceAll("-", ""), "hex").toString("base64url")
+  return `~${Buffer.from(id, "utf8").toString("base64url")}`
+}
+
+export function unpackId(packed: string): string | undefined {
+  if (packed.startsWith("~")) return Buffer.from(packed.slice(1), "base64url").toString("utf8") || undefined
+  if (packed.length === 22) {
+    const hex = Buffer.from(packed, "base64url").toString("hex")
+    return hex.length === 32 ? `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}` : undefined
+  }
+  if (!/^[0-9a-z]{1,13}$/u.test(packed)) return undefined
+  let value = 0n
+  for (const character of packed) value = value * 36n + BigInt(Number.parseInt(character, 36))
+  return value.toString()
+}
+
+/** A tracked item: its id, and its end once it is known to be finished. */
+export interface Tracked {
+  readonly id: string
+  readonly end?: number
+}
+
+export const unpackIds = (packed: string | undefined): Tracked[] =>
+  (packed ?? "")
+    .split(".")
+    .filter(Boolean)
+    .flatMap((entry) => {
+      const at = entry.indexOf("@")
+      const id = unpackId(at < 0 ? entry : entry.slice(0, at))
+      if (id === undefined) return []
+      if (at < 0) return [{ id }]
+      const end = Number.parseInt(entry.slice(at + 1), 36)
+      return [Number.isSafeInteger(end) ? { id, end } : { id }]
+    })
+
+/** The packed form of `tracked`, or undefined when it would be longer than `Z_CHARS`. */
+export function packIds(tracked: readonly Tracked[]): string | undefined {
+  const seen = new Set<string>()
+  const parts: string[] = []
+  for (const entry of tracked) {
+    if (seen.has(entry.id)) continue
+    seen.add(entry.id)
+    parts.push(entry.end === undefined ? packId(entry.id) : `${packId(entry.id)}@${entry.end.toString(36)}`)
+  }
+  const packed = parts.join(".")
+  return packed.length <= Z_CHARS ? packed : undefined
+}

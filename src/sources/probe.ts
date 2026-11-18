@@ -7,13 +7,17 @@
  * It asserts `databricks.probe` on `*` first, then the identity operation's grant (`databricks.read` on
  * `<account>:scim.me.get`), the rule a consumer's `probeRules` fences the call with. The account is required by this
  * plugin's method: three aliases mean no silent first one is read.
+ *
+ * It records what it learned (`records.ts`): `databricks.queries` lists only this person's statements and filters by
+ * the user id recorded here, so its content reads never read the identity.
  */
 import { probeResult, type ProbeResult } from "@we-the-rebel-alliance/source-contract/events"
 import type { Deps } from "../registry.js"
 import type { Call } from "../tool-spec.js"
-import { assertOperation } from "./assert.js"
+import { assertOperationRead } from "./assert.js"
 import { sourceError, sourceErrorOf } from "./errors.js"
 import { ownerOf } from "./owner.js"
+import { recordsOf } from "./records.js"
 
 /** The source ids a probe may name: the short name or the descriptor's id. */
 const SOURCES: Readonly<Record<string, string>> = {
@@ -50,9 +54,11 @@ export async function probe(deps: Deps, input: unknown, call: Call): Promise<Pro
   } catch {
     throw sourceError("ACCOUNT_MISMATCH", `This plugin is not signed in to "${account}".`, "Pass an account this plugin has, or sign in with /connect.")
   }
-  await assertOperation(deps.permission, call, "databricks.probe", "scim.me.get", account)
+  await assertOperationRead(deps.permission, call, "scim.me.get", account)
   try {
     const me = await deps.databricks.me(account, call.signal)
+    // The content reads never read the identity: `databricks.queries` filters by the id recorded here.
+    recordsOf(deps).put(account, deps.auth.account(account).host, { userId: me.id, userName: me.userName, ...(me.displayName ? { displayName: me.displayName } : {}), at: deps.clock.now() })
     // The answer names the source by its lowercase name (the contract's `source` pattern), also when the descriptor,
     // having no `input.source`, asked for the dotted id.
     return probeResult({ source: name, account, owner: ownerOf(me, deps.auth.account(account).host) })

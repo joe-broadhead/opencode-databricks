@@ -41,6 +41,8 @@ const eventsList: Handler<"events_list"> = async (input, call, deps) => {
       ...(input.limit === undefined ? {} : { limit: input.limit }),
       ...(input.scope === undefined ? {} : { scope: input.scope }),
       call,
+      // The model's own tool: the family's asserts, and it reads the identity itself when no probe has recorded it.
+      mode: "tool",
     })
     return { state: "ok", ...page }
   } catch (error) {
@@ -55,6 +57,7 @@ const savedReadTool: Handler<"saved_read"> = async (input, call, deps) => {
       deps,
       { account: accountFor(input, deps), query: input.query, sha: input.sha },
       call,
+      "tool",
     )
     return { state: "ok", trust: "untrusted" as const, table: tableOf(snapshot) }
   } catch (error) {

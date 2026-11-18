@@ -6,10 +6,10 @@
  * The fixtures are the documented response objects' fields and the documentation's own example values, sanitised, plus
  * invented ids:
  *
- * - https://docs.databricks.com/api/query-history/v1/list-queries.md — `query_id`, `status`, `query_text`,
+ * - https://docs.databricks.com/api/workspace/queryhistory/list — `query_id`, `status`, `query_text`,
  *   `query_start_time_ms`, `query_end_time_ms`, `user_id`, `rows_produced`, `is_final`, `statement_type`,
  *   `warehouse_id`, `query_tags`, `duration`; newest started first; `max_results` at most 1,000; the start-time range at
- *   most 30 days; several statuses "is not recommended".
+ *   most 30 days; several statuses "is not recommended"; `filter_by.statement_ids` and `filter_by.warehouse_ids`.
  * - https://docs.databricks.com/api/jobs/v2/list-runs.md — `runs[]` `run_id`, `job_id`, `run_name`, `creator_user_name`,
  *   `state.life_cycle_state`, `state.result_state`, `start_time`, `end_time`, `trigger`, `run_type`; descending start;
  *   `limit` 1..25; `start_time_from`/`start_time_to`; `page_token`.
@@ -107,7 +107,7 @@ export function fakeRest(seed: { readonly history?: readonly HistoryQuery[]; rea
         historyFailure = undefined
         throw failure
       }
-      const ask = filter as { userIds?: number[]; startMs?: number; endMs?: number; pageToken?: string; maxResults?: number }
+      const ask = filter as { userIds?: number[]; warehouseIds?: string[]; statementIds?: string[]; startMs?: number; endMs?: number; pageToken?: string; maxResults?: number }
       const startMs = ask.startMs ?? 0
       const endMs = ask.endMs ?? Number.MAX_SAFE_INTEGER
       if (startMs > endMs) throw new DatabricksError("INPUT_INVALID", "The start of the range is after its end.")
@@ -118,6 +118,8 @@ export function fakeRest(seed: { readonly history?: readonly HistoryQuery[]; rea
       const mine = history
         .filter((query) => query.queryStartTimeMs >= startMs && query.queryStartTimeMs <= endMs)
         .filter((query) => ask.userIds === undefined || (query.userId !== undefined && ask.userIds.includes(query.userId)))
+        .filter((query) => ask.warehouseIds === undefined || (query.warehouseId !== undefined && ask.warehouseIds.includes(query.warehouseId)))
+        .filter((query) => ask.statementIds === undefined || ask.statementIds.includes(query.queryId))
         .sort((left, right) => right.queryStartTimeMs - left.queryStartTimeMs || (left.queryId < right.queryId ? 1 : -1))
       const page = mine.slice(offset, offset + max)
       const more = offset + max < mine.length
