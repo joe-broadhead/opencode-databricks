@@ -476,9 +476,7 @@ export const statusHandler: Handler<"status"> = async (input, call, deps) => {
       ? [{ code: "SPEND_UNAVAILABLE", message: `system.billing.usage could not be read for the reconciliation: ${recon.problem}` }]
       : []),
   ]
-  // The running `account` field and the spend `reconciled` field are the accepted Day 0 amendment (review of F, request
-  // 3); the contract keeper lands them. The cast goes when the amendment is in this branch's base.
-  const out = {
+  const out: Output<"status"> = {
     state: "ok",
     access: deps.access,
     accounts: [...scan.scans.map((item) => item.account)],
@@ -490,7 +488,7 @@ export const statusHandler: Handler<"status"> = async (input, call, deps) => {
     ...(problems.length || recon.line ? { message: [...problems, ...(recon.line ? [recon.line] : [])].join(" ") } : {}),
     ...(problems.length ? { next: `Fix the first problem, or run /${STATUS_COMMAND} for the same detail.` } : {}),
     warnings,
-  } as unknown as Output<"status">
+  }
   return out
 }
 

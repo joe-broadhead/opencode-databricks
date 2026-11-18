@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { harness } from "../reads/harness.js"
-import { startOf, withStarts } from "./support.js"
+import { recordStart } from "./support.js"
 
 const NOW = 1_800_000_000_000
 
@@ -22,7 +22,7 @@ async function setup(idleMinutes = 14) {
     },
   })
   const dir = mkdtempSync(join(tmpdir(), "dbx-hook-"))
-  withStarts(h.ledger, [startOf("wh-small", NOW - 60_000)])
+  recordStart(h.ledger, "work", "wh-small", NOW - 60_000)
   const automation = new Automation(h.deps, join(dir, "automation.lock"))
   await automation.refreshIdle(new AbortController().signal)
   let callback: ((event: unknown) => void) | undefined

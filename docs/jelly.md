@@ -46,8 +46,8 @@ enters the workspace URL and the admin's OAuth client ID; Jelly fills the relay 
 The account description carries the write disclosure and says that column masks and row filters run functions the
 plugin cannot see.
 
-`jelly.admin` asks the admin for an OAuth app connection (a public client) and names this plugin's redirect URLs
-[11][12]. The connection must list both of these:
+`jelly.admin` asks the admin for an OAuth app connection (a public client), and names this plugin's redirect URLs,
+including Jelly's relay [11][12]. The connection must list both of these:
 
 - the loopback URL, `http://localhost:8765/callback` (the default `callbackPort`), and
 - **Jelly's relay address**, `<Jelly ID issuer>/connect/callback` — `connectRelayAddress(issuer)` in Jelly's

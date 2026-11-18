@@ -22,17 +22,11 @@ export interface StartRecord {
 /** How far back a start still counts as evidence that the plugin started the running warehouse. */
 export const START_RECORD_WINDOW_MS = 24 * 60 * 60_000
 
-type LedgerWithStarts = LedgerPort & {
-  readonly starts?: (account: string, sinceMs: number) => Promise<readonly StartRecord[]>
-}
-
 /** The plugin's recorded starts for one account since `sinceMs`, or an empty list when there is no record. */
 export async function startsSince(ledger: LedgerPort, account: string, sinceMs: number): Promise<readonly StartRecord[]> {
-  const starts = (ledger as LedgerWithStarts).starts
-  if (typeof starts !== "function") return []
   try {
-    const records = await starts.call(ledger, account, sinceMs)
-    return Array.isArray(records) ? records.filter((record) => typeof record?.warehouseId === "string" && Number.isFinite(record?.atMs)) : []
+    const records = await ledger.starts(account, sinceMs)
+    return records.filter((record) => typeof record?.warehouseId === "string" && Number.isFinite(record?.atMs))
   } catch {
     return []
   }

@@ -25,10 +25,8 @@ export type Rule = { readonly action: string; readonly resource: string; readonl
 export type SkillPath = { readonly id: string; readonly path: string }
 export type Enforcement = (typeof ENFORCEMENTS)[number]
 export type AccountStatus = Output<"status">["accounts"][number]
-export type RunningItem = Output<"status">["running"][number] & { readonly account: string }
-export type Spend = NonNullable<Output<"status">["spend"]> & {
-  readonly reconciled?: { readonly warehouse: string; readonly usageDate: string; readonly dbu: number; readonly complete: boolean }
-}
+export type RunningItem = Output<"status">["running"][number]
+export type Spend = NonNullable<Output<"status">["spend"]>
 export type CleanupAction = NonNullable<Output<"status">["cleanup"]>[number]
 
 export type Status = {

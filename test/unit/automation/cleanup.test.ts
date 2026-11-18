@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest"
 import { planCleanup, registerCleanup } from "../../../src/automation/cleanup.js"
 import type { HistoryQuery } from "../../../src/ports.js"
 import { harness, runningWarehouse } from "../reads/harness.js"
-import { startOf, withStarts } from "./support.js"
+import { recordStart } from "./support.js"
 
 const NOW = 1_800_000_000_000
 const history = (over: Partial<HistoryQuery> = {}): HistoryQuery => ({ queryId: "q-1", status: "RUNNING", warehouseId: "wh-small", queryStartTimeMs: NOW - 60_000, ...over })
@@ -43,7 +43,7 @@ function setup(access: "all" | "ask-changes" | "read-only", items: HistoryQuery[
     },
     session: { synthetic: async (input: { sessionID: string; text: string }) => void messages.push(input) },
   }
-  withStarts(h.ledger, [startOf("wh-small", NOW - 60_000)])
+  recordStart(h.ledger, "work", "wh-small", NOW - 60_000)
   return { h, ctx: ctx as never, commands, messages, asserts, deny: () => void (allow = false) }
 }
 

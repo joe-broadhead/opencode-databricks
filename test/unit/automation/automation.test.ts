@@ -19,7 +19,7 @@ import { sessionToken } from "../../../src/guards/path.js"
 import type { HistoryQuery, Warehouse } from "../../../src/ports.js"
 import { loadOptions } from "../../../src/options.js"
 import { harness, runningWarehouse } from "../reads/harness.js"
-import { startOf, withStarts } from "./support.js"
+import { recordStart } from "./support.js"
 
 const NOW = 1_800_000_000_000
 const hash = sessionToken("ses_dead")
@@ -46,7 +46,7 @@ function setup(input: { items?: HistoryQuery[]; warehouses?: Warehouse[]; starts
       stopWarehouse: () => Promise.resolve(undefined),
     },
   })
-  if (input.starts !== false) withStarts(h.ledger, [startOf("wh-small", NOW - 60_000)])
+  if (input.starts !== false) recordStart(h.ledger, "work", "wh-small", NOW - 60_000)
   const automation = new Automation(h.deps, lockIn())
   return { h, automation }
 }
@@ -145,7 +145,8 @@ describe("the automation sweep", () => {
         history({ queryId: "fresh", status: "FINISHED", warehouseId: "wh-not-ours", queryEndTimeMs: NOW - 2 * 60_000 }),
       ],
     })
-    withStarts(h.ledger, [startOf("wh-small", NOW - 60_000), startOf("wh-not-ours", NOW - 60_000)])
+    recordStart(h.ledger, "work", "wh-small", NOW - 60_000)
+    recordStart(h.ledger, "work", "wh-not-ours", NOW - 60_000)
     const burning = await automation.refreshIdle(new AbortController().signal)
     expect(burning.map((item) => item.warehouse.id)).toEqual(["wh-small"])
     expect(burning[0]).toMatchObject({ account: "work", idleMinutes: 42 })

@@ -11,7 +11,7 @@ import { automationOf, computeStatus, requestedScopes, statusHandler } from "../
 import type { HistoryQuery, Token, Warehouse } from "../../../src/ports.js"
 import { FakeAuth, FAKE_HOST, RecordingPermission, DUMMY_TOKEN } from "../../fake/ports.js"
 import { answerOf, asserted, harness, runningWarehouse } from "../reads/harness.js"
-import { startOf, withStarts } from "./support.js"
+import { recordStart } from "./support.js"
 import { loadOptions } from "../../../src/options.js"
 
 const NOW = 1_800_000_000_000
@@ -91,7 +91,7 @@ describe("databricks_status", () => {
         history({ queryId: "done", status: "FINISHED", queryTags: { oc_plugin: "databricks", oc_tool: "query" } }),
       ],
     })
-    withStarts(h.ledger, [startOf("wh-small", NOW - 60_000)])
+    recordStart(h.ledger, "work", "wh-small", NOW - 60_000)
     const out = await statusHandler({}, h.call(), h.deps)
     // `account` is the accepted Day 0 amendment (review of F, request 3); the cast goes when it lands.
     expect((out.running as unknown as { account: string; id: string }[]).map((item) => [item.account, item.id])).toEqual([["work", "read-1"], ["work", "change-1"]])

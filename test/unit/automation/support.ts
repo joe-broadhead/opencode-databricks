@@ -1,18 +1,13 @@
 /**
- * Shared support for package F's tests: the start record the ledger will expose (review of F, contract request 4), and
- * a helper to attach it to the Day 0 `MemoryLedger` until the amendment lands.
+ * Shared support for package F's tests: a start line in the spend ledger, the record the context hook and the cleanup
+ * suggestions are scoped to (review of F, contract request 4).
+ *
+ * The Day 0 `MemoryLedger` stamps a charge with its own clock, which in these tests would be epoch 0; the helper writes
+ * the same line `createLedger` writes, at the test's own time, so `starts(account, sinceMs)` reads it back.
  */
-import type { LedgerPort } from "../../../src/ports.js"
-import type { StartRecord } from "../../../src/automation/starts.js"
+import type { MemoryLedger } from "../../fake/ports.js"
 
-/** One start record, as `LedgerPort.starts` answers it. */
-export const startOf = (warehouseId: string, atMs: number, sessionId = "ses_test"): StartRecord => ({ warehouseId, atMs, sessionId })
-
-/** Attaches a fake `starts` to a ledger. The amendment adds the method to the port; this fills the gap. */
-export function withStarts(ledger: LedgerPort, records: readonly StartRecord[]): LedgerPort {
-  Object.defineProperty(ledger, "starts", {
-    configurable: true,
-    value: async (account: string, sinceMs: number) => records.filter((record) => record.atMs >= sinceMs),
-  })
-  return ledger
+/** Records one warehouse start this plugin caused, at `atMs`, for `account`. */
+export function recordStart(ledger: MemoryLedger, account: string, warehouseId: string, atMs: number, sessionId = "ses_test"): void {
+  ledger.charges.push({ at: new Date(atMs).toISOString(), account, warehouseId, kind: "start", dbuHours: 0, sessionId })
 }

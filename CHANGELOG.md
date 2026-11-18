@@ -54,19 +54,6 @@ All notable changes to this project are documented here. The format follows [Kee
 - `test/unit/automation/skill-examples.test.ts`: every SQL example in the skill, and the working skill's request, run
   through the real read path, the real client and the loopback fake.
 
-### Fixed
-
-- Review of package F (PR #10):
-  - `/databricks-cleanup` asserts every stop and cancel at Allowed as well as at Ask before changes, so a person's own
-    deny rule wins at both; a stop is offered only for a warehouse the ledger says this plugin started.
-  - Status and cleanup list only the identity's own statements, filtering Query History by the caller, so another
-    person's tagged statement is never treated as this plugin's.
-  - The context hook names only warehouses this plugin started, and escapes the warehouse name; the idle sweep is the
-    owner's alone, and a session that ended with nothing running is no longer reported as a failure.
-  - The reconcile statement reads `usage_metadata.warehouse_id`, the documented struct access, and says that
-    `system.billing.usage` lags up to 12 hours.
-  - The automation lock is a token lock whose holder keeps it, and orphan cancels no longer wait for it.
-
 ### Changed
 
 - The `sources` declaration holds the source-contract v0.2.0 keys a v0.1.x consumer refuses: `readsIdentity` on the
@@ -75,10 +62,6 @@ All notable changes to this project are documented here. The format follows [Kee
   auto-stops) moved to the saved source's scope description and the cost texts. These keys return once Jelly and
   Memory are on source-contract v0.2.0.
 - The permission-only action `databricks.read`, allowed at every access, for a bound source's content reads.
-
-### Fixed
-
-- A job run's parameters are sent as run-now 2.2's documented `job_parameters`, not `notebook_params`.
 - `dist/tui.js` stays unminified, and the build's guard is the family's corrected regex (review of boxd #31, LOW 1 and
   the review of F, request 1): it catches `import a from"x"`, `import"x"`, `export*from"x"` and `export*as n from"x"`
   without matching a `"from"` string, and `test/unit/build-guard.test.ts` pins it.
@@ -87,6 +70,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- A job run's parameters are sent as run-now 2.2's documented `job_parameters`, not `notebook_params`.
 - Review of package F (PR #10):
   - `/databricks-cleanup` asserts every stop and cancel at Allowed as well as at Ask before changes, so a person's own
     deny rule wins at both; a stop is offered only for a warehouse the ledger says this plugin started.
@@ -97,4 +81,3 @@ All notable changes to this project are documented here. The format follows [Kee
   - The reconcile statement reads `usage_metadata.warehouse_id`, the documented struct access, and says that
     `system.billing.usage` lags up to 12 hours.
   - The automation lock is a token lock whose holder keeps it, and orphan cancels no longer wait for it.
-
