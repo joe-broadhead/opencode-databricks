@@ -18,6 +18,8 @@ import { classifyPlan } from "./domain/statements.js"
 import type { Options } from "./options.js"
 import type { AuthPort, Clock, DatabricksPort, LedgerPort, PermissionPort, ReadGuardPort } from "./ports.js"
 import { READ_HANDLERS } from "./tools/reads/index.js"
+import save from "./tools/save/index.js"
+import { SOURCE_HANDLERS } from "./sources/index.js"
 import type { Call, Handler, Handlers } from "./tool-spec.js"
 
 export interface Deps {
@@ -166,9 +168,9 @@ export const HANDLERS: Handlers = {
   jobs: stub("jobs"),
   workspace: stub("workspace"),
   plan,
-  events_list: stub("events_list"),
-  saved_read: stub("saved_read"),
-  save: stub("save"),
+  events_list: SOURCE_HANDLERS.events_list,
+  saved_read: SOURCE_HANDLERS.saved_read,
+  save,
   write: commit("write"),
   delete: commit("delete"),
   share: commit("share"),
