@@ -40,7 +40,7 @@ import type {
   WarehouseEdit,
   WarehouseState,
 } from "../ports.js"
-import { type Fetch, type QueryValue, Statements, WorkspaceHttp } from "./http.js"
+import { type Fetch, type QueryValue, Statements, WorkspaceHttp, guardedLiveFetch } from "./http.js"
 import { fetchLinkBytes } from "./links.js"
 import { pollUntilDone, toChunkAnswer, toHistoryQuery, toStatementAnswer } from "./statements.js"
 
@@ -338,7 +338,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
     ...(options.maxAttempts !== undefined ? { maxAttempts: options.maxAttempts } : {}),
     ...(options.retryBaseMs !== undefined ? { retryBaseMs: options.retryBaseMs } : {}),
   })
-  const fetchImpl: Fetch = options.fetch ?? ((input, init) => fetch(input, init))
+  const fetchImpl: Fetch = options.fetch ?? guardedLiveFetch
   const statements = new Statements(http, {
     ...(options.clock ? { now: options.clock.now } : {}),
     ...(options.recoveryTimeoutMs !== undefined ? { recoveryTimeoutMs: options.recoveryTimeoutMs } : {}),

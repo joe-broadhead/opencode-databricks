@@ -7,8 +7,8 @@ server is wrapped and no SDK is installed: the plugin calls the documented REST 
 Unofficial; not affiliated with Databricks. The icon is the family's own tile, not Databricks' mark. Databricks is a
 trademark of Databricks, Inc.; this unofficial plugin is not endorsed by them.
 
-> **Status.** v0.1.0: 23 tools, three sources, two skills, status, `/databricks-cleanup` and the TUI dialog. The live
-> check (design §15.4) has not run, so the Known limits below list what is measured and what is not.
+> **Status.** Not released. `package.json` is `0.0.1` and there is no release tag. A source install does not call
+> Databricks. The live check has not run, so the Known limits below list what is measured and what is not.
 
 ## Requirements
 
@@ -21,11 +21,8 @@ trademark of Databricks, Inc.; this unofficial plugin is not endorsed by them.
 
 ## Install
 
-```sh
-opencode plugin add github:joe-broadhead/opencode-databricks#v0.1.0
-```
-
-Run `opencode reload`, or restart OpenCode. Then run `/databricks-status` in a session.
+Not released. There is no release tag, so there is no install line. A source install does not call Databricks. When a
+release exists, its tag is the install spec. After it is installed, run `/databricks-status` in a session.
 
 ## What the agent may do
 
@@ -63,7 +60,7 @@ every listed warehouse and cancels every listed read; at Ask before changes each
 reports and takes no action. Your own deny rules still win, action by action, at every level. Nothing in this plugin ever
 deletes a table, file, job, warehouse or result. Automation cancels this plugin's own orphaned reads when a session is
 deleted or archived, at every access level, because a read has no effects. Stopping a warehouse automatically is not in
-v0.1.0, and a stop is only offered for a warehouse the plugin's own start record names (a start in the last 24 hours).
+this unreleased build, and a stop is only offered for a warehouse the plugin's own start record names (a start in the last 24 hours).
 [Costs](docs/costs.md#cleanup) has the details.
 
 ## Known limits
@@ -131,7 +128,7 @@ v0.1.0, and a stop is only offered for a warehouse the plugin's own start record
   labelled UTC; `BINARY`, `INTERVAL` and `VARIANT` renderings come from hand-written fixtures until live check L8
   records Databricks' own. [Safety](docs/safety.md#known-limits) repeats these.
 - **Automation runs only while OpenCode runs.** It cancels this plugin's own orphaned reads at every access level and
-  stops no warehouse in v0.1.0. A read whose session ended while OpenCode was not running is left to
+  stops no warehouse in this unreleased build. A read whose session ended while OpenCode was not running is left to
   `STATEMENT_TIMEOUT`. The context hook speaks only from a snapshot at most five minutes old.
 - **Actions can email people.** A change (`GRANT`, `ALTER … OWNER`, a job run) reaches the people Databricks notifies;
   the plugin cannot see or stop those notifications.
@@ -167,6 +164,7 @@ Every error has the form `CODE: What happened. Next step: What to do.`
 | `NEEDS_PLAN` | refused | A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read. | Plan it with databricks_plan({ sql }). |
 | `NOT_FOUND` | refused | The catalog, schema, table, function, statement, job or run was not found or is not visible. | Call databricks_catalog with filter to find the name. |
 | `NOT_IMPLEMENTED` | refused | This tool is declared but not built in this version. | Use the Databricks SQL editor for now, or update the plugin. |
+| `NOT_RELEASED` | refused | This copy is not a released install, so Databricks was not called. | Wait for a release tag. Do not install this repository from source if you need to call Databricks. |
 | `OPTIONS_INVALID` | refused | A plugin option is invalid or unknown. | Fix the plugin's options in opencode.json; the message names the option. |
 | `PATH_NOT_DEFAULT` | refused | The workspace's SQL path does not put system.builtin before every user schema, so a keyword-form built-in could resolve to a user function. | Ask an admin to restore the default path, or write the function call form, which the plugin qualifies as system.builtin. |
 | `PERMISSION_DENIED` | refused | Unity Catalog or an access control list refused the call. | Ask for the privilege the message names. |

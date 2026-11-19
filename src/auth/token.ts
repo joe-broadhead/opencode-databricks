@@ -15,6 +15,19 @@
  * - Refresh: `POST` the token endpoint with `grant_type=refresh_token&refresh_token=…&client_id=…` [partner guide].
  */
 import { DatabricksError } from "../domain/errors.js"
+import { fetchTarget, isLoopback, vendorCallsAllowed } from "../release.js"
+
+function refuseUnreleasedToken(request: TokenRequest): void {
+  if (request.fetch !== globalThis.fetch) return
+  const url = fetchTarget(request.endpoint)
+  if (url !== undefined && isLoopback(url)) return
+  if (vendorCallsAllowed({ released: request.released })) return
+  throw new DatabricksError(
+    "NOT_RELEASED",
+    "This copy is not a released install, so Databricks was not called.",
+    "Wait for a release tag. Do not install this repository from source if you need to call Databricks.",
+  )
+}
 
 const TIMEOUT_MS = 30_000
 /** The codes an endpoint may return, as the OAuth standard defines them; anything else is not repeated. */
@@ -33,6 +46,8 @@ export interface TokenRequest {
   readonly endpoint: string
   readonly form: Readonly<Record<string, string>>
   readonly fetch: typeof globalThis.fetch
+  /** Tests pass true to simulate a tagged release. A source install must not set this. */
+  readonly released?: boolean
   readonly signal: AbortSignal
   /** HTTP Basic credentials: M2M only. */
   readonly basic?: { readonly user: string; readonly secret: string }
@@ -70,6 +85,7 @@ function failure(status: number, json: Record<string, unknown>, invalidScope: "c
  */
 export async function requestToken(request: TokenRequest): Promise<TokenSet> {
   if (request.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.")
+  refuseUnreleasedToken(request)
   const timeout = AbortSignal.timeout(request.timeoutMs ?? TIMEOUT_MS)
   const signal = AbortSignal.any([request.signal, timeout])
   const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }

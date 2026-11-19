@@ -15,6 +15,7 @@ import { Plugin } from "@opencode/plugin"
 import { PLUGIN_ID } from "../../src/constants.js"
 import { routeFetch } from "./route-fetch.js"
 
+import { simulateTaggedRelease } from "../../src/release.js"
 import { DatabricksRpc, type Status } from "../../src/rpc.js"
 
 const REPO = realpathSync(fileURLToPath(new URL("../../", import.meta.url)))
@@ -146,6 +147,9 @@ async function within<T>(start: { deadline: number; boundMs: number }, phase: st
 }
 
 export async function startHost(input: HostInput = {}) {
+  // This harness loads the package as a local path, which is not a tagged release. Simulate one so the existing
+  // handlers still run. Production does not set this.
+  simulateTaggedRelease(true)
   const boundMs = input.startWithinMs ?? HOST_START_MS
   const start = { deadline: Date.now() + boundMs, boundMs }
   const base = join(ROOT, `host-${++hosts}`)

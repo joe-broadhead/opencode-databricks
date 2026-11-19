@@ -1,11 +1,11 @@
 # Configuration
 
-Unofficial plugin. Not affiliated with Databricks.
+Unofficial plugin. Not affiliated with Databricks. There is no release tag yet, so this is the options shape, not an install line.
 
 ```json
 {
   "plugins": [
-    { "package": "github:joe-broadhead/opencode-databricks#v0.1.0", "options": { "access": "ask-changes", "accounts": { "work": { "warehouse": "abc123" } } } }
+    { "package": "github:joe-broadhead/opencode-databricks", "options": { "access": "ask-changes", "accounts": { "work": { "warehouse": "abc123" } } } }
   ]
 }
 ```
