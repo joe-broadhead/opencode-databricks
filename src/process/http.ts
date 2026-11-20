@@ -37,7 +37,7 @@ export type Fetch = (input: string, init?: RequestInit) => Promise<Response>
 /** The live fetch: a source install sends nothing to a non-loopback host. Tests inject their own fetch. */
 export const guardedLiveFetch: Fetch = async (input, init) => {
   const url = fetchTarget(input)
-  if ((url === undefined || !isLoopback(url)) && !vendorCallsAllowed()) {
+  if ((url === undefined || !isLoopback(url)) && !(await vendorCallsAllowed())) {
     throw new DatabricksError(
       "NOT_RELEASED",
       "This copy is not a released install, so Databricks was not called.",

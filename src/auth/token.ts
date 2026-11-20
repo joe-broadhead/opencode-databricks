@@ -17,11 +17,11 @@
 import { DatabricksError } from "../domain/errors.js"
 import { fetchTarget, isLoopback, vendorCallsAllowed } from "../release.js"
 
-function refuseUnreleasedToken(request: TokenRequest): void {
+async function refuseUnreleasedToken(request: TokenRequest): Promise<void> {
   if (request.fetch !== globalThis.fetch) return
   const url = fetchTarget(request.endpoint)
   if (url !== undefined && isLoopback(url)) return
-  if (vendorCallsAllowed({ released: request.released })) return
+  if (await vendorCallsAllowed({ released: request.released })) return
   throw new DatabricksError(
     "NOT_RELEASED",
     "This copy is not a released install, so Databricks was not called.",
@@ -85,7 +85,7 @@ function failure(status: number, json: Record<string, unknown>, invalidScope: "c
  */
 export async function requestToken(request: TokenRequest): Promise<TokenSet> {
   if (request.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.")
-  refuseUnreleasedToken(request)
+  await refuseUnreleasedToken(request)
   const timeout = AbortSignal.timeout(request.timeoutMs ?? TIMEOUT_MS)
   const signal = AbortSignal.any([request.signal, timeout])
   const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }

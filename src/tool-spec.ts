@@ -94,6 +94,36 @@ function schemaOf(schema: z.ZodType, io: "input" | "output"): JsonSchema {
   }
 }
 
+/**
+ * The declared copy of a tool's output. The host imports a declared output into its validator, which refuses `pattern`
+ * keywords; a pattern only tightens a string, so the copy drops it and the tool still checks its own input and output.
+ */
+function declared(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(declared)
+  if (typeof schema !== "object" || schema === null) return schema
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(schema)) if (key !== "pattern") out[key] = declared(value)
+  return out
+}
+
+/**
+ * A tool's refusal, as `errorResult` returns it. The host checks a tools-RPC method's answer against its declared
+ * output, so a refusal is declared beside the success shape (the wave's list-fix rule), never left to fail validation.
+ */
+const REFUSAL = {
+  type: "object",
+  required: ["state", "error", "message", "next"],
+  properties: {
+    state: { type: "string" },
+    error: { type: "string" },
+    message: { type: "string" },
+    next: { type: "string" },
+    providerError: { type: "string" },
+    retryAfterSec: { type: "number" },
+  },
+  additionalProperties: false,
+} as const
+
 /** A read tool as a tools RPC method: the same input check, the same run. */
 export function scriptMethod(tool: ToolName, deps: () => Deps, handlers: Handlers): PluginMethod {
   const entry = TOOLS.find((item) => item.name === tool)!
@@ -104,7 +134,7 @@ export function scriptMethod(tool: ToolName, deps: () => Deps, handlers: Handler
     class: methodClass(tool),
     description: entry.description,
     input: schemaOf(Inputs[tool], "input"),
-    output: schemaOf(Outputs[tool], "output"),
+    output: { anyOf: [declared(schemaOf(Outputs[tool], "output")), REFUSAL] },
     run: async (input, call) => runTool(tool, input, call, deps(), handlers),
   }
 }
