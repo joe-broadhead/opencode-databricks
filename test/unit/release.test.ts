@@ -17,6 +17,15 @@ describe("a source install does not call Databricks", () => {
     expect(installAllows(packageSource("v0.1.0"))).toBe(true)
     expect(installAllows(packageSource("v0.1.0-rc.1"))).toBe(true)
     expect(installAllows(packageSource("main"))).toBe(false)
+    // The spec must name this plugin's own repository, in the forms a real install records.
+    expect(installAllows({ type: "package", target: "github:joe-broadhead/opencode-databricks#v0.1.0", version: SHA })).toBe(true)
+    expect(installAllows({ type: "package", target: "git+https://github.com/joe-broadhead/opencode-databricks.git#v0.1.0", version: SHA })).toBe(true)
+    expect(installAllows({ type: "package", target: "git+ssh://git@github.com/joe-broadhead/opencode-databricks.git#v0.1.0", version: SHA })).toBe(true)
+    // Another repository's semver tag is not a release of this plugin.
+    expect(installAllows({ type: "package", target: "github:joe-broadhead/opencode-gws#v0.0.11", version: SHA })).toBe(false)
+    expect(installAllows({ type: "package", target: "github:someone/opencode-databricks#v0.1.0", version: SHA })).toBe(false)
+    // A folder named after a tag, around a copy with no git tag, is not a release.
+    expect(installAllows({ type: "local", path: "/tmp/@v0.1.0/opencode-databricks" })).toBe(false)
     expect(installAllows({ type: "package", target: "github:joe-broadhead/opencode-databricks" })).toBe(false)
     expect(installAllows({ type: "local" })).toBe(false)
     expect(installAllows({ type: "builtin" })).toBe(false)
