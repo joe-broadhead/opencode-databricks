@@ -19,6 +19,7 @@ import { createLedger } from "./ledger.js"
 import { loadOptions } from "./options.js"
 import { registerPermissionDefaults } from "./permissions.js"
 import { createDatabricksClient } from "./process/client.js"
+import { configureReleaseGate } from "./release.js"
 import type { AuthPort, DatabricksPort, PermissionPort } from "./ports.js"
 import { reasonOf } from "./redact.js"
 import { type Deps, HANDLERS } from "./registry.js"
@@ -44,6 +45,8 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
       const cleanup = async () => {
         for (const registration of registrations.splice(0).reverse()) await registration.dispose()
       }
+      // The host does not list the plugin itself during setup; the gate reads its report on the first call.
+      configureReleaseGate(() => ctx.plugin.list)
       const problems = new Map<string, string>()
       const report = (area: string) => (problem: string | undefined) => void (problem ? problems.set(area, problem) : problems.delete(area))
       const permission: PermissionPort = {

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- A source install of this plugin sends nothing to Databricks: a vendor call is made only when the host reports this install as a tagged package (`…#vX.Y.Z`), read from `ctx.plugin.list` once its entry exists, or when a checkout is exactly at a release tag. A branch, a dev checkout or an untagged install answers `NOT_RELEASED` and sends nothing, and the refusal is a shape each tools-RPC method declares.
+
 - The repository scaffold, in the family's layout: the `jelly` declaration, the build to two self-contained bundles,
   the shared kit (r4.1) and `scripts/check.mjs` as the one check gate.
 - The contract: 23 tools under the `databricks` namespace with their input and output schemas, each asserting its

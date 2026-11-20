@@ -30,8 +30,22 @@ import type { AuthPort, Token } from "../ports.js"
 import { redact, withoutSecret } from "../redact.js"
 import type { HistoryQuery, StatementAnswer } from "../ports.js"
 import { statementBody, toHistoryQuery, toStatementAnswer } from "./statements.js"
+import { fetchTarget, isLoopback, vendorCallsAllowed } from "../release.js"
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>
+
+/** The live fetch: a source install sends nothing to a non-loopback host. Tests inject their own fetch. */
+export const guardedLiveFetch: Fetch = async (input, init) => {
+  const url = fetchTarget(input)
+  if ((url === undefined || !isLoopback(url)) && !(await vendorCallsAllowed())) {
+    throw new DatabricksError(
+      "NOT_RELEASED",
+      "This copy is not a released install, so Databricks was not called.",
+      "Wait for a release tag. Do not install this repository from source if you need to call Databricks.",
+    )
+  }
+  return fetch(input, init)
+}
 
 /** A whole JSON answer's cap (design §9: "No response over 10 MiB is parsed whole"). */
 export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024
@@ -251,7 +265,7 @@ export class WorkspaceHttp {
 
   constructor(options: HttpOptions) {
     this.auth = options.auth
-    this.fetchImpl = options.fetch ?? ((input, init) => fetch(input, init))
+    this.fetchImpl = options.fetch ?? guardedLiveFetch
     this.maxBytes = options.maxResponseBytes ?? MAX_RESPONSE_BYTES
     this.maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS
     this.baseMs = options.retryBaseMs ?? RETRY_BASE_MS

@@ -26,6 +26,7 @@ export const ERRORS = {
   RULES_NOT_ADDED: { state: "failed", what: "The default permission rules could not be added to the agents.", next: "Restart OpenCode." },
   STATUS_UNAVAILABLE: { state: "failed", what: "Status could not be computed right now.", next: "Try again in a few seconds; if it persists, restart OpenCode." },
   NOT_IMPLEMENTED: { state: "refused", what: "This tool is declared but not built in this version.", next: "Use the Databricks SQL editor for now, or update the plugin." },
+  NOT_RELEASED: { state: "refused", what: "This copy is not a released install, so Databricks was not called.", next: "Wait for a release tag. Do not install this repository from source if you need to call Databricks." },
   // Auth (design §3).
   AUTH_REQUIRED: { state: "refused", what: "No usable Databricks credential: none stored, a refresh failed, or the configured role differs from the one bound at sign-in.", next: "Run /connect and choose Databricks, or run opencode auth login databricks-<alias>." },
   AUTH_SCOPE_MISSING: { state: "refused", what: "The sign-in lacks the API scope this call needs, so Databricks was not called.", next: "Add the feature and sign in again, or ask the admin to allow the scope on the app connection." },

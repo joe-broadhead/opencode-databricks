@@ -105,6 +105,32 @@ function install(withHostPackages: boolean): string {
 
 const installedPackage = (withHostPackages: boolean) => join(install(withHostPackages), "node_modules", ...pkg.name.split("/"))
 
+/** A PAT account whose token comes from the host's environment, so a read reaches the network gate. */
+const PAT_ACCOUNT = { allowCustomHost: true, accounts: { work: { mode: "pat", host: "https://workspace.example", tokenEnv: "DATABRICKS_TOKEN", warehouse: "wh-small" } } }
+
+/** The packed plugin as a release install is: a git repo with the version's tag, dist committed and no dev scripts. */
+function releaseRepo(): { spec: string; dir: string } {
+  const dir = project("release-repo")
+  run("tar", ["-xzf", join(work, pack().filename), "--strip-components=1", "-C", dir], dir)
+  const release = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as Record<string, unknown>
+  delete release.devDependencies
+  delete release.scripts
+  writeFileSync(join(dir, "package.json"), `${JSON.stringify(release, null, 2)}\n`)
+  run("git", ["init", "--quiet"], dir)
+  run("git", ["add", "-A"], dir)
+  // dist/ is git-ignored on master; a release commit carries it.
+  run("git", ["add", "-f", "dist"], dir)
+  run("git", ["-c", "user.name=pack test", "-c", "user.email=pack@example.invalid", "commit", "-qm", "release"], dir)
+  run("git", ["tag", `v${pkg.version}`], dir)
+  return { spec: `git+file://${dir}#v${pkg.version}`, dir }
+}
+
+/** Calls a tool through the tools RPC as a session of the build agent. */
+async function callRead(host: Awaited<ReturnType<typeof serve>>, method: string, input: Record<string, unknown> = {}): Promise<{ status: number; text: string }> {
+  const { data } = await host.api<{ data: { id: string } }>("POST", "/api/session", { title: "databricks pack test", agent: "build", location: { directory: host.directory } })
+  return host.raw("POST", `/api/rpc/${TOOLS_RPC_ID}/${method}`, { input: { sessionID: data.id, input } })
+}
+
 /** A home, OpenCode's test home, XDG folders and a temp folder, all inside `base`. */
 function isolated(base: string) {
   const home = join(base, "home")
@@ -230,6 +256,66 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
       await host.close()
     }
   }, 600_000)
+
+  test("an untagged dev build is gated before the network, and the refusal is a declared answer", async () => {
+    const host = await serve(version, [{ package: installedPackage(false), options: PAT_ACCOUNT }])
+    try {
+      await host.until("the plugin finishes loading", async () => {
+        const { data } = await host.api<{ data: { id: string; state: { status: string } }[] }>("GET", "/api/plugin")
+        const found = data.find((item) => item.id === PLUGIN_ID)
+        return found && found.state.status !== "loading" ? found : undefined
+      })
+      const call = await callRead(host, "warehouses")
+      expect(call.text).toContain("NOT_RELEASED")
+      expect(call.text).not.toContain("invalid_output")
+    } finally {
+      await host.close()
+    }
+  }, 600_000)
+
+  test("an untagged copy in a tag-named directory is not a release", async () => {
+    const dir = join(work, "@v0.0.1")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "databricks-pack-tagname", private: true }))
+    run("npm", ["install", join(work, pack().filename), "--ignore-scripts", "--no-audit", "--no-fund", "--prefer-offline"], dir)
+    const installed = join(dir, "node_modules", ...pkg.name.split("/"))
+    expect(installed).toContain("@v0.0.1")
+    const host = await serve(version, [{ package: installed, options: PAT_ACCOUNT }], "-tagname")
+    try {
+      await host.until("the plugin finishes loading", async () => {
+        const { data } = await host.api<{ data: { id: string; state: { status: string } }[] }>("GET", "/api/plugin")
+        const found = data.find((item) => item.id === PLUGIN_ID)
+        return found && found.state.status !== "loading" ? found : undefined
+      })
+      const call = await callRead(host, "warehouses")
+      expect(call.text).toContain("NOT_RELEASED")
+      expect(call.text).not.toContain("invalid_output")
+    } finally {
+      await host.close()
+    }
+  }, 600_000)
+})
+
+describe("a real release install on stock OpenCode 2.3.2", () => {
+  test("a tagged package spec is not gated, and its refusal is a declared answer", async () => {
+    const release = releaseRepo()
+    const host = await serve("2.3.2", [{ package: release.spec, options: PAT_ACCOUNT }], "-release")
+    try {
+      await host.until("the plugin finishes loading", async () => {
+        const { data } = await host.api<{ data: { id: string; state: { status: string } }[] }>("GET", "/api/plugin")
+        const found = data.find((item) => item.id === PLUGIN_ID)
+        return found && found.state.status !== "loading" ? found : undefined
+      })
+      const call = await callRead(host, "warehouses")
+      // The dead proxy refuses the connection: the handler ran, so the tagged install is not gated, and its answer is a
+      // shape the method declares.
+      expect(call.text).toContain("UNAVAILABLE")
+      expect(call.text).not.toContain("NOT_RELEASED")
+      expect(call.text).not.toContain("invalid_output")
+    } finally {
+      await host.close()
+    }
+  }, 600_000)
 })
 
 /** OPENCODE_BIN_<version>, or the unmodified npm release with its platform binary, installed with scripts disabled. */
@@ -260,17 +346,25 @@ async function freePort(): Promise<number> {
  * `opencode serve` on its own port and password, in an environment that holds only its temp root and is offline, with
  * a project that loads the installed package and defines one agent only in user config, `reviewer`.
  */
-async function serve(version: string, installed: string) {
+async function serve(version: string, plugins: string | readonly string[] | readonly { package: string; options: unknown }[], label = "") {
   const binary = stockBinary(version)
-  const base = join(work, `stock-${version}`)
+  const base = join(work, `stock-${version}${label}`)
   const directory = join(base, "project")
   // Keep the built-in local providers from probing their default ports.
   const providers = { lmstudio: { settings: { baseURL: "" } }, ollama: { settings: { baseURL: "" } }, vllm: { settings: { baseURL: "" } } }
   mkdirSync(directory, { recursive: true })
   const agents = { reviewer: { description: "Reviews changes", mode: "subagent" } }
-  writeFileSync(join(directory, "opencode.json"), JSON.stringify({ plugins: [installed], agents, providers }))
+  writeFileSync(join(directory, "opencode.json"), JSON.stringify({ plugins: typeof plugins === "string" ? [plugins] : [...plugins], agents, providers }))
   const password = randomUUID()
-  const env = { ...isolated(base), ...OFFLINE, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8", OPENCODE_PASSWORD: password }
+  // A PAT account with a workspace, so a read builds a request and reaches the release gate (the proxy is dead).
+  const env = {
+    ...isolated(base),
+    ...OFFLINE,
+    PATH: "/usr/bin:/bin",
+    LANG: "en_US.UTF-8",
+    OPENCODE_PASSWORD: password,
+    DATABRICKS_TOKEN: "dapi_pack_test_token",
+  }
 
   expect(run(binary, ["--version"], directory, env).trim()).toBe(`opencode v${version}`)
   // OpenCode resolves every global path from this environment; none may leave the temp root.
@@ -286,12 +380,15 @@ async function serve(version: string, installed: string) {
   const exited = new Promise((done) => server.once("exit", done))
 
   const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`
-  const api = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+  const raw = async (method: string, path: string, body?: unknown): Promise<{ status: number; text: string }> => {
     const url = new URL(path, `http://127.0.0.1:${port}`)
     url.searchParams.set("location[directory]", directory)
     const response = await fetch(url, { method, headers: { authorization, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) })
-    const text = await response.text()
-    if (!response.ok) throw new Error(`${method} ${path}: ${response.status} ${text.slice(0, 500)}`)
+    return { status: response.status, text: await response.text() }
+  }
+  const api = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+    const { status, text } = await raw(method, path, body)
+    if (status < 200 || status >= 300) throw new Error(`${method} ${path}: ${status} ${text.slice(0, 500)}`)
     return JSON.parse(text) as T
   }
   /** Polls until `read` returns a value. The server answers before plugins finish loading, more slowly when busy. */
@@ -310,7 +407,7 @@ async function serve(version: string, installed: string) {
     await exited
     clearTimeout(timer)
   }
-  return { api, until, close, log: () => log }
+  return { api, raw, until, close, directory, log: () => log }
 }
 
 // The files a `files` entry should put in the tarball. dist/ must hold exactly the two bundles, so stale or foreign
