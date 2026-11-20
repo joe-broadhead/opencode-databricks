@@ -71,7 +71,11 @@ function packageDir(): string {
 }
 
 /** A checkout whose HEAD is exactly a semver tag. A source branch, and a missing git, are not. */
-function exactGitTag(dir: string): boolean {
+/**
+ * A checkout whose HEAD is exactly a semver tag. A source branch, and a missing git, are not. Exported so a test can
+ * prove both answers; production calls it with `packageDir()`.
+ */
+export function exactGitTag(dir: string): boolean {
   try {
     const tag = execFileSync("git", ["-C", dir, "describe", "--exact-match", "--tags"], {
       encoding: "utf8",
