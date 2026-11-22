@@ -37,7 +37,7 @@ One command, `scripts/check.mjs`, runs every stage in order and stops at the fir
 | `parser` | Regenerates the SQL parser and the built-in list into a temporary folder and fails on any difference. |
 | `typecheck` | `tsc` over `src/` and the tests. |
 | `unit` | Vitest over `test/unit/`. |
-| `conformance` | The `sources` declaration against the source contract v0.2.0, under Bun; the kit's run over the sources lands with them. |
+| `conformance` | The `sources` declaration against the source contract v0.3.0, under Bun; the kit's run over the sources lands with them. |
 | `kit` | The release kit's own tests. |
 | `build` | esbuild bundles `dist/index.js` and `dist/tui.js`, and checks `NOTICE`. |
 | `icons` | The family icon contract. |

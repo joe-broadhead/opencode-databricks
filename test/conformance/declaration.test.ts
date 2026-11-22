@@ -1,4 +1,4 @@
-// package.json's `sources` against source-contract v0.2.0: `assertDeclaration` with the tools RPC's methods as the
+// package.json's `sources` against source-contract v0.3.0: `assertDeclaration` with the tools RPC's methods as the
 // declared tools, the descriptor as a consumer reads it from the install, and the RPC id the plugin registers.
 // Package E adds the conformance kit's run over events_list, saved_read and probe (test/conformance/sources.test.ts).
 import { expect, test } from "bun:test"

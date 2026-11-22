@@ -92,7 +92,7 @@ setting description says what Ask before changes and Read only do;
 
 `package.json` `sources` declares `databricks.queries` (your finished statements, metadata only),
 `databricks.runs` (finished job runs) and `databricks.saved` (a saved query's table, read only on a running
-warehouse), validated with the source contract v0.2.0's `assertDeclaration` [24][29].
+warehouse), validated with the source contract v0.3.0's `assertDeclaration` [24][29].
 
 ## Sources for this page
 

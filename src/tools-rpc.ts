@@ -1,6 +1,6 @@
 /**
  * The tools RPC (`databricks.databricks.tools`), through the source contract's shared module
- * (`@we-the-rebel-alliance/source-contract/tools-rpc`, tag v0.2.0, bundled into dist/index.js):
+ * (`@we-the-rebel-alliance/source-contract/tools-rpc`, tag v0.3.0, bundled into dist/index.js):
  *
  *   POST /api/rpc/databricks.databricks.tools/<method>
  *   { "input": { "sessionID": "<session>", "input": <the tool's input> } }
