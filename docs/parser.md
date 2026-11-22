@@ -21,7 +21,8 @@ parser from Maven Central (`spark-sql-api_2.13-4.3.0.jar`).
    scan fails on any Java left over;
 3. it runs **antlr-ng** (the ANTLR tool written in TypeScript) for the antlr4ng runtime, with no listener and no
    visitor;
-4. it writes a fixed header; nothing machine-specific reaches the files.
+4. it writes a fixed header; nothing machine-specific reaches the files, and the parser's `literalNames` and
+   `symbolicNames` arrays refer to the lexer's identical ones, so one copy of the vocabulary is packaged.
 
 The flags are pinned to a SQL warehouse's defaults: ANSI reserved keywords on, double-quoted identifiers off,
 legacy set-operation precedence off. `src/sql/parse.ts` drives the parser as Spark's `AbstractParser` does: an

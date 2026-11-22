@@ -54,6 +54,27 @@ function ported(file) {
   return out
 }
 
+/**
+ * The parser's vocabulary is the lexer's, token for token: antlr-ng writes the same `literalNames` and
+ * `symbolicNames` arrays into both files, so the parser refers to the lexer's arrays instead of bundling a second
+ * copy (about 13 KB of needless repeated text in dist/index.js). The values and the parser's `Vocabulary` stay
+ * exactly as they were.
+ */
+function shareVocabulary(files) {
+  const lexer = files["SqlBaseLexer.ts"]
+  let parser = files["SqlBaseParser.ts"]
+  for (const field of ["literalNames", "symbolicNames"]) {
+    const array = (text) => new RegExp(`    public static readonly ${field} = \\[[\\s\\S]*?\\n    \\];`).exec(text)?.[0]
+    const own = array(parser)
+    const shared = array(lexer)
+    if (own === undefined || shared === undefined) fail(`SqlBaseParser.ts or SqlBaseLexer.ts has no ${field} array; the parser vocabulary cannot be shared.`)
+    if (own !== shared) fail(`SqlBaseParser.ts and SqlBaseLexer.ts name different ${field} values; review the share in scripts/generate-parser.mjs.`)
+    parser = parser.replace(own, `    public static readonly ${field} = SqlBaseLexer.${field};`)
+  }
+  parser = parser.replace('import { Token } from "antlr4ng";', 'import { Token } from "antlr4ng";\nimport { SqlBaseLexer } from "./SqlBaseLexer.js";')
+  files["SqlBaseParser.ts"] = parser
+}
+
 function header(file) {
   return [
     "// @ts-nocheck",
@@ -81,6 +102,7 @@ function generate(target) {
       const body = readFileSync(join(work, "out", file), "utf8").replace(/^\/\/ Generated from .*\n/, "")
       files[file] = header(file.replace(".ts", ".g4")) + body.replaceAll(work, "<grammar>")
     }
+    shareVocabulary(files)
     if (target) for (const [file, text] of Object.entries(files)) writeFileSync(join(target, file), text)
     return files
   } finally {
