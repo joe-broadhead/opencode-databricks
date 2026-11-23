@@ -1,7 +1,7 @@
 # Sources
 
 The plugin is a source for Memory and Jelly ([source-contract](https://github.com/we-the-rebel-alliance/source-contract)
-v0.2.0). It has three sources, read over the tools RPC `databricks.databricks.tools`:
+v0.3.0). It has three sources, read over the tools RPC `databricks.databricks.tools`:
 
 | Source | Kind | What it lists | Owner |
 |---|---|---|---|

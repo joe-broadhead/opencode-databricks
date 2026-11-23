@@ -106,7 +106,7 @@ const reports: ConformanceReport[] = []
 
 /** The override the report records for the release job and the planner (review of #8, M3). */
 const SAVED_COST_NOTE =
-  "databricks.saved is declared cost.class billed. source-contract v0.2.0's billed-cost check runs only for an events source, so a billed snapshot is neither checked nor not-applicable and the report could never be complete; the kit checks this snapshot as metered (the same price table) until the contract's patch (review of opencode-databricks #8, contract request 2) ships. The declaration test validates the declared billed block."
+  "databricks.saved is declared cost.class billed. source-contract v0.3.0's billed-cost check runs only for an events source, so a billed snapshot is neither checked nor not-applicable and the report could never be complete; the kit checks this snapshot as metered (the same price table) until the contract's patch (review of opencode-databricks #8, contract request 2) ships. The declaration test validates the declared billed block."
 
 async function runKit(source: (typeof sources.items)[number]) {
   const name = source.id.split(".")[1] as "queries" | "runs" | "saved"
@@ -157,7 +157,7 @@ describe("the source contract's conformance kit", () => {
       ok: reports.length === 3 && reports.every((entry) => entry.ok),
       plugin: pkg.name,
       version: pkg.version,
-      contract: { package: "@we-the-rebel-alliance/source-contract", tag: "v0.2.0" },
+      contract: { package: "@we-the-rebel-alliance/source-contract", tag: "v0.3.0" },
       notes: [SAVED_COST_NOTE],
       sources: reports,
     }
