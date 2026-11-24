@@ -6,7 +6,7 @@ github:we-the-rebel-alliance/databricks-plugin#v<version>`; the first release on
 ```json
 {
   "plugins": [
-    { "package": "github:we-the-rebel-alliance/databricks-plugin#v0.0.0", "options": { "access": "ask-changes", "accounts": { "work": { "warehouse": "abc123" } } } }
+    { "package": "github:we-the-rebel-alliance/databricks-plugin#v<version>", "options": { "access": "ask-changes", "accounts": { "work": { "warehouse": "abc123" } } } }
   ]
 }
 ```
