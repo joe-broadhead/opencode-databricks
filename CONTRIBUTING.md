@@ -17,15 +17,8 @@ No dependency needs install scripts, and OpenCode installs plugins without them,
 
 ### Run your checkout in OpenCode
 
-Build it, then add the clone's path to `plugins` in your OpenCode config instead of the release install:
-
-```sh
-npm run build
-```
-
-```json
-{ "plugins": [{ "package": "/path/to/databricks-plugin" }] }
-```
+Build it with `npm run build`, then point the `plugins` entry of a development OpenCode config at the clone's directory
+instead of the release install. A development build answers `NOT_RELEASED` and never calls Databricks.
 
 ## `npm run check`
 

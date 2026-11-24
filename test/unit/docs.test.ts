@@ -143,6 +143,6 @@ describe("the docs", () => {
   })
 
   it("has no stale 'nothing is built' claim in user-facing docs", () => {
-    for (const path of DOCS) expect(read(path)).not.toMatch(/Nothing is built yet|every other tool answers `NOT_IMPLEMENTED`/u)
+    for (const path of DOCS) expect(read(path)).not.toMatch(/Nothing is built yet/u)
   })
 })

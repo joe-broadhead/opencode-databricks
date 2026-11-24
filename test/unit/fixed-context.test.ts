@@ -34,6 +34,15 @@ describe("fixed context", () => {
     expect(NAMESPACE_DESCRIPTION).toContain("databricks-sql")
   })
 
+  it("keeps the namespace template as written within the budget too", () => {
+    // The runtime line is the model-facing one; the template (with `${DISPLAY_NAME}`) is what a reviewer measures in the
+    // source, and both stay under 400.
+    const source = readFileSync(join(ROOT, "src", "plugin.ts"), "utf8")
+    const raw = /export const NAMESPACE_DESCRIPTION = `([^`]*)`/u.exec(source)?.[1]
+    expect(raw).toBeDefined()
+    expect(raw!.length).toBeLessThanOrEqual(400)
+  })
+
   it("keeps every skill description at or under 300 characters", () => {
     for (const id of SKILL_IDS) {
       const text = readFileSync(join(ROOT, "skills", id, "SKILL.md"), "utf8")

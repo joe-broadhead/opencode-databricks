@@ -60,7 +60,7 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
       // The auth port comes first: package B's client needs it. Package A's factory needs the client's port, so it takes
       // a thunk, and reads it after `deps` exists.
       const auth = seam.auth ? seam.auth() : await createAuth({ ctx, options, keep, databricks: () => deps.databricks })
-      const base = {
+      const ports = {
         options,
         access: options.access,
         auth,
@@ -70,8 +70,10 @@ export function createDatabricksPlugin(seam: { readonly auth?: () => AuthPort; r
         permission,
         clock: { now: Date.now, uuid: () => crypto.randomUUID() },
       }
+      // The automation owns the machine's lock; status reports which process holds it.
+      const automation = new Automation(ports)
+      const base = { ...ports, automationOwner: () => automation.state().owner }
       const deps: Deps = { ...base, reads: createReadGuard(base) }
-      const automation = new Automation(base)
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
         keep(

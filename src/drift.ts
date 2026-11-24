@@ -25,7 +25,7 @@
  *
  * **L7, as evidence only.** This module is what replaces `EXPLAIN`ing a plan (design §5.5 step 3): `databricks_plan`
  * never sends a statement, and the post-run record is the check instead. L7's live evidence (that `EXPLAIN` of a change
- * has effects on a warehouse channel) is not needed by v0.1.0 and no code path here sends `EXPLAIN` of a change —
+ * has effects on a warehouse channel) is not needed by this version and no code path here sends `EXPLAIN` of a change —
  * `test/unit/changes/plan-classification.test.ts` pins that a plan of every mutating form in §5.5 sends nothing.
  */
 import type { Category } from "./domain/actions.js"

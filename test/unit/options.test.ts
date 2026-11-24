@@ -12,7 +12,6 @@ describe("options (design §13)", () => {
       maxStartAutoStopMinutes: 15,
       maxRunSeconds: 600,
       wait: 50,
-      maxConcurrentStatements: 4,
       usdPerDbu: { serverless: 0.7, pro: 0.55, classic: 0.22 },
       maxRows: 50,
       maxInlineBytes: "32KiB",

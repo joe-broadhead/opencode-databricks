@@ -42,7 +42,7 @@ export type Status = {
   readonly accounts: readonly AccountStatus[]
   readonly running: readonly RunningItem[]
   readonly spend?: Spend
-  readonly automation: { readonly mode: (typeof AUTOMATION_MODES)[number]; readonly active: boolean }
+  readonly automation: { readonly mode: (typeof AUTOMATION_MODES)[number]; readonly active: boolean; readonly owner: boolean }
   readonly cleanup?: readonly CleanupAction[]
   readonly unguardedAgents: readonly string[]
   readonly permissionsBlock?: readonly Rule[]
@@ -93,7 +93,7 @@ const spend = object(
   },
   ["startsToday", "dbuHoursToday", "dbuHoursSession", "estimate", "budget"],
 )
-const automation = object({ mode: { enum: AUTOMATION_MODES }, active: { type: "boolean" } }, ["mode", "active"])
+const automation = object({ mode: { enum: AUTOMATION_MODES }, active: { type: "boolean" }, owner: { type: "boolean" } }, ["mode", "active", "owner"])
 const cleanup = object({ what: text, usdPerHour: number, next: text }, ["what", "next"])
 
 export const STATUS_SCHEMA = object(
@@ -192,7 +192,7 @@ const isSpend = (value: unknown) =>
   isOptional(value.budget.limit, isNumber) &&
   isOptional(value.reconciled, (reconciled) => isRecord(reconciled) && only(reconciled, ["warehouse", "usageDate", "dbu", "complete"]) && isText(reconciled.warehouse) && isText(reconciled.usageDate) && isNumber(reconciled.dbu) && typeof reconciled.complete === "boolean")
 
-const isAutomation = (value: unknown) => isRecord(value) && only(value, ["mode", "active"]) && inList(value.mode, AUTOMATION_MODES) && typeof value.active === "boolean"
+const isAutomation = (value: unknown) => isRecord(value) && only(value, ["mode", "active", "owner"]) && inList(value.mode, AUTOMATION_MODES) && typeof value.active === "boolean" && typeof value.owner === "boolean"
 const isCleanup = (value: unknown) => isRecord(value) && only(value, ["what", "usdPerHour", "next"]) && isText(value.what) && isOptional(value.usdPerHour, isNumber) && isText(value.next)
 
 /** JSON Schema outputs reach clients unchecked, so readers check a status against the schema's rules. */
@@ -285,7 +285,8 @@ function spendText(spend: Spend): string {
 
 const AUTOMATION_TEXT = (status: Status): string => {
   const consent = status.automation.mode === "on" ? "you set automation: \"on\"" : status.automation.mode === "off" ? "you set automation: \"off\"" : status.automation.active ? "auto, on at access all" : "auto, off because access is not all"
-  return `${consent}; ${status.automation.active ? "it cancels this plugin's own orphaned reads and stops nothing else" : "it cancels this plugin's own orphaned reads; add automation: \"on\" to consent, which this version uses for nothing else"}`
+  const owner = status.automation.owner ? "this process holds the machine's automation lock" : "another process holds the machine's automation lock"
+  return `${consent}; ${owner}; ${status.automation.active ? "it cancels this plugin's own orphaned reads and stops nothing else" : "it cancels this plugin's own orphaned reads; add automation: \"on\" to consent, which this version uses for nothing else"}`
 }
 
 function cleanupText(cleanup: readonly CleanupAction[] | undefined): string {

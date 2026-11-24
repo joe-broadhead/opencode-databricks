@@ -11,7 +11,7 @@
  * itself cancels the read, laptop or no laptop) and `CONTINUE` only when the call asked for more, and the
  * `query_tags` that make a statement findable in Query History [24].
  */
-import type { StatementParameter, StatementRequest, StatementAnswer } from "../../ports.js"
+import type { PreparedRead, StatementParameter, StatementRequest, StatementAnswer } from "../../ports.js"
 import type { PreparedReadEx } from "../../guards/read.js"
 import { DatabricksError, WARNINGS } from "../../domain/errors.js"
 import type { Deps } from "../../registry.js"
@@ -151,7 +151,7 @@ export function failureOf(answer: StatementAnswer, wait: number): DatabricksErro
 }
 
 /** The result's `warehouse`, with the list price per hour the call's own estimates use. */
-export function warehouseUse(prepared: PreparedReadEx, deps: Deps): { id: string; name: string; started: boolean; usdPerHour: number } {
+export function warehouseUse(prepared: Pick<PreparedRead, "warehouse" | "started">, deps: Deps): { id: string; name: string; started: boolean; usdPerHour: number } {
   return { id: prepared.warehouse.id, name: prepared.warehouse.name, started: prepared.started, usdPerHour: usdPerHour(prepared.warehouse, deps.options) }
 }
 

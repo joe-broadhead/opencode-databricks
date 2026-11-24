@@ -19,7 +19,7 @@ import { assertOperation, assertRead, type ReadMode } from "./assert.js"
 import { sourceError, sourceErrorOf } from "./errors.js"
 import { typedCell } from "../tools/save/inline.js"
 import { chargeStatement } from "../guards/budget.js"
-import { sizeOf } from "../guards/warehouse.js"
+import { sizeOf, usdPerHour } from "../guards/warehouse.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { StatementAnswer } from "../ports.js"
 import type { Deps } from "../registry.js"
@@ -34,6 +34,8 @@ export interface TableData {
 export interface SnapshotAnswer {
   readonly data: TableData
   readonly asOf: string
+  /** This read's own cost: the warehouse it ran on and its estimated $/hour. The source never starts one. */
+  readonly cost: { readonly class: "billed"; readonly warehouse: { readonly id: string; readonly name: string; readonly usdPerHour: number } }
   readonly trust: "untrusted"
 }
 
@@ -174,7 +176,8 @@ export async function savedRead(deps: Deps, input: SavedInput, call: Call, mode:
     columns: columns.map((column) => ({ key: column.name, label: column.name })),
     rows: rows.map((row) => Object.fromEntries(columns.map((column, index) => [column.name, cell(typedCell(row[index] ?? null, column))]))),
   }
-  return { data, asOf: new Date(deps.clock.now()).toISOString(), trust: "untrusted" }
+  const cost = { class: "billed" as const, warehouse: { id: prepared.warehouse.id, name: prepared.warehouse.name, usdPerHour: usdPerHour(prepared.warehouse, deps.options) } }
+  return { data, asOf: new Date(deps.clock.now()).toISOString(), cost, trust: "untrusted" }
 }
 
 /** The model's view of the same read: the plugin's `table` shape (column names and row arrays). */

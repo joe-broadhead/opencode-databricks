@@ -25,7 +25,8 @@ describe("status, cleanup and registration in a host", () => {
       const answer = await status(host)
       expect(isStatus(answer)).toBe(true)
       expect(answer).toMatchObject({ state: "sign_in_required", access: "read-only", writes: "never" })
-      expect(answer.automation).toEqual({ mode: "auto", active: false })
+      expect(answer.automation).toMatchObject({ mode: "auto", active: false })
+      expect(typeof answer.automation.owner).toBe("boolean")
       expect(answer.spend).toBeDefined()
       expect(answer.cleanup ?? []).toEqual([])
     } finally {

@@ -6,7 +6,8 @@
  *   name a consumer rules on). Asserted equals declared: a test runs every tool against the fakes and records what
  *   it asserts.
  * - `databricks.start`, `databricks.probe` and `databricks.read` are permission-only: actions the plugin asserts that
- *   are not tools. They are declared in `jelly.tools` so a consumer's rules give them their intended effects (design §10.2).
+ *   are not tools. They are declared in the kept declaration's `tools` list so a consumer's rules give them their
+ *   intended effects (design §10.2).
  *   `databricks.read` is what a source's content reads assert (`events_list`, `saved_read`; review of #8, request 3):
  *   allowed at every access, so the namespace pattern never asks for or denies a bound source's read.
  * - Data tools also assert each resolved table as `<account>:table:<catalog>.<schema>.<table>` under their own action.

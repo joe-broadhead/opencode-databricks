@@ -54,9 +54,11 @@ plugin checks is best-effort.
 | AI functions, materialized views, streaming tables, job runs | Separately, outside the warehouse |
 | `databricks_save` | A warehouse, often served from the 24-hour result cache |
 
-No call starts a warehouse silently. `databricks_status` shows today's starts and DBU-hour estimate (an estimate), what
-this plugin has running, and each running warehouse with one call. `databricks_status({ include: ["spend"] })` also
-reconciles the estimate with `system.billing.usage` when you have the grants, through one read on a running warehouse.
+No call starts a warehouse silently. Each read's own result names the warehouse it ran on (`warehouse: { id, started,
+usdPerHour }`), and each committed statement's does too; totals stay in `databricks_status`, which shows today's starts
+and DBU-hour estimate (an estimate), what this plugin has running, and each running warehouse with one call.
+`databricks_status({ include: ["spend"] })` also reconciles the estimate with `system.billing.usage` when you have the
+grants, through one read on a running warehouse.
 
 ## Cleanup: do your part
 

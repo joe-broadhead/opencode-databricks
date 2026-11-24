@@ -20,7 +20,7 @@ Queries, Jobs, Workspace, Files and SCIM `Me`). It wraps no MCP server. [Ownersh
 | `src/registry.ts`, `src/tool-spec.ts` | One handler per tool; the model's tool and the script's method from one spec. |
 | `src/permissions.ts`, `src/options.ts` | The `access` rules block and every option. |
 | `src/status.ts`, `src/rpc.ts`, `src/tui/index.tsx` | `databricks_status`, `/databricks-status`, the status RPC and the `/databricks` dialog. |
-| `src/automation/index.ts` | The sweep: this plugin's own orphaned reads, and the owner lock status reports. |
+| `src/automation/index.ts` | The sweep and the owner lock: this plugin's own orphaned reads, with one owner per machine, which status reports. |
 | `src/automation/cleanup.ts` | `/databricks-cleanup`: the report, the permission prompts, the stops and cancels. |
 | `src/tools/reads/`, `src/tools/save/`, `src/sources/`, `src/tools/changes/` | The handlers, by package. |
 | `src/tools-rpc.ts` | `databricks.databricks.tools`: the read tools, `probe` and `saved_list` for scripts and sources. |

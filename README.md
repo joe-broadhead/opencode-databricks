@@ -18,16 +18,11 @@ trademark of Databricks, Inc.; this unofficial plugin is not endorsed by them.
 
 ## Install
 
-```json
-{
-  "plugins": [
-    { "package": "github:we-the-rebel-alliance/databricks-plugin#v0.0.0" }
-  ]
-}
-```
+Install from a release: `opencode plugin add github:we-the-rebel-alliance/databricks-plugin#v<version>`. The first
+release on plugin-contract is `v0.0.0` (phase 4b).
 
-`v0.0.0` is the first release. A copy installed from a branch or a source checkout is not a release and does not call
-Databricks (`NOT_RELEASED`). After it is installed, run `/databricks-status` in a session.
+The plugin calls Databricks only from a tagged release; anything else answers `NOT_RELEASED`. After it is installed,
+run `/databricks-status` in a session.
 
 ## Sign in
 
@@ -50,8 +45,8 @@ enforces is your identity's privileges. [Safety](docs/safety.md) says what each 
 Queries run on a SQL warehouse your workspace bills by the hour while it runs, and an idle warehouse keeps billing
 until it auto-stops. No call starts a stopped warehouse unless the call passes `start: true` and the start policy
 allows it. Unity Catalog reads are free; AI functions and jobs bill separately. `databricks_status` reports this
-plugin's running statements and every running warehouse with its estimated $/hour and idle time. [Costs](docs/costs.md)
-has the numbers and the cleanup command.
+plugin's running statements and the warehouses this plugin started, with their estimated $/hour and idle time;
+`/databricks-cleanup` lists every running warehouse. [Costs](docs/costs.md) has the numbers and the cleanup command.
 
 ## Known limits
 
@@ -101,8 +96,7 @@ Every error has the form `CODE: What happened. Next step: What to do.`
 | `INPUT_INVALID` | refused | The input does not fit the tool's schema. | Check the input against the tool's schema, then call it again. |
 | `NEEDS_PLAN` | refused | A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read. | Plan it with databricks_plan({ sql }). |
 | `NOT_FOUND` | refused | The catalog, schema, table, function, statement, job or run was not found or is not visible. | Call databricks_catalog with filter to find the name. |
-| `NOT_IMPLEMENTED` | refused | This tool is declared but not built in this version. | Use the Databricks SQL editor for now, or update the plugin. |
-| `NOT_RELEASED` | refused | This copy is not a released install, so Databricks was not called. | Wait for a release tag. Do not install this repository from source if you need to call Databricks. |
+| `NOT_RELEASED` | refused | This copy is not a released install, so Databricks was not called. | Wait for a release tag: only a tagged release calls Databricks. |
 | `OPTIONS_INVALID` | refused | A plugin option is invalid or unknown. | Fix the plugin's options in opencode.json; the message names the option. |
 | `PATH_NOT_DEFAULT` | refused | The workspace's SQL path does not put system.builtin before every user schema, so a keyword-form built-in could resolve to a user function. | Ask an admin to restore the default path, or write the function call form, which the plugin qualifies as system.builtin. |
 | `PERMISSION_DENIED` | refused | Unity Catalog or an access control list refused the call. | Ask for the privilege the message names. |

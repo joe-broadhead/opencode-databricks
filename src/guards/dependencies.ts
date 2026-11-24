@@ -32,7 +32,7 @@
  *   name in `system` is `NEEDS_PLAN` too, because a `system.*` routine has no Unity Catalog body to check and the
  *   allowlist already decided every `system.builtin` built-in. That is the fail-closed answer to `system.ai.*`,
  *   `system.session.*` and a built-in added after the allowlist's pin (review `databricks-1.md`, LOW 2).
- * - A Python or Scala function (`routine_body: EXTERNAL`) is `NEEDS_PLAN` in v0.1.0 whatever its dependencies (live
+ * - A Python or Scala function (`routine_body: EXTERNAL`) is `NEEDS_PLAN` in this version whatever its dependencies (live
  *   check L6), and so is a table function (a UDTF runs its owner's code, and a Python UDTF's `analyze()` runs at
  *   planning time [42]).
  * - A SQL function is allowed only when its body is returned, parses, and passes the same rules; a body that is not

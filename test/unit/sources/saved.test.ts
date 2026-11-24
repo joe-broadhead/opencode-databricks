@@ -21,6 +21,8 @@ describe("databricks.saved", () => {
       { region: "South", revenue: "98.25" },
     ])
     expect(snapshot.trust).toBe("untrusted")
+    expect(snapshot.cost).toMatchObject({ class: "billed", warehouse: { id: "wh-small", name: expect.any(String) } })
+    expect(snapshot.cost.warehouse.usdPerHour).toBeGreaterThan(0)
   })
 
   test("refuses a query whose SQL changed since it was chosen", async () => {

@@ -115,7 +115,7 @@
     "summary": "Find, query and save your Databricks data, with every change planned first.",
     "icon": "assets/icon.svg",
     "cost": "A SQL warehouse bills by the hour while it runs (serverless about $0.70 per DBU, 4 DBU an hour at 2X-Small); starting a stopped one bills until it auto-stops. Saved-query reads run only on a warehouse already running, which then stays up until it auto-stops. AI functions and jobs bill separately.",
-    "admin": "add an OAuth app connection (public client) with this plugin's redirect URLs, including Jelly's relay, in the account console, and give you Can use on a SQL warehouse and SELECT on the data you read",
+    "admin": "add an OAuth app connection (public client) with this plugin's redirect URLs, including the host's relay, in the account console, and give you Can use on a SQL warehouse and SELECT on the data you read",
     "tools": [
       {
         "name": "databricks.status",

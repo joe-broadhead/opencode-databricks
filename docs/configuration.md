@@ -1,6 +1,7 @@
 # Configuration
 
-Unofficial plugin. Not affiliated with Databricks. The install line is `github:we-the-rebel-alliance/databricks-plugin#v0.0.0`.
+Unofficial plugin. Not affiliated with Databricks. Install from a release: `opencode plugin add
+github:we-the-rebel-alliance/databricks-plugin#v<version>`; the first release on plugin-contract is `v0.0.0` (phase 4b).
 
 ```json
 {
@@ -50,7 +51,6 @@ databricks account custom-app-integration create --json '{
 | `maxRunSize` | none | The largest warehouse an agent may run on. |
 | `maxRunSeconds` | `600` | The plugin's cancel, for reads with `wait` above 50 seconds. |
 | `wait` | `50` | Reads at or under 50 seconds are cancelled by Databricks at the wait. |
-| `maxConcurrentStatements` | `4` | Per account. |
 | `budget` | none | `{ daily?, session?, action: "warn" \| "refuse" }`: opt-in, in DBU-hour estimates. |
 | `usdPerDbu` | `{ serverless: 0.70, pro: 0.55, classic: 0.22 }` | For estimates. |
 | `maxRows`, `maxInlineBytes` | `50`, `"32KiB"` | Inline results. |

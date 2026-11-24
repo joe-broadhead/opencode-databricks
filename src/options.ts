@@ -39,7 +39,6 @@ export const OptionsSchema = z.strictObject({
   maxRunSize: z.enum(SIZES as [string, ...string[]]).optional(),
   maxRunSeconds: z.number().int().min(51).max(172800).default(600),
   wait: z.number().int().min(0).max(600).default(50),
-  maxConcurrentStatements: z.number().int().min(1).max(32).default(4),
   budget: z.strictObject({ daily: BudgetLimit.optional(), session: BudgetLimit.optional(), action: z.enum(["warn", "refuse"]) }).optional(),
   usdPerDbu: z.strictObject({ serverless: z.number().min(0), pro: z.number().min(0), classic: z.number().min(0) }).default({ serverless: 0.7, pro: 0.55, classic: 0.22 }),
   maxRows: z.number().int().min(1).max(500).default(50),

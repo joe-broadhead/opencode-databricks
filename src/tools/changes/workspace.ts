@@ -1,7 +1,7 @@
 /**
  * `databricks_workspace` (design §4): list workspace folders and notebooks, export one notebook's source, and list a
  * Unity Catalog volume's path. Free control-plane reads; it never writes to the workspace (a workspace write is a
- * v0.1.0 non-goal, design §2).
+ * this version's non-goal, design §2).
  *
  * - A workspace path goes through `GET /api/2.0/workspace/list` (scope `workspace`), whose objects carry `path` and
  *   `object_type` (https://docs.databricks.com/api/workspace-files/v1/list.md).

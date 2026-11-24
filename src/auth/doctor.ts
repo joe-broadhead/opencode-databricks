@@ -149,8 +149,9 @@ function failed(id: string, error: unknown): DoctorCheck {
   return check(id, "UNAVAILABLE", `The check could not run: ${reasonOf(error)}.`, "Try again; if it persists, run /databricks-doctor in a new session.")
 }
 
-function notImplemented(error: unknown): boolean {
-  return error instanceof DatabricksError && (error.code === "NOT_IMPLEMENTED" || error.code === "UNAVAILABLE")
+/** An optional read the client cannot make is one check that could not run, never a failed doctor. */
+function unavailable(error: unknown): boolean {
+  return error instanceof DatabricksError && error.code === "UNAVAILABLE"
 }
 
 /** The grants that exceed reading, from `effective-permissions` entries [8]. */
@@ -416,7 +417,7 @@ async function connectionsCheck(port: DatabricksPort, account: string, signal: A
   try {
     listed = await pageAll((pageToken) => port.listConnections!(account, { ...(pageToken !== undefined ? { pageToken } : {}) }, signal), MAX_CONNECTIONS, MAX_CONNECTION_PAGES)
   } catch (error) {
-    if (notImplemented(error)) return check("role:connections", "NOT_CHECKED", "The Databricks port cannot read connections yet, so USE CONNECTION was not checked; a role is not certified.", "A later port reads connections; until then a role is not certified.")
+    if (unavailable(error)) return check("role:connections", "NOT_CHECKED", "The Databricks port cannot read connections yet, so USE CONNECTION was not checked; a role is not certified.", "A later port reads connections; until then a role is not certified.")
     return failed("role:connections", error)
   }
   if (listed.truncated) return check("role:connections:truncated", "NOT_CHECKED", `More than ${MAX_CONNECTIONS} connections; not every one was checked, so a role is not certified.`, "Run /databricks-doctor again.")

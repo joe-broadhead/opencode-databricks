@@ -20,7 +20,7 @@ import type { Warning } from "../../guards/dependencies.js"
 import { prepareRead } from "../../guards/read.js"
 import { assertTool } from "../../registry.js"
 import type { Handler } from "../../tool-spec.js"
-import { accountOf, failureOf, submitRead } from "./context.js"
+import { accountOf, failureOf, submitRead, warehouseUse } from "./context.js"
 import { LINEAGE_PARAM, LINEAGE_SQL, SAMPLE_LIMIT, sampleQuery } from "./sql.js"
 import { shapeRows } from "./values.js"
 
@@ -66,6 +66,8 @@ const table: Handler<"table"> = async (input, call, deps) => {
   if (info.rowFilter) warnings.push({ code: "ROW_FILTERED", message: WARNINGS.ROW_FILTERED })
   let sample: { columns: string[]; rows: unknown[][] } | undefined
   let lineage: { source: string; target: string; at?: string }[] | undefined
+  /** The warehouse a sample or lineage ran on, with its estimated $/hour: this call's own cost. */
+  let warehouse: ReturnType<typeof warehouseUse> | undefined
   const wait = deps.options.wait
 
   if (input.sample !== undefined) {
@@ -74,6 +76,7 @@ const table: Handler<"table"> = async (input, call, deps) => {
       { account, sql: sampleQuery(input.name, Math.min(input.sample, SAMPLE_LIMIT)), ...(input.warehouse ? { warehouse: input.warehouse } : {}), ...(input.start === undefined ? {} : { start: input.start }), wait, tool: "table", sessionID: call.sessionID, messageID: call.messageID, callID: call.id },
       call.signal,
     )
+    warehouse ??= warehouseUse(prepared, deps)
     const { answer } = await submitRead(deps, { account, tool: "table", call, prepared, rowLimit: Math.min(input.sample, SAMPLE_LIMIT), wait })
     const failure = failureOf(answer, wait)
     if (failure) throw failure
@@ -98,6 +101,7 @@ const table: Handler<"table"> = async (input, call, deps) => {
       },
       call.signal,
     )
+    warehouse ??= warehouseUse(prepared, deps)
     const { answer } = await submitRead(deps, { account, tool: "table", call, prepared, parameters: [{ name: LINEAGE_PARAM, value: input.name, type: "STRING" }], rowLimit: 200, wait })
     const failure = failureOf(answer, wait)
     if (failure) throw failure
@@ -127,6 +131,7 @@ const table: Handler<"table"> = async (input, call, deps) => {
     ...(info.updatedAt === undefined ? {} : { updatedAt: new Date(info.updatedAt).toISOString() }),
     ...(sample ? { sample } : {}),
     ...(lineage ? { lineage } : {}),
+    ...(warehouse ? { warehouse } : {}),
     ...(warnings.length ? { warnings: merge([], warnings) } : {}),
   }
 }

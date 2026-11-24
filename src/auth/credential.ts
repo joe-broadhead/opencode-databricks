@@ -29,6 +29,17 @@ const SignIn = z.object({
 
 export type SignIn = z.output<typeof SignIn>
 
+/**
+ * The host-held credential marker in the kept sign-in metadata: a host that owns the refresh writes this in place of a
+ * refresh token, so this plugin must never POST it or try to renew the sign-in itself. 4b replaces it.
+ */
+export const HOST_HELD_REFRESH = "jelly-host-owns-refresh"
+
+/** True when the host holds this sign-in's refresh token and renews it itself. */
+export function isHostHeld(credential: { readonly refresh?: string }): boolean {
+  return credential.refresh === HOST_HELD_REFRESH
+}
+
 export interface SignInInput {
   readonly host: string
   readonly clientId: string

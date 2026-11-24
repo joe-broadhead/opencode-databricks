@@ -32,7 +32,7 @@ import type { Feature } from "../../domain/actions.js"
 import type { Call } from "../../tool-spec.js"
 import { queryTags, statementRef, type ParamLike, typeOf, waitTimeoutOf } from "../reads/context.js"
 
-export { accountOf } from "../reads/context.js"
+export { accountOf, warehouseUse } from "../reads/context.js"
 
 /** How long between two `warehouses.get` calls while a commit waits for a warehouse to start. */
 export const START_POLL_MS = 1000

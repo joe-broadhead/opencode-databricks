@@ -62,7 +62,7 @@ const savedReadTool: Handler<"saved_read"> = async (input, call, deps) => {
       call,
       "tool",
     )
-    return { state: "ok", trust: "untrusted" as const, table: tableOf(snapshot) }
+    return { state: "ok", trust: "untrusted" as const, table: tableOf(snapshot), cost: snapshot.cost }
   } catch (error) {
     return asToolError(error)
   }

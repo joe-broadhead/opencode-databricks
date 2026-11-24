@@ -9,7 +9,7 @@
  * - Thrift's compact protocol for the file metadata, as the format requires
  *   (https://github.com/apache/parquet-format/blob/master/README.md, `FileMetaData`, `PageHeader`, `ColumnMetaData`).
  *
- * Nested values are written as JSON strings, as the design says for v0.1.0. The writer buffers one row group at a time
+ * Nested values are written as JSON strings, as the design says for this version. The writer buffers one row group at a time
  * (20,000 rows), so a save of a million rows does not hold the result in memory.
  */
 import type { ArrowType } from "./arrow.js"
