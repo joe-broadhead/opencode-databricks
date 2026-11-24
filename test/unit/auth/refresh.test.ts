@@ -1,8 +1,7 @@
-// Refresh (design §3.2; L1): the documented request, rotation, invalid_grant, one request for two concurrent callers,
-// and Jelly's host-owned copy refused without a call.
+// Refresh (design §3.2; L1): the documented request, rotation, invalid_grant, and one request for two concurrent callers.
 import { afterEach, describe, expect, it } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
-import { HOST_OWNED_REFRESH, readSignIn } from "../../../src/auth/credential.js"
+import { readSignIn } from "../../../src/auth/credential.js"
 import { refreshSignIn, refreshState } from "../../../src/auth/refresh.js"
 import { DUMMY_TOKEN, hostCredential, tokenEndpoint, type FakeTokenEndpoint } from "./support.js"
 
@@ -155,22 +154,6 @@ describe("renewing a sign-in", () => {
     expect(error.message).toContain("/connect")
     expect(error.message).not.toContain("free text")
     expect(error.message).not.toContain("R9")
-  })
-
-  it("refuses Jelly's host-owned copy without a network call", async () => {
-    const endpoint = await rotationEndpoint()
-    const error = (await refreshSignIn({
-      alias: "work",
-      name: "Databricks",
-      credential: hostCredential({ refresh: HOST_OWNED_REFRESH, expires: NOW }),
-      fetch: globalThis.fetch,
-      now: () => NOW,
-      state: refreshState(),
-      tokenEndpoint: endpoint.url,
-    }).catch((caught: unknown) => caught)) as DatabricksError
-    expect(error.code).toBe("AUTH_REQUIRED")
-    expect(error.message).toContain("renewed by the host")
-    expect(endpoint.requests).toHaveLength(0)
   })
 
   it("refuses a sign-in with no record or no refresh token", async () => {

@@ -12,7 +12,7 @@
  *   tables, functions, connections and credentials Unity Catalog recorded) and its `view_definition`, parsed with the
  *   same read-path rules. A view that depends on a connection or a credential needs a plan, and a view whose definition
  *   Unity Catalog did not return, or that does not parse, is `NEEDS_PLAN` — the recorded list alone never allows a
- *   read (review `databricks-4.md`, delta check). `strictDependencies` has nothing left to tighten here.
+ *   read (review `databricks-4.md`, delta check).
  * - A path read (`delta.\`/path\``) cannot be resolved before the run: refused with `FENCE_UNVERIFIABLE` when a fence is
  *   set (design §5.4), allowed otherwise with the `PATH_READ` warning.
  * - **What a view reads is the union of Unity Catalog's record and its own body**, never one of them alone. A view

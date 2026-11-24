@@ -1947,7 +1947,7 @@ describe("package.json: private, and in the canonical form", () => {
   })
 })
 
-describe("CI: macOS on pushes to master and for releases, never on pull requests", () => {
+describe("CI: the matrix helper", () => {
   test("ciMatrix: a pull request's matrix has no macOS entry, and a master push's does", () => {
     assert.deepEqual(ciMatrix(CI_YML), { pullRequest: ["ubuntu-24.04", "ubuntu-24.04-arm"], push: RUNNERS, problems: [] })
     const include = [
@@ -1974,11 +1974,18 @@ describe("CI: macOS on pushes to master and for releases, never on pull requests
     assert.deepEqual(ciJobsProblems(undefined, ["macos-26"]), ["no successful job on macos-26"])
   })
 
-  test("this repository's ci.yml: a pull request's matrix has no macOS entry, and a master push's does (npm run check)", () => {
-    const matrix = ciMatrix(readFileSync(join(SCRIPTS, "..", ".github", "workflows", "ci.yml"), "utf8"))
-    assert.deepEqual(matrix.problems, [])
-    assert.equal(matrix.pullRequest.some((runner) => /^macos-/.test(runner)), false)
-    assert.ok(matrix.push.includes("macos-26"), `a push to master runs ${matrix.push.join(", ")}`)
+  // Phase 4a moved every plugin to one `ci` job on the standard runner expression, with OpenCode 2.4.1 as the only
+  // tested host, so this repository has no OS or host matrix left to gate. plugin-kit's check owns the CI shape from
+  // 4b; the helper above stays tested on the fixtures.
+  test("this repository's ci.yml: one `ci` job on the standard runner expression (npm run check)", () => {
+    const text = readFileSync(join(SCRIPTS, "..", ".github", "workflows", "ci.yml"), "utf8")
+    const jobs = text.slice(text.indexOf("\njobs:\n") + "\njobs:\n".length)
+    assert.deepEqual([...jobs.matchAll(/^ {2}([a-z][a-z0-9-]*):/gm)].map((match) => match[1]), ["ci"], "exactly one job, ci")
+    assert.match(text, /^ {4}name: ci$/m)
+    assert.match(text, /^permissions:\n {2}contents: read$/m)
+    const standard = "runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNNER_PUBLIC || 'ubuntu-24.04') || 'ubuntu-24.04' }}"
+    assert.ok(text.split("\n").includes(`    ${standard}`), "the runner rule is the standard one")
+    assert.equal(/^\s*(?:-\s+)?(?:os|runs-on):.*macos/m.test(text), false, "no macOS runner")
   })
 })
 

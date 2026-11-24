@@ -1,11 +1,11 @@
 # Configuration
 
-Unofficial plugin. Not affiliated with Databricks. There is no release tag yet, so this is the options shape, not an install line.
+Unofficial plugin. Not affiliated with Databricks. The install line is `github:we-the-rebel-alliance/databricks-plugin#v0.0.0`.
 
 ```json
 {
   "plugins": [
-    { "package": "github:joe-broadhead/opencode-databricks", "options": { "access": "ask-changes", "accounts": { "work": { "warehouse": "abc123" } } } }
+    { "package": "github:we-the-rebel-alliance/databricks-plugin#v0.0.0", "options": { "access": "ask-changes", "accounts": { "work": { "warehouse": "abc123" } } } }
   ]
 }
 ```
@@ -18,8 +18,8 @@ app connection your account admin creates once (a public client, no secret) [9][
 
 ```sh
 databricks account custom-app-integration create --json '{
-  "name": "opencode-databricks",
-  "redirect_urls": ["http://localhost:8765/callback", "<Jelly ID issuer>/connect/callback"],
+  "name": "databricks-plugin",
+  "redirect_urls": ["http://localhost:8765/callback"],
   "scopes": ["sql", "unity-catalog", "query-history", "jobs", "workspace", "files",
              "openid", "email", "profile", "offline_access"]
 }'
@@ -30,8 +30,8 @@ databricks account custom-app-integration create --json '{
   this plugin [11][12].
 - Drop `jobs`, `workspace` or `files` to forbid those families for everyone: the `jobs` scope covers Run Now as readily
   as List Runs [12].
-- The loopback redirect may use `http`; every other redirect must be `https`. Jelly's relay address is
-  `<Jelly ID issuer>/connect/callback`; [Jelly](jelly.md#sign-in) has both.
+- The loopback redirect may use `http`; every other redirect must be `https`. When a host serves OpenCode to a browser
+  elsewhere, the connection lists the host's relay address as well, and `redirectUri` carries it.
 - "Updates to OAuth applications can take 30 minutes to process" [11]; a change that does not work at once may be the
   wait.
 - Signing in with a read-only role (`role`, the numeric group ID) is the only hard limit on what the agent can do; see
@@ -44,7 +44,7 @@ databricks account custom-app-integration create --json '{
 | `access` | `"all"` | `all`, `ask-changes` or `read-only`: the default rules. |
 | `accounts` | one `default` | Per alias: `host`, `mode` (`interactive`, `pat`, `m2m`, `cli`), `clientId`, `role`, `warehouse`, `catalog`, `schema`, `scopes` (`fine` or `all-apis`), `features` (`jobs`, `workspace`, `files`), `fence`, `inline`, and for headless modes `tokenEnv`, `clientSecretEnv` or `profile` (names, never secrets). |
 | `redirectUri`, `callbackPort` | none, `8765` | The sign-in's redirect; a host fills the relay fields. |
-| `allowCustomHost`, `allowHeadlessInHost` | `false` | A host other than `*.cloud.databricks.com`, `*.azuredatabricks.net` or `*.gcp.databricks.com`; headless modes in a hosted engine. |
+| `allowCustomHost` | `false` | A host other than `*.cloud.databricks.com`, `*.azuredatabricks.net` or `*.gcp.databricks.com`. |
 | `maxStartSize` | `"Small"` | The largest warehouse a call may start. |
 | `maxStartAutoStopMinutes` | `15` | A warehouse with a longer or no auto-stop is never started. |
 | `maxRunSize` | none | The largest warehouse an agent may run on. |
@@ -57,11 +57,9 @@ databricks account custom-app-integration create --json '{
 | `maxSaveRows`, `maxSaveBytes` | `1000000`, `"256MiB"` | Saved files. |
 | `resultsDir`, `allowedRoots` | `".databricks/results"`, `[]` | Where saves go. |
 | `inlinePii` | `"warn"` | Or `"save-only"`: no inline rows for a source with a personal-data tag. |
-| `strictDependencies` | `false` | Kept for the contract: this version already needs a plan for a view whose dependencies or definition Unity Catalog does not return. |
 | `dependencyDepth` | `4` | How deep view and function bodies are checked. |
 | `runTimeoutSeconds` | `3600` | Notebook runs: the server stops them. |
 | `automation` | `"auto"` | `"auto"`: on at `access: "all"`, off otherwise. `"on"`: your standing yes at any level. `"off"`: never. |
-| `autoStopIdleMinutes` | `10` | After this long with no visible statement, a running warehouse is reported, and the context hook may say one line. Setting it is not consent. |
 | `planTtlSeconds` | `300` | How long a plan lives. |
 | `admin` | `{ enabled: true, requireReason: true }` | Admin plans. |
 | `allowUntestedHost` | `false` | Load on an OpenCode release outside the tested range. |
@@ -73,7 +71,7 @@ An option that does not exist is refused with `OPTIONS_INVALID`.
 After each agent's base `* * allow`, the plugin inserts: `databricks.*` with the change effect (so an action it does
 not know is treated like a change); then each read tool and `databricks.probe` allowed; `databricks.start` allowed at
 `all` and `read-only` and asked at `ask-changes`; then each change tool with the change effect (allowed, asked,
-denied). These are the effects Jelly gives the same actions. Your own rules after the block still win, such as
+denied). These are the effects the access level gives every action. Your own rules after the block still win, such as
 `{ "action": "databricks.query", "resource": "work:table:*.hr.*", "effect": "deny" }`.
 
 ## Automation and cleanup
@@ -81,7 +79,7 @@ denied). These are the effects Jelly gives the same actions. Your own rules afte
 - **Orphaned reads are cancelled at every access level.** When OpenCode reports a session deleted or archived, the
   plugin cancels the read statements it started for that session. A read has no effects; a change statement and a job
   run are never cancelled there.
-- **`automation` is the consent for everything else, and in v0.1.0 there is nothing else:** no warehouse is stopped
+- **`automation` is the consent for everything else, and in this version there is nothing else:** no warehouse is stopped
   automatically. The option is kept for the next release, and "on" is documented as a standing yes to what it covers.
 - **`/databricks-cleanup` is yours.** Every stop and cancel asserts its own `databricks.stop` or `databricks.cancel`.
   At `ask-changes` that is a permission prompt only you answer; at `all` the default rules allow it, so typing the command
@@ -91,9 +89,8 @@ denied). These are the effects Jelly gives the same actions. Your own rules afte
 
 ## Headless modes
 
-`pat`, `m2m` and `cli` are opt-in per account and refused with `HEADLESS_REFUSED` in every engine Jelly runs, unless
-`allowHeadlessInHost` is set: there, the environment and the CLI are the host's, not yours. [Auth](auth.md#headless-modes)
-has each mode and its limits.
+`pat`, `m2m` and `cli` are opt-in per account and never a fallback. [Auth](auth.md#headless-modes) has each mode and
+its limits.
 
 ## Errors
 

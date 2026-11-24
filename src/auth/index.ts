@@ -11,9 +11,9 @@
  * 5. returns the `AuthPort` package B and every tool call `token(account, scopes, signal)` on.
  *
  * The token call is the one seat belt every Databricks request passes: a missing sign-in is `AUTH_REQUIRED`, a scope
- * the sign-in does not carry is `AUTH_SCOPE_MISSING` before any fetch, a configured role that differs from the one
- * bound at sign-in is `AUTH_REQUIRED`, and a headless mode in a Jelly-hosted engine is `HEADLESS_REFUSED`. `pat`, `m2m`
- * and `cli` read a secret only from the environment or the CLI's own cache (design §3.2); no option holds one.
+ * the sign-in does not carry is `AUTH_SCOPE_MISSING` before any fetch, and a configured role that differs from the one
+ * bound at sign-in is `AUTH_REQUIRED`. `pat`, `m2m` and `cli` read a secret only from the environment or the CLI's own
+ * cache (design §3.2); no option holds one.
  *
  * Two accepted contract additions are computed here before the keeper lands them, and are returned as extra fields:
  * `AccountInfo.enforcement` (design §5.6; `role` only from a doctor report of this process, bound to the credential's
@@ -25,7 +25,7 @@ import type { EnforcementKind } from "../domain/contract.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { Options } from "../options.js"
 import type { AccountInfo, AuthPort, DatabricksPort, Token } from "../ports.js"
-import { accountSettings, accountInfo, isHeadless, settingsOf, validateAccounts, type AccountBase, type AccountSettings } from "./accounts.js"
+import { accountSettings, accountInfo, settingsOf, validateAccounts, type AccountBase, type AccountSettings } from "./accounts.js"
 import { registerDoctorCommand } from "./commands.js"
 import { readSignIn, type SignIn } from "./credential.js"
 import type { DoctorReport } from "./doctor.js"
@@ -34,7 +34,6 @@ import { integrationIdFor, integrationNames, readSignInAnswer, signInForm, type 
 import { cliToken, m2mToken, patToken, tokenCache, type CliRunner } from "./headless.js"
 import { readHostCredential } from "./host-credential.js"
 import { parseWorkspaceHost } from "./host.js"
-import { isHostedEngine, headlessRefused } from "./jelly.js"
 import { refreshSignIn, refreshState, type RefreshState } from "./refresh.js"
 import { featureOfScope, requestedScopes } from "./scopes.js"
 import { SignInSummaries, type SummaryStorage } from "./store.js"
@@ -51,7 +50,6 @@ export interface CoreInput {
   readonly summaries: SignInSummaries
   readonly env: NodeJS.ProcessEnv
   readonly now: () => number
-  readonly hosted: boolean
   readonly fetch: typeof globalThis.fetch
   readonly runCli?: CliRunner
   readonly cliCommand?: string
@@ -125,7 +123,6 @@ export class AuthCore implements AuthPort {
   async token(alias: string, scopes: readonly string[], signal: AbortSignal): Promise<Token> {
     if (signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.")
     const settings = this.settings(alias)
-    if (isHeadless(settings.mode) && this.input.hosted && !this.input.options.allowHeadlessInHost) throw headlessRefused(alias, settings.mode)
     switch (settings.mode) {
       case "interactive":
         return this.interactive(settings, scopes, signal)
@@ -313,7 +310,6 @@ export interface CreateAuthInput {
   readonly fetch?: typeof globalThis.fetch
   readonly now?: () => number
   readonly env?: NodeJS.ProcessEnv
-  readonly hosted?: boolean
   readonly runCli?: CliRunner
   readonly cliCommand?: string
   readonly storage?: SummaryStorage
@@ -339,7 +335,6 @@ export async function createAuth(input: CreateAuthInput): Promise<AuthPort> {
     summaries: new SignInSummaries(input.storage ?? context.storage),
     env: input.env ?? process.env,
     now,
-    hosted: input.hosted ?? isHostedEngine(),
     fetch,
     ...(input.runCli !== undefined ? { runCli: input.runCli } : {}),
     ...(input.cliCommand !== undefined ? { cliCommand: input.cliCommand } : {}),

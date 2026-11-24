@@ -50,8 +50,8 @@ export function fences(text: string, language: string): string[] {
   return [...text.matchAll(new RegExp(`${marker}${language}\\n([\\s\\S]*?)\\n${marker}`, "gu"))].map((match) => match[1]!.trim())
 }
 
-const SQL_SKILL = readFileSync(new URL("../../../skills/opencode-databricks-sql/SKILL.md", import.meta.url), "utf8")
-const WORK_SKILL = readFileSync(new URL("../../../skills/opencode-databricks/SKILL.md", import.meta.url), "utf8")
+const SQL_SKILL = readFileSync(new URL("../../../skills/databricks-sql/SKILL.md", import.meta.url), "utf8")
+const WORK_SKILL = readFileSync(new URL("../../../skills/databricks/SKILL.md", import.meta.url), "utf8")
 
 describe("the skills' examples run against the fake", () => {
   let fake: FakeDatabricks

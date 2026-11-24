@@ -47,9 +47,9 @@ test("names the RPC the plugin registers, its probe action, and the three v0.1.0
 })
 
 /**
- * Keys source-contract v0.2.0 added that a v0.1.x consumer refuses. Jelly master and Memory pin v0.1.0, so a declaration
- * with any of them is refused at install (review of #8, H3, the release blocker). They come back once both consumers
- * are on v0.2.0 (CHANGELOG). Returns each held key's path in `sources`.
+ * Keys source-contract v0.2.0 added that a v0.1.x consumer refuses. The consumers this version serves pin v0.1.0, so a
+ * declaration with any of them is refused at install (review of #8, H3, the release blocker). They come back once both
+ * consumers are on v0.2.0. Returns each held key's path in `sources`.
  */
 function heldKeys(sources: unknown): string[] {
   const found: string[] = []

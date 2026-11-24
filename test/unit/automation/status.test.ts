@@ -200,7 +200,7 @@ describe("databricks_status", () => {
   it("computes the UI status the command, the RPC and the TUI share, and it is valid", async () => {
     const h = setup({ items: [history({ queryId: "read-1", queryTags: { oc_plugin: "databricks", oc_tool: "query" } })] })
     const ctx = { agent: { list: async () => ({ data: [] }) }, skill: { list: async () => ({ data: [] }) } }
-    const status = await computeStatus(ctx as never, h.deps, { hostVersion: "2.2.3", skills: [], problems: () => [] })
+    const status = await computeStatus(ctx as never, h.deps, { hostVersion: "2.4.1", skills: [], problems: () => [] })
     expect(isStatus(status)).toBe(true)
     expect(status).toMatchObject({ state: "ready", access: "all", writes: "without asking", automation: { mode: "auto", active: true } })
     expect(status.running).toHaveLength(1)
@@ -213,7 +213,7 @@ describe("databricks_status", () => {
   it("says no workspace configured only when there is none, and sign-in required otherwise", async () => {
     const h = setup({ auth: new RefusingAuth() })
     const ctx = { agent: { list: async () => ({ data: [] }) }, skill: { list: async () => ({ data: [] }) } }
-    const status = await computeStatus(ctx as never, h.deps, { hostVersion: "2.2.3", skills: [], problems: () => [] })
+    const status = await computeStatus(ctx as never, h.deps, { hostVersion: "2.4.1", skills: [], problems: () => [] })
     expect(status.state).toBe("sign_in_required")
     expect(status.nextStep).toContain("/connect")
   })

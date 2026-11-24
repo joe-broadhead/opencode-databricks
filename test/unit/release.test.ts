@@ -8,9 +8,9 @@ import { guardedLiveFetch, WorkspaceHttp } from "../../src/process/http.js"
 import { exactGitTag, installAllows, isLoopback, releaseTagIn, simulateTaggedRelease, vendorCallsAllowed, type InstallSource } from "../../src/release.js"
 import { fakeAuth } from "./runtime/support.js"
 
-// The host's own report, as stock OpenCode 2.3.2 sends it: the tag is in the spec, and `version` is the resolved commit.
+// The host's own report, as stock OpenCode 2.4.1 sends it: the tag is in the spec, and `version` is the resolved commit.
 const SHA = "8fa625bce989ff7c47a586eaa39340374ba43434"
-const packageSource = (ref: string): InstallSource => ({ type: "package", target: `git+file:///cache/opencode-databricks#${ref}`, version: SHA })
+const packageSource = (ref: string): InstallSource => ({ type: "package", target: `git+file:///cache/databricks-plugin#${ref}`, version: SHA })
 
 describe("a source install does not call Databricks", () => {
   it("reads the tag from a package install's spec, not its commit version", () => {
@@ -18,19 +18,19 @@ describe("a source install does not call Databricks", () => {
     expect(installAllows(packageSource("v0.1.0-rc.1"))).toBe(true)
     expect(installAllows(packageSource("main"))).toBe(false)
     // The spec must name this plugin's own repository, in the forms a real install records.
-    expect(installAllows({ type: "package", target: "github:joe-broadhead/opencode-databricks#v0.1.0", version: SHA })).toBe(true)
-    expect(installAllows({ type: "package", target: "git+https://github.com/joe-broadhead/opencode-databricks.git#v0.1.0", version: SHA })).toBe(true)
-    expect(installAllows({ type: "package", target: "git+ssh://git@github.com/joe-broadhead/opencode-databricks.git#v0.1.0", version: SHA })).toBe(true)
+    expect(installAllows({ type: "package", target: "github:we-the-rebel-alliance/databricks-plugin#v0.1.0", version: SHA })).toBe(true)
+    expect(installAllows({ type: "package", target: "git+https://github.com/we-the-rebel-alliance/databricks-plugin.git#v0.1.0", version: SHA })).toBe(true)
+    expect(installAllows({ type: "package", target: "git+ssh://git@github.com/we-the-rebel-alliance/databricks-plugin.git#v0.1.0", version: SHA })).toBe(true)
     // Another repository's semver tag is not a release of this plugin.
-    expect(installAllows({ type: "package", target: "github:joe-broadhead/opencode-gws#v0.0.11", version: SHA })).toBe(false)
-    expect(installAllows({ type: "package", target: "github:someone/opencode-databricks#v0.1.0", version: SHA })).toBe(false)
+    expect(installAllows({ type: "package", target: "github:we-the-rebel-alliance/gws-plugin#v0.0.11", version: SHA })).toBe(false)
+    expect(installAllows({ type: "package", target: "github:someone/databricks-plugin#v0.1.0", version: SHA })).toBe(false)
     // A folder named after a tag, around a copy with no git tag, is not a release.
-    expect(installAllows({ type: "local", path: "/tmp/@v0.1.0/opencode-databricks" })).toBe(false)
-    expect(installAllows({ type: "package", target: "github:joe-broadhead/opencode-databricks" })).toBe(false)
+    expect(installAllows({ type: "local", path: "/tmp/@v0.1.0/databricks-plugin" })).toBe(false)
+    expect(installAllows({ type: "package", target: "github:we-the-rebel-alliance/databricks-plugin" })).toBe(false)
     expect(installAllows({ type: "local" })).toBe(false)
     expect(installAllows({ type: "builtin" })).toBe(false)
     expect(installAllows({ type: "sdk" })).toBe(false)
-    expect(releaseTagIn("github:joe-broadhead/opencode-databricks#v0.1.0")).toBe("v0.1.0")
+    expect(releaseTagIn("github:we-the-rebel-alliance/databricks-plugin#v0.1.0")).toBe("v0.1.0")
     expect(releaseTagIn("file:///cache/@v1.2.3/dist/index.js")).toBe("v1.2.3")
     expect(releaseTagIn(import.meta.url)).toBeUndefined()
     expect(isLoopback(new URL("http://127.0.0.1:9/"))).toBe(true)

@@ -18,12 +18,9 @@
  * Single-use refresh tokens (Beta, `enable_single_use_refresh_tokens` [12]) invalidate the old token on each refresh.
  * Within this process, refreshes of one account are serialized, so two callers never race; across processes the
  * credential store is the host's (M4: see `docs/auth.md` Known limits).
- *
- * Jelly's copy of a sign-in for an agent carries `jelly-host-owns-refresh` in place of the refresh token; the host
- * renews it, so this module refuses without a network call.
  */
 import { DatabricksError } from "../domain/errors.js"
-import { isHostOwnedRefresh, readSignIn, signInMetadata, type SignIn } from "./credential.js"
+import { readSignIn, signInMetadata, type SignIn } from "./credential.js"
 import { parseWorkspaceHost } from "./host.js"
 import { requestToken } from "./token.js"
 import type { HostCredential } from "./types.js"
@@ -77,9 +74,6 @@ const cannotRenew = (alias: string, name: string, what: string) =>
 
 export async function refreshSignIn(input: RefreshInput): Promise<HostCredential> {
   const { alias, name, credential, state } = input
-  if (isHostOwnedRefresh(credential)) {
-    throw new DatabricksError("AUTH_REQUIRED", `The Databricks sign-in for ${alias} is renewed by the host, not by this plugin.`, `Wait for the host to refresh it, or run /connect and choose ${name} to sign in again.`)
-  }
   const stored: SignIn | undefined = readSignIn(credential.metadata)
   if (!stored) throw cannotRenew(alias, name, "The stored sign-in has no workspace record")
   if (!credential.refresh) throw cannotRenew(alias, name, "The stored sign-in has no refresh token")

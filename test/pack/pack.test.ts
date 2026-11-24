@@ -1,8 +1,8 @@
 // Pack, install and load the published shape, after opencode-metaview's pack test. The tarball holds exactly the files
 // whitelist and installs with lifecycle scripts disabled. Installed alone, it loads in each stock OpenCode release it
 // is tested on (TESTED_HOSTS), which provides @opencode/plugin, OpenTUI and Solid itself; next to those packages, both
-// entry points also import under Bun. OPENCODE_BIN_2_2_3 to OPENCODE_BIN_2_2_7 and OPENCODE_BIN_2_3_0 name stock
-// binaries; otherwise each release is installed with npm, once per run. Every temp folder is a git repository under
+// entry points also import under Bun. OPENCODE_BIN_2_4_1 names a stock binary; otherwise the release is installed with
+// npm, once per run. Every temp folder is a git repository under
 // the system's /tmp, never under TMPDIR or HOME, so OpenCode's upward search for `.opencode` folders never reaches the
 // agents of whoever runs the test. Each stock host runs offline: anything it tries off the machine goes to a closed
 // port. PACK_TARBALL names a tarball that was already packed, such as the one a release publishes, to test it instead.
@@ -46,7 +46,7 @@ const DIST = ["dist/index.js", "dist/tui.js"]
 // Modules the host serves to plugins at runtime. Everything else must be inlined in the bundle.
 const SERVER_HOST_MODULES = [/^node:/, /^@opencode\/plugin(?:\/|$)/]
 const TUI_HOST_MODULES = [/^node:/, /^@opencode\/plugin(?:\/|$)/, /^@opentui\//, /^solid-js(?:\/|$)/]
-// The host packages OpenCode 2.2.3 ships; the versions come from devDependencies.
+// The host packages OpenCode 2.4.1 ships; the versions come from devDependencies.
 const HOST_PACKAGES = ["@opencode/plugin", "@opentui/core", "@opentui/solid", "solid-js"]
 // OpenCode's own agents.
 const BUILT_IN_AGENTS = ["build", "general", "explore", "compaction", "title", "summary", "plan"]
@@ -248,7 +248,7 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
       const { data: agents } = await host.api<{ data: { id: string }[] }>("GET", "/api/agent")
       expect(agents.map((agent) => agent.id).filter((id) => !BUILT_IN_AGENTS.includes(id))).toEqual(["reviewer"])
       const { data: skills } = await host.api<{ data: { id: string; path: string }[] }>("GET", "/api/skill")
-      const own = skills.filter((skill) => skill.id.startsWith("opencode-databricks")).map(({ id, path }) => ({ id, path }))
+      const own = skills.filter((skill) => (SKILL_IDS as readonly string[]).includes(skill.id)).map(({ id, path }) => ({ id, path }))
       expect(own.sort((a, b) => a.id.localeCompare(b.id))).toEqual([...SKILL_IDS].sort().map((id) => ({ id, path: join(installed, "skills", id, "SKILL.md") })))
     } catch (error) {
       throw new Error(`${(error as Error).message}\n--- opencode ${version} log ---\n${host.log().slice(-3000)}`)
@@ -296,10 +296,10 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
   }, 600_000)
 })
 
-describe("a real release install on stock OpenCode 2.3.2", () => {
+describe("a real release install on the tested stock OpenCode", () => {
   test("a tagged package spec is not gated, and its refusal is a declared answer", async () => {
     const release = releaseRepo()
-    const host = await serve("2.3.2", [{ package: release.spec, options: PAT_ACCOUNT }], "-release")
+    const host = await serve(TESTED_HOSTS[0]!, [{ package: release.spec, options: PAT_ACCOUNT }], "-release")
     try {
       await host.until("the plugin finishes loading", async () => {
         const { data } = await host.api<{ data: { id: string; state: { status: string } }[] }>("GET", "/api/plugin")

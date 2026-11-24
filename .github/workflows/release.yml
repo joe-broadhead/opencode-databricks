@@ -40,7 +40,7 @@ concurrency:
 env:
   # Set when the kit is copied into a plugin: the plugin's status RPC id and its skill id (the stock check reads them).
   PLUGIN_RPC: databricks.databricks
-  PLUGIN_SKILL: opencode-databricks
+  PLUGIN_SKILL: databricks
   PARENT: ${{ inputs.sha }}
 
 jobs:

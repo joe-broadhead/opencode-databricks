@@ -8,7 +8,7 @@ const text = (id: string) => readFileSync(new URL(`../../skills/${id}/SKILL.md`,
 
 describe("skills", () => {
   it("are the working skill and the SQL dialect skill", () => {
-    expect([...SKILL_IDS]).toEqual(["opencode-databricks", "opencode-databricks-sql"])
+    expect([...SKILL_IDS]).toEqual(["databricks", "databricks-sql"])
   })
 
   for (const id of SKILL_IDS) {
@@ -16,7 +16,7 @@ describe("skills", () => {
       const skill = parseSkill(id, text(id))
       expect(skill.name).toBe(id)
       expect(skill.description.length).toBeGreaterThan(40)
-      expect(skill.content.split("\n")[0]).toMatch(/^If Databricks' tools are absent, run `\/connect` .*, or on Jelly call jelly_connection_request\.$/)
+      expect(skill.content.split("\n")[0]).toBe("If Databricks' tools are absent, run `/connect` and choose Databricks.")
     })
 
     it(`${id} names only tools that exist`, () => {
@@ -27,12 +27,12 @@ describe("skills", () => {
   }
 
   it("the working skill carries both disclosures verbatim", () => {
-    const body = parseSkill("opencode-databricks", text("opencode-databricks")).content.replace(/\n> /g, " ").replace(/\n/g, " ")
+    const body = parseSkill("databricks", text("databricks")).content.replace(/\n> /g, " ").replace(/\n/g, " ")
     expect(body).toContain(WRITE_DISCLOSURE)
     expect(body).toContain(POLICY_DISCLOSURE)
   })
 
   it("refuses a skill with an unknown frontmatter key", () => {
-    expect(() => parseSkill("opencode-databricks", "---\nname: opencode-databricks\ndescription: x\nextra: y\n---\nbody")).toThrow(/^SKILLS_INVALID: /)
+    expect(() => parseSkill("databricks", "---\nname: databricks\ndescription: x\nextra: y\n---\nbody")).toThrow(/^SKILLS_INVALID: /)
   })
 })

@@ -66,7 +66,7 @@ text the grammar cannot parse is `run` too. Where it parses, the statement keeps
 the strictest: `CREATE STREAMING TABLE … AS SELECT` plans as `write`, `CREATE OR REFRESH STREAMING TABLE` as `run`, and
 `GRANT` as `share`. `VACUUM`, `OPTIMIZE`, `RESTORE`, `COPY INTO`, `REORG` and `FSCK` are not in the pinned grammar and plan
 as `run`. `DESCRIBE HISTORY` is refused on both paths — a read's `STATEMENT_NOT_READ` and a plan's `CATEGORY_MISMATCH` —
-so v0.1.0 leaves it to the SQL editor. Each category commits only through its own tool.
+so this version leaves it to the SQL editor. Each category commits only through its own tool.
 
 ### What a change's targets are
 
@@ -92,7 +92,7 @@ would resolve it against a default the plugin cannot see.
   to a SELECT-only reader (live check L14), most such views answer `NEEDS_PLAN`. That is stricter than the design's
   "warning by default" and deliberate: the record alone is never enough.
 - **`DESCRIBE HISTORY` has no path here.** It is a statement, not a query, so a read refuses it; the statement table
-  calls it a read, so a plan refuses it too. Use the SQL editor for Delta history in v0.1.0.
+  calls it a read, so a plan refuses it too. Use the SQL editor for Delta history.
 - **Some renderings are unverified.** A zone-less `TIMESTAMP` is shown zone-less, in the session's zone; the plugin
   never labels it UTC. `BINARY`, `INTERVAL` and `VARIANT` render as base64, `INTERVAL '…'` and JSON text from
   hand-written fixtures until live check L8 records Databricks' own.

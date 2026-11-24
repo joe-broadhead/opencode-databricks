@@ -9,9 +9,10 @@
  * - The two disclosures appear verbatim in the README and the working skill, and status returns the write one.
  * - Every Databricks fact carries a numbered citation, and every citation is a Databricks documentation page (or the
  *   pricing page, labelled as such): no claim without a source.
- * - The Known limits list every limit the package reviews named, by a phrase from each.
+ * - The README's Known limits names the limits a reader must know before the first call.
  * - The commands exist in the docs, and the cleanup rules are stated: read-only reports, ask-changes asks, nothing is
  *   ever deleted.
+ * - Every local link points at a file that exists.
  */
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
@@ -19,14 +20,15 @@ import { DECLARED_ACTIONS, engineName, TOOL_NAMES } from "../../src/domain/actio
 import { POLICY_DISCLOSURE, WRITE_DISCLOSURE } from "../../src/domain/contract.js"
 import { errorRows } from "../../src/domain/errors.js"
 import { OptionsSchema } from "../../src/options.js"
+import { SKILL_IDS } from "../../src/skills.js"
 
 const ROOT = new URL("../../", import.meta.url)
 const read = (path: string) => readFileSync(new URL(path, ROOT), "utf8")
 const flat = (text: string) => text.replace(/\n> /gu, " ").replace(/\n\s*/gu, " ")
 
-const DOCS = ["README.md", "docs/auth.md", "docs/configuration.md", "docs/costs.md", "docs/jelly.md", "docs/safety.md", "docs/scripting.md", "docs/architecture.md"]
-const SKILLS = ["skills/opencode-databricks/SKILL.md", "skills/opencode-databricks-sql/SKILL.md"]
-const CITED = ["README.md", "docs/auth.md", "docs/configuration.md", "docs/costs.md", "docs/jelly.md", "docs/safety.md"]
+const DOCS = ["README.md", "docs/auth.md", "docs/configuration.md", "docs/costs.md", "docs/errors.md", "docs/parser.md", "docs/safety.md", "docs/scripting.md", "docs/sources.md", "docs/architecture.md", "docs/ownership.md"]
+const SKILLS = SKILL_IDS.map((id) => `skills/${id}/SKILL.md`)
+const CITED = ["docs/auth.md", "docs/configuration.md", "docs/costs.md", "docs/safety.md"]
 
 /** A numbered citation's use in prose: `[6]`, but not the definition line `[6]:`. */
 const uses = (text: string): number[] => [...text.matchAll(/\[(\d+)\]/gu)].filter((match) => !text.slice(match.index + match[0].length).startsWith(":")).map((match) => Number(match[1]))
@@ -99,23 +101,13 @@ describe("the docs", () => {
     }
   })
 
-  it("lists every Known limit the package reviews named", () => {
+  it("names the limits a reader must know before the first call", () => {
     const text = read("README.md")
     const limits = [
       "Privileges are the only server-enforced read-only",
-      "A role is weaker than",
-      "Non-ASCII names are refused",
-      "The dependency set is the union",
-      "The parser is Spark's, not Databricks'",
-      "These forms follow the path",
       "A start bills",
-      "Stopping needs Can manage",
-      "Single-use refresh tokens",
-      "Headless modes are refused in every engine Jelly runs",
       "Masks and filters run functions you cannot see",
       "Results and history are bounded by Databricks",
-      "Query tags are Public Preview",
-      "Some cell renderings are unverified",
       "Automation runs only while OpenCode runs",
       "Actions can email people",
     ]
@@ -134,12 +126,8 @@ describe("the docs", () => {
     expect(read("docs/scripting.md")).toMatch(/neither is `\/databricks-cleanup`/u)
   })
 
-  it("gives Jelly both redirect URLs and keeps the family block", () => {
-    const jelly = read("docs/jelly.md")
-    expect(jelly).toContain("http://localhost:8765/callback")
-    expect(jelly).toContain("<Jelly ID issuer>/connect/callback")
-    expect(jelly).toContain("<!-- family-block:start -->")
-    expect(read("package.json")).toContain('"redirectField": "redirectUri"')
+  it("keeps the skills' first line the one /connect line", () => {
+    for (const path of SKILLS) expect(read(path).split("\n")[4]).toBe("If Databricks' tools are absent, run `/connect` and choose Databricks.")
   })
 
   it("links only local docs that exist", () => {

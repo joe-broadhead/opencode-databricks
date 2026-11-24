@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 import { type Plugin, Skill } from "@opencode/plugin"
 import { DatabricksError } from "./domain/errors.js"
 
-export const SKILL_IDS = ["opencode-databricks", "opencode-databricks-sql"] as const
+export const SKILL_IDS = ["databricks", "databricks-sql"] as const
 
 type ParsedSkill = { readonly name: string; readonly description: string; readonly content: string }
 

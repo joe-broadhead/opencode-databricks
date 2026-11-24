@@ -1,8 +1,8 @@
 ---
-name: opencode-databricks
+name: databricks
 description: How to work with Databricks through the databricks_* tools - Unity Catalog first, warehouse state and cost before SQL, reads through the read path, changes as plan then commit, cleanup, and what each error's next step means.
 ---
-If Databricks' tools are absent, run `/connect` and choose Databricks, or on Jelly call jelly_connection_request.
+If Databricks' tools are absent, run `/connect` and choose Databricks.
 
 # Databricks
 

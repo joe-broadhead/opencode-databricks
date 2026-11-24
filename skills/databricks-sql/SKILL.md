@@ -1,8 +1,8 @@
 ---
-name: opencode-databricks-sql
+name: databricks-sql
 description: The Databricks SQL dialect as the databricks_* read path accepts it - three-level names, :name parameters, built-in functions qualified by the plugin, keyword forms and the SQL path, QUALIFY, time travel, system tables, and what needs a plan.
 ---
-If Databricks' tools are absent, run `/connect` and choose Databricks, or on Jelly call jelly_connection_request.
+If Databricks' tools are absent, run `/connect` and choose Databricks.
 
 # Databricks SQL for the read path
 

@@ -32,7 +32,6 @@ export const ERRORS = {
   AUTH_SCOPE_MISSING: { state: "refused", what: "The sign-in lacks the API scope this call needs, so Databricks was not called.", next: "Add the feature and sign in again, or ask the admin to allow the scope on the app connection." },
   AUTH_CLIENT_INVALID: { state: "refused", what: "Databricks refused the OAuth client, its scopes or its redirect URL.", next: "Check the client ID; for invalid_scope choose the other scope set on the form; app changes can take 30 minutes." },
   HOST_INVALID: { state: "refused", what: "The workspace URL is not https, or not a Databricks host.", next: "Enter the workspace URL from the browser, or set allowCustomHost for a private link." },
-  HEADLESS_REFUSED: { state: "refused", what: "A headless mode (pat, m2m or cli) was configured in a hosted engine.", next: "Sign in interactively, or set allowHeadlessInHost." },
   // Warehouses and cost (design §6).
   WAREHOUSE_REQUIRED: { state: "refused", what: "No SQL warehouse was given or configured.", next: "Call databricks_warehouses({}), then pass warehouse." },
   WAREHOUSE_STOPPED: { state: "refused", what: "The warehouse is stopped and the call did not ask to start it.", next: "Use a running warehouse, or pass start: true." },
@@ -55,7 +54,7 @@ export const ERRORS = {
   FUNCTION_NAME_PARTIAL: { state: "refused", what: "A read calls a function that is not an allowlisted built-in by a one- or two-part name, which Databricks resolves along the SQL path, not where the plugin checks it.", next: "Write the function's full name, catalog.schema.function." },
   FUNCTION_REFUSED: { state: "refused", what: "reflect, java_method, try_reflect, a script transform or a bucket sample on a function is refused.", next: "Do it another way; these run code outside SQL." },
   SECRET_FUNCTION_REFUSED: { state: "refused", what: "secret, try_secret and list_secrets are refused.", next: "Do not read secrets through the agent." },
-  DEPENDENCIES_UNKNOWN: { state: "refused", what: "A view's dependencies cannot be resolved while a fence, an inline rule or strictDependencies applies.", next: "Name tables fully and avoid views without recorded dependencies." },
+  DEPENDENCIES_UNKNOWN: { state: "refused", what: "A view's dependencies cannot be resolved while a fence or an inline rule applies.", next: "Name tables fully and avoid views without recorded dependencies." },
   FENCE_UNVERIFIABLE: { state: "refused", what: "A path-based read cannot be checked against the fence.", next: "Read the table by its Unity Catalog name." },
   INLINE_WITHHELD: { state: "refused", what: "This account's inline rules keep these rows out of the conversation.", next: "Run it with databricks_save({ sql }) to write them to a file." },
   FENCED: { state: "refused", what: "A resolved table is outside the fence, or a permission rule denied it.", next: "Query allowed catalogs only, or change the fence option." },

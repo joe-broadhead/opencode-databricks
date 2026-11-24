@@ -8,22 +8,23 @@ const check = readFileSync(new URL("../../scripts/check.mjs", import.meta.url), 
 
 describe("host range", () => {
   it("is one range in package.json, src/constants.ts and the check gate", () => {
-    expect(SUPPORTED_HOST).toBe(">=2.2.3 <2.4.0")
+    expect(SUPPORTED_HOST).toBe(">=2.4.1 <2.5.0")
     expect(pkg.opencode.host).toBe(SUPPORTED_HOST)
     expect(check).toContain(`const HOST_RANGE = "${SUPPORTED_HOST}"`)
   })
 
-  it("tests the family's eight releases", () => {
-    expect(TESTED_HOSTS).toEqual(["2.2.3", "2.2.4", "2.2.5", "2.2.6", "2.2.7", "2.3.0", "2.3.1", "2.3.2"])
+  it("tests OpenCode 2.4.1 only", () => {
+    expect(TESTED_HOSTS).toEqual(["2.4.1"])
     for (const version of TESTED_HOSTS) expect(isTestedHost(version)).toBe(true)
   })
 
   it("starts inside the range, untested or not, and refuses outside it unless allowed", () => {
-    expect(checkHost("2.2.3", false)).toBeUndefined()
-    expect(checkHost("2.2.99", false)).toBeUndefined()
-    expect(isTestedHost("2.2.99")).toBe(false)
+    expect(checkHost("2.4.1", false)).toBeUndefined()
+    expect(checkHost("2.4.99", false)).toBeUndefined()
+    expect(isTestedHost("2.4.99")).toBe(false)
     expect(() => checkHost("2.4.0", false)).toThrow(/^HOST_UNTESTED: /)
-    expect(() => checkHost("2.2.3-beta.1", false)).toThrow(/^HOST_UNTESTED: /)
-    expect(checkHost("2.4.0", true)).toMatch(/allowUntestedHost/)
+    expect(() => checkHost("2.5.0", false)).toThrow(/^HOST_UNTESTED: /)
+    expect(() => checkHost("2.4.1-beta.1", false)).toThrow(/^HOST_UNTESTED: /)
+    expect(checkHost("2.5.0", true)).toMatch(/allowUntestedHost/)
   })
 })

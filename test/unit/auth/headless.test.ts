@@ -1,11 +1,10 @@
-// The headless modes (design §3.2, §15.1): pat from the environment, m2m against a fake token endpoint, cli against a
-// fake `databricks` executable, and HEADLESS_REFUSED in a simulated Jelly host.
+// The headless modes (design §3.2, §15.1): pat from the environment, m2m against a fake token endpoint, and cli against a
+// fake `databricks` executable.
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
-import { isHostedEngine, JELLY_PLUGIN_SECRETS } from "../../../src/auth/jelly.js"
 import { DUMMY_TOKEN, FAKE_HOST, authCore, tokenEndpoint, type FakeTokenEndpoint } from "./support.js"
 
 const CLIENT_ID = "7f3e2a10-5c4b-4d8e-9a1f-2b6c8d0e4f12"
@@ -176,47 +175,5 @@ describe("cli", () => {
     const stale = fakeCli(`printf '%s' '{"access_token":"A-old","expiry":"2020-01-01T00:00:00Z"}'`)
     const expired = authCore({ accounts: { lap: { mode: "cli", host: FAKE_HOST, profile: "work" } } }, { now: () => NOW, cliCommand: stale.command }).core
     expect(await codeOf(() => expired.token("lap", ["sql"], signal()))).toBe("AUTH_REQUIRED")
-  })
-})
-
-describe("a Jelly-hosted engine", () => {
-  it("P5: any of the three handoff globals Jelly installs marks a hosted engine", () => {
-    expect(isHostedEngine({ [JELLY_PLUGIN_SECRETS]: { get: () => undefined } })).toBe(true)
-    expect(isHostedEngine({ [Symbol.for("jelly.engine-seal")]: {} })).toBe(true)
-    expect(isHostedEngine({ [Symbol.for("jelly.action-key")]: {} })).toBe(true)
-    expect(isHostedEngine({})).toBe(false)
-    expect(isHostedEngine({ [Symbol.for("another.host")]: {} })).toBe(false)
-  })
-
-  it("refuses pat, m2m and cli with HEADLESS_REFUSED, before an environment read, a request or a process", async () => {
-    const pat = authCore({ accounts: { ci: { mode: "pat", host: FAKE_HOST, tokenEnv: "DBX_TOKEN" } } }, { env: { DBX_TOKEN: DUMMY_TOKEN }, hosted: true, now: () => NOW }).core
-    expect(await codeOf(() => pat.token("ci", ["sql"], signal()))).toBe("HEADLESS_REFUSED")
-
-    const m2m = authCore(m2mOptions, {
-      env: { DBX_CLIENT_SECRET: SECRET },
-      hosted: true,
-      now: () => NOW,
-      fetch: (async () => {
-        throw new Error("a hosted m2m token must not reach the network")
-      }) as unknown as typeof globalThis.fetch,
-    }).core
-    expect(await codeOf(() => m2m.token("ci", ["sql"], signal()))).toBe("HEADLESS_REFUSED")
-
-    const cli = authCore(
-      { accounts: { lap: { mode: "cli", host: FAKE_HOST, profile: "work" } } },
-      {
-        hosted: true,
-        now: () => NOW,
-        runCli: async () => {
-          throw new Error("a hosted cli token must not spawn a process")
-        },
-      },
-    ).core
-    expect(await codeOf(() => cli.token("lap", ["sql"], signal()))).toBe("HEADLESS_REFUSED")
-  })
-
-  it("allows a headless mode with allowHeadlessInHost, the person's explicit choice", async () => {
-    const { core } = authCore({ allowHeadlessInHost: true, accounts: { ci: { mode: "pat", host: FAKE_HOST, tokenEnv: "DBX_TOKEN" } } }, { env: { DBX_TOKEN: DUMMY_TOKEN }, hosted: true, now: () => NOW })
-    await expect(core.token("ci", ["sql"], signal())).resolves.toMatchObject({ accessToken: DUMMY_TOKEN })
   })
 })

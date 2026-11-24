@@ -46,11 +46,9 @@ carries the workspace it was minted for, so a caller sends it there even if the 
   refresh and the keychain; the plugin never reads `~/.databrickscfg` or the keychain itself. Every `DATABRICKS_*`
   variable is removed from the child's environment except `DATABRICKS_CONFIG_FILE`, which only relocates profiles.
 
-A headless mode is refused with `HEADLESS_REFUSED` in a Jelly-hosted engine, unless `allowHeadlessInHost` is set: there
-the environment and the CLI belong to the host, not to the person. This covers **every engine Jelly runs**, desktop or
-cloud. It fails open if Jelly's engine handoff never arrived; Jelly then starts the engine from an almost empty
-environment, so `pat` and `m2m` find no variable and answer `AUTH_REQUIRED`, and only `cli` could still find a binary on
-`PATH`. Jelly has been asked for one explicit, always-set engine marker.
+Each mode takes its secret from the environment or the CLI, never from an option, and caches a minted token until 60
+seconds before it expires; `pat` reads the environment on every call. A rotated secret is therefore picked up without a
+restart.
 
 ## Scopes, and the check before a call
 
@@ -113,8 +111,8 @@ group's grants is live check L3; the explicit inherited groups cover it either w
   a fake endpoint.
 - **The role's name is for display.** `assume_group` takes the numeric group ID [13], and the name shown comes from SCIM
   `Me`'s groups when it is there.
-- **Jelly's relay.** An app connection registered for Jelly must list `<Jelly ID issuer>/connect/callback` beside the
-  loopback URL, exactly, and Databricks must echo the relay's signed `state` (live check L12) [12].
+- **A host's relay.** An app connection registered for a host's relay must list the relay address beside the loopback
+  URL, exactly, and Databricks must echo the relay's signed `state` (live check L12) [12].
 
 ## Sources
 

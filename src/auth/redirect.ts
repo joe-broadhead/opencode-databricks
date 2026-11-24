@@ -6,7 +6,7 @@
  *   connection, and the listener binds `127.0.0.1` on that port. Databricks allows `http` for a loopback redirect and
  *   `https` for every other [12].
  * - **The host's relay**, when a host serves OpenCode to a browser on another machine: `redirectUri` is the public
- *   address (Jelly's `<issuer>/connect/callback`), registered on the app connection exactly, and `callbackPort` is the
+ *   address (`<issuer>/connect/callback`), registered on the app connection exactly, and `callbackPort` is the
  *   local port the relay forwards to. The listener accepts the relay's own path.
  *
  * Databricks matches a registered redirect URL character for character [12], so the URL is sent exactly as configured

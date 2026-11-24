@@ -5,8 +5,8 @@
  * - a SQL UDF whose body calls `ai_query` → `NEEDS_PLAN`;
  * - a Python (or Scala) UDF, with and without a connection dependency → `NEEDS_PLAN` both times (live check L6);
  * - a SQL UDF whose body Unity Catalog does not return → `NEEDS_PLAN`;
- * - a view with no `view_dependencies` → the `DEPENDENCIES_UNKNOWN` warning, and a refusal under a fence or
- *   `strictDependencies`;
+ * - a view with no `view_dependencies` → the `DEPENDENCIES_UNKNOWN` warning, and a refusal under a fence or an
+ *   inline rule;
  * - a dependency chain deeper than `dependencyDepth` → `NEEDS_PLAN`;
  * - a function Unity Catalog does not return, and a `system.*` name that is not an allowlisted built-in, →
  *   `NEEDS_PLAN` (the fail-closed answer review `databricks-1.md`'s LOW 2 asks for);

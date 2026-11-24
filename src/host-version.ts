@@ -3,8 +3,8 @@
 import { SUPPORTED_HOST, TESTED_HOSTS } from "./constants.js"
 import { DatabricksError } from "./domain/errors.js"
 
-const LOWEST: Version = [2, 2, 3]
-const ABOVE: Version = [2, 4, 0]
+const LOWEST: Version = [2, 4, 1]
+const ABOVE: Version = [2, 5, 0]
 
 type Version = readonly [number, number, number]
 
