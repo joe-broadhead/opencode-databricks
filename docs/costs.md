@@ -29,7 +29,7 @@ Unofficial plugin. Not affiliated with Databricks. Figures are list prices fetch
 
 ## The ledger and budgets
 
-The plugin keeps a local estimate in `$XDG_STATE_HOME/opencode-databricks/spend.jsonl`, shared by every OpenCode
+The plugin keeps a local estimate in `$XDG_STATE_HOME/databricks/spend.jsonl`, shared by every OpenCode
 process: each start it caused at `auto_stop × DBU/h × clusters`, and each statement at
 `max(duration, min(auto_stop, time since its previous statement on that warehouse)) × DBU/h × clusters`. It is an
 estimate, labelled as one. Budgets are opt-in: `budget: { daily: { starts, dbuHours }, session: { … }, action: "warn" |

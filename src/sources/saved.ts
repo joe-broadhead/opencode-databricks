@@ -87,19 +87,25 @@ export async function savedRead(deps: Deps, input: SavedInput, call: Call, mode:
   if (warehouse.state !== "RUNNING") {
     throw sourceError("UNAVAILABLE", `The saved query's warehouse is ${warehouse.state.toLowerCase()}, and this source never starts one.`, "Start the warehouse in Databricks and read again; a start here would bill without the person asking.")
   }
-  const prepared = await deps.reads.prepare(
-    {
-      account: input.account,
-      sql: query.queryText,
-      warehouse: query.warehouseId,
-      runningOnly: true,
-      tool: "saved_read",
-      sessionID: call.sessionID,
-      messageID: call.messageID,
-      callID: call.id,
-    },
-    call.signal,
-  )
+  let prepared: Awaited<ReturnType<Deps["reads"]["prepare"]>>
+  try {
+    prepared = await deps.reads.prepare(
+      {
+        account: input.account,
+        sql: query.queryText,
+        warehouse: query.warehouseId,
+        runningOnly: true,
+        tool: "saved_read",
+        sessionID: call.sessionID,
+        messageID: call.messageID,
+        callID: call.id,
+      },
+      call.signal,
+    )
+  } catch (error) {
+    // The read path's refusals (a missing sign-in, a fence, a policy) are the source contract's, not this plugin's.
+    throw sourceErrorOf(error)
+  }
   let answer: StatementAnswer
   const startedAt = deps.clock.now()
   try {

@@ -24,6 +24,8 @@ describe("a committed SQL plan", () => {
     const planned = await plan({ sql, params: [{ name: "v", value: 7, type: "BIGINT" }] }, harness)
     const answer = await commit("delete", harness, planned.planId!)
     expect(answer).toMatchObject({ state: "ok", statementId: "01eda0e7-e315-1846-84e2-79a963ffad46", rowsAffected: 3, durationMs: expect.any(Number) })
+    // The committed statement's own cost: the warehouse it ran on and its estimated $/hour.
+    expect(answer.warehouse).toEqual({ id: "wh-small", name: "bi-small", started: false, usdPerHour: expect.any(Number) })
     const sent = harness.statements()
     expect(sent).toHaveLength(1)
     expect(sent[0]).toMatchObject({
@@ -108,6 +110,7 @@ describe("the warehouse policy at commit", () => {
     const planned = await plan({ sql: "DELETE FROM main.s.t WHERE id = 1" }, harness)
     const answer = await commit("delete", harness, planned.planId!)
     expect(answer).toMatchObject({ state: "ok", warnings: [{ code: "STARTED_WAREHOUSE" }] })
+    expect(answer.warehouse).toEqual({ id: "wh-small", name: "bi-small", started: true, usdPerHour: expect.any(Number) })
     const start = harness.permission.requests.find((request) => request.action === "databricks.start")
     expect(start).toMatchObject({ resource: "work:warehouse:wh-small" })
     expect(harness.ledger.charges.map((charge) => charge.kind)).toEqual(["start", "statement"])

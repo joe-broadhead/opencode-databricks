@@ -35,6 +35,11 @@ answers `AUTH_REQUIRED` until the person signs in again. A role chosen on the fo
 identity; a form that chooses a role other than a configured one is refused before the browser opens. Each token also
 carries the workspace it was minted for, so a caller sends it there even if the display summary names another workspace.
 
+**A host-held sign-in.** When the stored sign-in's refresh token is the host-held marker, this plugin never POSTs it and
+never tries to renew it. The credential is used while its access token is valid; once it has expired the call fails with
+`AUTH_REQUIRED` — the source contract's `NEEDS_SIGN_IN` — and the next step is to run `/connect`, choose Databricks, and
+sign in again from the host that holds the credential.
+
 ## Headless modes
 
 `pat`, `m2m` and `cli` are opt-in, one per account, and never a fallback. No option holds a secret [9][10][14]:

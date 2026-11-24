@@ -6,7 +6,7 @@
  * always does first.
  *
  * The record is the user id, user name and display name `Me` answered, written to
- * `$XDG_STATE_HOME/opencode-databricks/sources.json` (or `~/.local/state/…`), mode 0600, atomically (a temporary file
+ * `$XDG_STATE_HOME/databricks/sources.json` (or `~/.local/state/…`), mode 0600, atomically (a temporary file
  * renamed into place). It holds no token. Signing in to the same alias as someone else keeps the old record until the
  * next probe; a consumer probes again at every bind.
  */
@@ -35,10 +35,10 @@ export function memoryRecords(seed: readonly { readonly account: string; readonl
   return { get: (account, host) => map.get(keyOf(account, host)), put: (account, host, record) => void map.set(keyOf(account, host), record) }
 }
 
-/** `$XDG_STATE_HOME/opencode-databricks/sources.json`, or `~/.local/state/…` without it (the ledger's folder). */
+/** `$XDG_STATE_HOME/databricks/sources.json`, or `~/.local/state/…` without it (the ledger's folder). */
 export function defaultRecordsPath(env: NodeJS.ProcessEnv = process.env): string {
   const base = env.XDG_STATE_HOME && env.XDG_STATE_HOME.startsWith("/") ? env.XDG_STATE_HOME : join(homedir(), ".local", "state")
-  return join(base, "opencode-databricks", "sources.json")
+  return join(base, "databricks", "sources.json")
 }
 
 const plainRecord = (value: unknown): IdentityRecord | undefined => {

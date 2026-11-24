@@ -196,7 +196,7 @@ describe("databricks_save", () => {
     await run({ format: "csv", path: join(root, "exists.csv") }, harnessFor().test)
     const again = await run({ format: "csv", path: join(root, "exists.csv") }, harnessFor().test)
     expect(again.error).toBe("SAVE_EXISTS")
-    const outside = await run({ format: "csv", path: "/etc/opencode-databricks-nope.csv" }, harnessFor().test)
+    const outside = await run({ format: "csv", path: "/etc/databricks-nope.csv" }, harnessFor().test)
     expect(outside.error).toBe("SAVE_PATH_REFUSED")
   })
 

@@ -1,6 +1,6 @@
 /**
- * The automation's owner lock: one process per machine keeps the idle-warehouse snapshot, so several OpenCode
- * processes do not each spend the same free calls, and a future stop can never run twice.
+ * The automation's owner lock: one process per machine is the sweep's owner, so several OpenCode processes do not each
+ * spend the same free calls; status reports which process owns it.
  *
  * A real lock, not a timestamp guess (review of F, M1):
  * - the file holds this process's random token and the time it last refreshed it, written `O_EXCL` (`wx`), so only one

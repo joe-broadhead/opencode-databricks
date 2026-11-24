@@ -375,7 +375,7 @@ export class ParquetWriter {
             ],
           })),
         ),
-        binary(6, "opencode-databricks"),
+        binary(6, "databricks-plugin"),
       ],
     }
     const footer = structBytes(file)

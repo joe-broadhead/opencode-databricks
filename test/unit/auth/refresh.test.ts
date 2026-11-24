@@ -185,11 +185,24 @@ describe("renewing a sign-in", () => {
     expect(sourceErrorOf(error).code).toBe("NEEDS_SIGN_IN")
   })
 
-  it("refuses a sign-in with no record or no refresh token", async () => {
+  it("refuses a sign-in with no stored record", async () => {
     const endpoint = await rotationEndpoint()
     const withoutRecord = { ...hostCredential({ refresh: "R1", expires: NOW }), metadata: undefined }
     const error = (await refreshSignIn({ alias: "work", name: "Databricks", credential: withoutRecord, fetch: globalThis.fetch, now: () => NOW, state: refreshState(), tokenEndpoint: endpoint.url }).catch((caught: unknown) => caught)) as DatabricksError
     expect(error.code).toBe("AUTH_REQUIRED")
     expect(error.message).not.toContain(DUMMY_TOKEN)
+  })
+
+  it("refuses a sign-in with no refresh token, before any request", async () => {
+    let fetches = 0
+    const fetch = (async () => {
+      fetches += 1
+      throw new Error("a sign-in with no refresh token must not reach the network")
+    }) as unknown as typeof globalThis.fetch
+    const error = (await refreshSignIn({ alias: "work", name: "Databricks", credential: hostCredential({ refresh: "", expires: NOW }), fetch, now: () => NOW, state: refreshState() }).catch((caught: unknown) => caught)) as DatabricksError
+    expect(error.code).toBe("AUTH_REQUIRED")
+    expect(error.message).toContain("no refresh token")
+    expect(error.message).not.toContain(DUMMY_TOKEN)
+    expect(fetches).toBe(0)
   })
 })

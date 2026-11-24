@@ -15,7 +15,7 @@ and trigger. `text` is always empty: SQL holds literals and secrets, and a run's
 answer is `trust: "untrusted"`.
 
 `probe` reads only SCIM `Me` and records your user id for the account and workspace (in
-`$XDG_STATE_HOME/opencode-databricks/sources.json`, mode 0600, no token). `databricks.queries` filters Query History by
+`$XDG_STATE_HOME/databricks/sources.json`, mode 0600, no token). `databricks.queries` filters Query History by
 that id, so its reads never read the identity. A queries read on an account that was never probed answers
 `UNAVAILABLE` ("probe this source first"); a consumer probes at every bind. The model's own `databricks_events_list`
 reads the identity itself when no probe has.

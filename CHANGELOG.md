@@ -16,6 +16,8 @@ The first release in `we-the-rebel-alliance`: the plugin starts again at `0.0.0`
 
 ### Removed
 
-- The Jelly integration: the hosted-engine refusal, the host-owned refresh marker and the Jelly docs.
-- The `context` hook that added a cost line on every request. Cost and idle warehouses stay in `databricks_status`.
-- The no-op `strictDependencies` and `autoStopIdleMinutes` options.
+- The hosted-engine sign-in plumbing and its docs. The host-held refresh marker is kept and refused before any
+  request, so a sign-in the host holds fails with a clear needs-sign-in error instead of a token request.
+- The `context` hook that added a cost line on every request. Cost stays in `databricks_status`, which lists this
+  plugin's running statements and the warehouses it started with their idle time and $/hour.
+- The no-op `strictDependencies`, `autoStopIdleMinutes` and `maxConcurrentStatements` options.

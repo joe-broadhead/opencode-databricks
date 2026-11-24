@@ -74,7 +74,7 @@ describe("the ledger", () => {
   }, 60_000)
 
   it("lives under XDG_STATE_HOME", () => {
-    expect(defaultLedgerPath({ XDG_STATE_HOME: "/state" })).toBe("/state/opencode-databricks/spend.jsonl")
+    expect(defaultLedgerPath({ XDG_STATE_HOME: "/state" })).toBe("/state/databricks/spend.jsonl")
   })
 })
 

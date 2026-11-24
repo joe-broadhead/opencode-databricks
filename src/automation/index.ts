@@ -48,10 +48,10 @@ export interface PendingSession {
   readonly attempts: number
 }
 
-/** `$XDG_STATE_HOME/opencode-databricks/automation.lock`, beside the spend ledger. */
+/** `$XDG_STATE_HOME/databricks/automation.lock`, beside the spend ledger. */
 export function lockPath(env: NodeJS.ProcessEnv = process.env): string {
   const base = env.XDG_STATE_HOME && env.XDG_STATE_HOME.startsWith("/") ? env.XDG_STATE_HOME : join(homedir(), ".local", "state")
-  return join(base, "opencode-databricks", "automation.lock")
+  return join(base, "databricks", "automation.lock")
 }
 
 /** The consent for automation's changes (design §7): `auto` is on at `all` only; `on` is the person's standing yes. */
