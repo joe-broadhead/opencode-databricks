@@ -5,6 +5,7 @@ import { memoryRecords, useRecords } from "../../src/handlers/sources/records.js
 import { loadOptions } from "../../src/options.js"
 import type { Deps } from "../../src/handlers/deps.js"
 import type { HistoryQuery, RunInfo } from "../../src/ports.js"
+import { refOf } from "../../src/handlers/sources/cursor.js"
 
 const NOW = Date.UTC(2026, 10, 25, 12, 0, 0)
 const END = NOW - 60 * 60_000
@@ -39,7 +40,7 @@ const RUNS = [run(101), run(102)]
 const BEFORE_QUERY = query("q-before", BEFORE)
 const BEFORE_RUN = run(100, BEFORE)
 
-function deps(source: "queries" | "runs", includeBefore = false): Deps {
+function deps(source: "queries" | "runs", includeBefore = false, queries: readonly HistoryQuery[] = QUERIES): Deps {
   const base = {
     options: loadOptions({}),
     auth: {
@@ -50,7 +51,7 @@ function deps(source: "queries" | "runs", includeBefore = false): Deps {
     databricks: {
       me: async () => ({ id: "42", userName: "ana@example.com", displayName: "Ana" }),
       history: async (_account: string, filter: { startMs?: number; endMs?: number }) => {
-        const rows = includeBefore ? [BEFORE_QUERY, ...QUERIES] : QUERIES
+        const rows = includeBefore ? [BEFORE_QUERY, ...queries] : [...queries]
         return { items: rows.filter((item) => item.queryStartTimeMs >= (filter.startMs ?? 0) && item.queryStartTimeMs <= (filter.endMs ?? Number.MAX_SAFE_INTEGER)) }
       },
       listRuns: async (_account: string, filter: { startTimeFrom?: number; startTimeTo?: number }) => {
@@ -94,7 +95,7 @@ describe("a same-timestamp page boundary", () => {
     const ids = found.flatMap((page) => page.events.map((event) => event.external_id))
     expect(ids).toHaveLength(2)
     expect(new Set(ids).size).toBe(2)
-    expect([...ids].sort()).toEqual([external("queries", "q-a"), external("queries", "q-b")].sort())
+    expect(ids).toEqual([external("queries", "q-a"), external("queries", "q-b")])
     expect(found.at(-1)?.more).toBe(false)
   })
 
@@ -103,7 +104,7 @@ describe("a same-timestamp page boundary", () => {
     const ids = found.flatMap((page) => page.events.map((event) => event.external_id))
     expect(ids).toHaveLength(2)
     expect(new Set(ids).size).toBe(2)
-    expect([...ids].sort()).toEqual([external("runs", 101), external("runs", 102)].sort())
+    expect(ids).toEqual([external("runs", 101), external("runs", 102)])
     expect(found.at(-1)?.more).toBe(false)
   })
 })
@@ -123,7 +124,7 @@ describe("a since filter across cursor pages", () => {
     const ids = found.flatMap((page) => page.events.map((event) => event.external_id))
     expect(ids).toHaveLength(2)
     expect(new Set(ids).size).toBe(2)
-    expect([...ids].sort()).toEqual([external("queries", "q-a"), external("queries", "q-b")].sort())
+    expect(ids).toEqual([external("queries", "q-a"), external("queries", "q-b")])
     expect(ids).not.toContain(external("queries", "q-before"))
     expect(found.at(-1)?.more).toBe(false)
   })
@@ -133,8 +134,39 @@ describe("a since filter across cursor pages", () => {
     const ids = found.flatMap((page) => page.events.map((event) => event.external_id))
     expect(ids).toHaveLength(2)
     expect(new Set(ids).size).toBe(2)
-    expect([...ids].sort()).toEqual([external("runs", 101), external("runs", 102)].sort())
+    expect(ids).toEqual([external("runs", 101), external("runs", 102)])
     expect(ids).not.toContain(external("runs", 100))
     expect(found.at(-1)?.more).toBe(false)
+  })
+})
+
+describe("the cursor's total order and collision bound", () => {
+  it("returns an empty third page after the last item", async () => {
+    const found = await pages("queries")
+    const last = found.at(-1)!
+    const page = (await eventsList({ source: "queries", account: "work", cursor: last.cursor, limit: 1 }, call, deps("queries"))) as EventsListResult
+    expect(page.events).toEqual([])
+    expect(page.more).toBe(false)
+  })
+
+  it("lists two same-second statements with the same 12-bit reference exactly once", async () => {
+    const seen = new Map<string, string>()
+    let ids: [string, string] | undefined
+    for (let index = 0; index < 100_000 && ids === undefined; index++) {
+      const id = `collision-${index}`
+      const ref = refOf(id, END - 1_000)
+      const previous = seen.get(ref)
+      if (previous !== undefined) ids = [previous, id]
+      else seen.set(ref, id)
+    }
+    expect(ids).toBeDefined()
+    const [first, second] = ids!
+    expect(refOf(first, END - 1_000)).toBe(refOf(second, END - 1_000))
+
+    const d = deps("queries", false, [query(first), query(second)])
+    const firstPage = (await eventsList({ source: "queries", account: "work", limit: 1 }, call, d)) as EventsListResult
+    const secondPage = (await eventsList({ source: "queries", account: "work", cursor: firstPage.cursor, limit: 1 }, call, d)) as EventsListResult
+    const listed = [...firstPage.events, ...secondPage.events].map((event) => event.external_id)
+    expect(listed).toEqual([external("queries", first), external("queries", second)])
   })
 })

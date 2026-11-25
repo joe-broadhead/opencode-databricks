@@ -1,6 +1,6 @@
 ---
 name: databricks-sql
-description: Databricks SQL for the read path — three-part names, named parameters, EXPLAIN, and why a write goes through a plan and a commit. Use with the databricks skill.
+description: "Databricks SQL for the read path: three-part names, named parameters, EXPLAIN, and why a write goes through a plan and a commit. Use with the databricks skill."
 ---
 
 # Databricks SQL

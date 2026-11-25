@@ -1,6 +1,6 @@
 ---
 name: databricks
-description: Use for Databricks reads and changes — browse Unity Catalog, run read-only SQL, read Query History and jobs, read saved queries, and plan then commit writes. A warehouse start is its own asked method.
+description: "Use for Databricks reads and changes: browse Unity Catalog, run read-only SQL, read Query History and jobs, read saved queries, and plan then commit writes. A warehouse start is its own asked method."
 ---
 
 # Databricks

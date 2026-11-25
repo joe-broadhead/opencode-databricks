@@ -48,7 +48,7 @@ import { DatabricksError } from "../../domain/errors.js"
 import type { HistoryQuery, RunInfo } from "../../ports.js"
 import type { Deps } from "../deps.js"
 import type { Call } from "../types.js"
-import { after, bindingOf, decodeState, encodeState, fits, hashOf, iso, packIds, parseRef, refOf, unpackIds, type CursorState, type Tracked } from "./cursor.js"
+import { after, bindingOf, decodeState, encodeState, fits, iso, packIds, parseRef, refOf, unpackIds, type CursorState, type Tracked } from "./cursor.js"
 import { sourceError, sourceErrorOf } from "./errors.js"
 import { hostName, ownerOf, workspaceOwner, type Owner } from "./owner.js"
 import { recordsOf, type IdentityRecord } from "./records.js"
@@ -410,18 +410,18 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
 
   // 5. What is listable now: final, at or before the held top, after the line (a tracked item is unlisted by
   // definition, so it is listed wherever its end is).
-  type Entry = { readonly item: Item; readonly tracked: boolean; readonly hash: string }
+  type Entry = { readonly item: Item; readonly tracked: boolean; readonly externalId: string }
   const entries = new Map<string, Entry>()
-  for (const item of seen) entries.set(item.id, { item, tracked: admitted.has(item.id) || trackedItemIds.has(item.id), hash: hashOf(externalId(context, item)) })
-  for (const item of tracked) entries.set(item.id, { item, tracked: true, hash: hashOf(externalId(context, item)) })
+  for (const item of seen) entries.set(item.id, { item, tracked: admitted.has(item.id) || trackedItemIds.has(item.id), externalId: externalId(context, item) })
+  for (const item of tracked) entries.set(item.id, { item, tracked: true, externalId: externalId(context, item) })
   const listable: Entry[] = []
   const waiting: Entry[] = []
   for (const entry of entries.values()) {
     const end = entry.item.end
     if (end === undefined || end > listTop) waiting.push(entry)
-    else if (entry.tracked || after(end, entry.hash, state.e, state.k)) listable.push(entry)
+    else if (entry.tracked || after(end, entry.externalId, state.e, state.k)) listable.push(entry)
   }
-  listable.sort((left, right) => left.item.end! - right.item.end! || (left.hash < right.hash ? -1 : left.hash > right.hash ? 1 : 0))
+  listable.sort((left, right) => left.item.end! - right.item.end! || (left.externalId < right.externalId ? -1 : left.externalId > right.externalId ? 1 : 0))
 
   const built = listable.map((entry) => (entry.item.silent ? undefined : screenEvents([eventOf(context, adapter.source, entry.item)], { ownedBy: () => true })))
   const listedEvents = built.flatMap((screened) => screened?.events ?? [])
@@ -440,8 +440,9 @@ async function pageOf(context: Context, adapter: Adapter, state: CursorState, op
   for (const entry of listable.slice(consumed)) waiting.push(entry)
   const last = consumed > 0 ? listable[consumed - 1] : undefined
   const held = { e: state.e, ...(state.k ? { k: state.k } : {}) }
-  const reached = (position: { readonly e: number; readonly k?: string }) => (position.e > state.e || (position.e === state.e && after(position.e, position.k ?? "~", state.e, state.k)) ? position : held)
-  const line: { readonly e: number; readonly k?: string } = cut ? (last ? reached({ e: last.item.end!, k: last.hash }) : held) : listTop > state.e ? { e: listTop } : held
+  const reached = (position: { readonly e: number; readonly k?: string }) =>
+    position.e > state.e || (position.e === state.e && position.k !== undefined && state.k !== undefined && position.k > state.k) ? position : held
+  const line: { readonly e: number; readonly k?: string } = cut ? (last ? reached({ e: last.item.end!, k: last.externalId }) : held) : listTop > state.e ? { e: listTop } : held
   /** The oldest start, at or after `floor`, of the untracked items behind the new line that are finished (or running). */
   const floorOf = (floor: number, finished: boolean) => {
     let oldest: number | undefined

@@ -1,85 +1,115 @@
-// Registers the plugin's hand-written skills. Each is read once at setup from the package's skills/<id>/SKILL.md.
-import { readFile, readdir } from "node:fs/promises"
+/**
+ * The plugin's skills, read from `skills/<name>/SKILL.md` and registered with the host.
+ *
+ * OpenCode does not discover a plugin's `skills/` directory: the installed package sits under the host's cache, outside
+ * the directories it scans. A plugin adds its skills through `ctx.skill.transform`, so setup reads every file, checks
+ * its YAML frontmatter and registers the body under the directory's name.
+ */
+import { readdirSync, readFileSync, type Dirent } from "node:fs"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { type Plugin, Skill } from "@opencode/plugin"
-import { DatabricksError } from "./domain/errors.js"
+import { Skill, type Plugin } from "@opencode/plugin"
+import { parse as parseYaml } from "yaml"
 
-/** Every skill directory with a SKILL.md, in name order. */
-export async function skillIds(): Promise<string[]> {
-  const root = fileURLToPath(new URL("../skills/", import.meta.url))
-  const entries = await readdir(root, { withFileTypes: true })
-  const ids: string[] = []
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isDirectory()) continue
+/** One checked skill, ready to register. */
+export interface SkillFile {
+  /** The skill id: the directory name, and the frontmatter name. */
+  readonly id: string
+  readonly name: string
+  readonly description: string
+  /** The absolute path of the SKILL.md file. */
+  readonly path: string
+  /** The Markdown body below the frontmatter, with no frontmatter. */
+  readonly content: string
+}
+
+/** The installed package's `skills/` directory, from `src/skills.ts` and from the bundled `dist/index.js`. */
+const SKILLS = fileURLToPath(new URL("../skills/", import.meta.url))
+
+/** A failure the contract can read: the code, what happened and the next step. */
+function invalid(file: string, what: string): Error {
+  return new Error(`SCHEMA_VIOLATION: ${file} ${what}. Next step: fix the skill file, then reload the plugin.`)
+}
+
+interface Frontmatter {
+  readonly name: string | undefined
+  readonly description: string | undefined
+  readonly content: string
+}
+
+/**
+ * The frontmatter fields this plugin checks and the Markdown body. The frontmatter is parsed as YAML, so `>`, `|`
+ * and their chomping variants fold or keep the description exactly as the skill author wrote it; a parser that reads
+ * only the first line would register `>` as the description.
+ */
+function frontmatter(text: string, file: string): Frontmatter {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)
+  if (match === null) throw invalid(file, "has no frontmatter")
+  let data: unknown
+  try {
+    data = parseYaml(match[1] ?? "")
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message.split("\n")[0] : String(cause)
+    throw invalid(file, `has frontmatter that is not valid YAML: ${message}`)
+  }
+  if (typeof data !== "object" || data === null || Array.isArray(data)) throw invalid(file, "has frontmatter that is not a mapping")
+  const fields = data as Record<string, unknown>
+  if (fields.name !== undefined && typeof fields.name !== "string") throw invalid(file, "has a frontmatter name that is not text")
+  if (fields.description !== undefined && typeof fields.description !== "string") throw invalid(file, "has a frontmatter description that is not text")
+  return {
+    name: fields.name,
+    description: fields.description,
+    content: text.slice(match[0].length).trim(),
+  }
+}
+
+/** Read and check every `skills/<name>/SKILL.md` below `directory`, sorted by id. */
+export function readSkills(directory = SKILLS): SkillFile[] {
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(directory, { withFileTypes: true })
+  } catch {
+    throw invalid("skills/", "is missing")
+  }
+  const names = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+  if (names.length === 0) throw invalid("skills/", "holds no <name>/SKILL.md")
+  return names.map((name) => {
+    const file = `skills/${name}/SKILL.md`
+    let text: string
     try {
-      await readFile(fileURLToPath(new URL(`../skills/${entry.name}/SKILL.md`, import.meta.url)), "utf8")
-      ids.push(entry.name)
+      text = readFileSync(join(directory, name, "SKILL.md"), "utf8")
     } catch {
-      // A directory without a SKILL.md is not a skill.
+      throw invalid(file, "is missing")
     }
-  }
-  return ids
+    const parsed = frontmatter(text, file)
+    if (parsed.name === undefined || parsed.name === "") throw invalid(file, "has no frontmatter name")
+    if (parsed.name !== name) throw invalid(file, `names "${parsed.name}", not its directory "${name}"`)
+    if (parsed.description === undefined || parsed.description.trim() === "") throw invalid(file, "has no frontmatter description")
+    if (/^[>|][+-]?$/u.test(parsed.description.trim())) {
+      throw invalid(file, `has the frontmatter description "${parsed.description.trim()}", which is only a block marker; indent the text below it`)
+    }
+    if (parsed.content === "") throw invalid(file, "has no content below its frontmatter")
+    return { id: name, name: parsed.name, description: parsed.description, path: join(directory, name, "SKILL.md"), content: parsed.content }
+  })
 }
 
-type ParsedSkill = { readonly name: string; readonly description: string; readonly content: string }
-
-/** A real one-line description: not empty, not a YAML block marker, and not a folded or literal block. */
-function descriptionOf(id: string, raw: string | undefined): string {
-  const text = raw?.trim()
-  if (!text || text.startsWith(">") || text.startsWith("|") || text.includes("\n") || text.includes("\r")) {
-    throw invalid(`skills/${id}/SKILL.md needs a one-line description: not empty, not ">", "|", or a block scalar.`)
-  }
-  return text
-}
-
-/** Parses the frontmatter strictly: exactly `name` (equal to the folder) and a one-line `description`. */
-export function parseSkill(id: string, text: string): ParsedSkill {
-  const source = text.replace(/\r\n/g, "\n")
-  const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(source)
-  if (!match) throw invalid(`skills/${id}/SKILL.md has no frontmatter block.`)
-  const fields = new Map<string, string>()
-  for (const line of match[1]!.split("\n")) {
-    const field = /^([a-z]+):\s*(.*)$/.exec(line)
-    if (!field || fields.has(field[1]!)) throw invalid(`skills/${id}/SKILL.md has an invalid frontmatter line: ${line.slice(0, 80)}.`)
-    fields.set(field[1]!, field[2]!.trim())
-  }
-  const name = fields.get("name")
-  if (fields.size !== 2 || name !== id) throw invalid(`skills/${id}/SKILL.md needs exactly a name equal to "${id}" and a description.`)
-  const description = descriptionOf(id, fields.get("description"))
-  const content = match[2]!.trimStart()
-  if (content.trim() === "") throw invalid(`skills/${id}/SKILL.md has no content.`)
-  return { name, description, content }
-}
-
-function invalid(message: string): DatabricksError {
-  return new DatabricksError("UNAVAILABLE", message, "Reinstall the plugin.")
-}
-
-export function skillPath(id: string): string {
-  return fileURLToPath(new URL(`../skills/${id}/SKILL.md`, import.meta.url))
-}
-
-type SkillContext = { readonly skill: Pick<Plugin.Context["skill"], "transform"> }
-
-export async function registerSkills(ctx: SkillContext): Promise<{ dispose(): Promise<void> }> {
-  const ids = await skillIds()
-  if (ids.length === 0) throw invalid("The package has no skills.")
-  const skills = await Promise.all(
-    ids.map(async (id) => {
-      const path = skillPath(id)
-      const text = await readFile(path, "utf8").catch(() => {
-        throw invalid(`skills/${id}/SKILL.md is missing or unreadable.`)
-      })
-      return { id, path, ...parseSkill(id, text) }
-    }),
-  )
-  return ctx.skill.transform((editor) => {
+/**
+ * Register the checked skills with the host. The transform's `dispose` is the setup cleanup, like every other
+ * registration. A plugin that adds a skill directory calls this once, from `setup`.
+ */
+export async function registerSkills(
+  context: Plugin.Context,
+  skills: readonly SkillFile[] = readSkills(),
+): Promise<Awaited<ReturnType<Plugin.Context["skill"]["transform"]>>> {
+  return context.skill.transform((editor) => {
     for (const skill of skills) {
       editor.add({
         id: Skill.ID.make(skill.id),
         name: Skill.Name.make(skill.name),
         description: skill.description,
-        // The host brands absolute paths; this one comes from the package location.
         path: skill.path as Skill.Info["path"],
         content: skill.content,
       })

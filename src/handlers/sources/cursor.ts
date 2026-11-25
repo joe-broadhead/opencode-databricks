@@ -4,9 +4,9 @@
  * shown. It describes **what has been listed by end time, and where unlisted items can still be**, never a set of every
  * id listed (a hash set overflows under ordinary load, which is what the first design did):
  *
- * - `e`, `k`: the **listing line**. Every final item whose `(end, id hash)` is at or before `(e, k)` has been listed (or
- *   was covered by a gap). `k` is the 12-hex id hash of the last item listed at `e` when a page was cut there; without
- *   `k` every item ending at `e` is listed. Ties at one millisecond are walked by the id hash, so the order is total.
+ * - `e`, `k`: the **listing line**. Every final item whose `(end, external_id)` is at or before `(e, k)` has been listed
+ *   (or was covered by a gap). `k` is the external id of the last item listed at `e` when a page was cut there; without
+ *   `k` every item ending at `e` is listed. Ties at one millisecond are walked by external id, so the order is total.
  * - `l`: the **running floor**. Every item still running at the last full page, behind the line and not in `z`,
  *   started at or after `l`. A statement or run that started long before it finished is found again by scanning from
  *   `l` by start time, the only filter both APIs have.
@@ -30,21 +30,23 @@
  *   last seen: the line then waits that long, so the episode loses nothing more; it narrows a day after the last proof.
  * - `g`: 1 when this read (pages up to `more: false`) already answered a gap, so it is not answered again.
  *
- * Worst case: `Z_CHARS` (540) of tracked items, plus the numbers, the tie hash, the lag state and the binding, is 1,006 characters (see
- * `test/unit/sources/cursor.test.ts`), under the contract's 1,024.
+ * Worst case: `Z_CHARS` (320) of tracked items, `K_CHARS` (240) of external id, the numbers, the lag state and the
+ * binding stay under the contract's 1,024-character bound.
  */
 import { MAX_CURSOR_LENGTH, canonicalScope, decodeBoundCursor, encodeBoundCursor, type Scope } from "@we-the-rebel-alliance/plugin-contract/cursor"
 import { NAMESPACE } from "../../constants.js"
 import { sourceError } from "./errors.js"
 
 /** The tracked ids' budget, in characters of the packed string. */
-export const Z_CHARS = 540
+export const Z_CHARS = 320
+/** The listing line's external-id budget, so the cursor stays under its 1,024-character bound. */
+export const K_CHARS = 240
 export const HASH_BYTES = 6
 
 export interface CursorState {
   /** The listing line, ms. */
   e: number
-  /** The tie hash at `e` (12 hex); absent: every item ending at `e` is listed. */
+  /** The external id of the last item listed at `e`; absent: every item ending at `e` is listed. */
   k?: string
   /** The scan floor, ms. */
   l: number
@@ -82,6 +84,9 @@ export const bindingOf = (source: string, account: string, scope: Scope | undefi
 })
 
 export function encodeState(binding: Binding, state: CursorState): string {
+  if (state.k !== undefined && (state.k.length === 0 || state.k.length > K_CHARS || !state.k.includes(":"))) {
+    throw sourceError("UNAVAILABLE", "The read's position did not fit in a cursor.", "Start again with since.")
+  }
   const plain: Record<string, unknown> = { e: state.e, l: state.l }
   if (state.k !== undefined) plain.k = state.k
   if (state.n !== undefined) plain.n = state.n
@@ -129,6 +134,9 @@ export function decodeState(binding: Binding, cursor: string): Decoded {
   }
   const raw = decoded.state as Record<string, unknown>
   if (!finite(raw.e) || !finite(raw.l)) return { ok: false, code: "CURSOR_INVALID", what: "The cursor does not carry this source's position." }
+  if (raw.k !== undefined && (typeof raw.k !== "string" || raw.k.length === 0 || raw.k.length > K_CHARS || !raw.k.includes(":"))) {
+    return { ok: false, code: "CURSOR_INVALID", what: "The cursor's listing line is not an external id." }
+  }
   const l = Math.min(raw.l, raw.e + 1)
   return {
     ok: true,
@@ -137,7 +145,7 @@ export function decodeState(binding: Binding, cursor: string): Decoded {
       l,
       ...(finite(raw.n) ? { n: Math.min(raw.n, raw.e + 1) } : {}),
       ...(finite(raw.m) ? { m: raw.m } : {}),
-      ...(typeof raw.k === "string" && /^[0-9a-f]{12}$/u.test(raw.k) ? { k: raw.k } : {}),
+      ...(typeof raw.k === "string" ? { k: raw.k } : {}),
       ...(typeof raw.z === "string" && raw.z.length > 0 && raw.z.length <= Z_CHARS ? { z: raw.z } : {}),
       ...(finite(raw.d) && raw.d >= 1 ? { d: raw.d } : {}),
       ...(finite(raw.t) ? { t: raw.t } : {}),
@@ -159,8 +167,8 @@ export function hashOf(id: string): string {
   return hash.toString(16).padStart(16, "0").slice(-HASH_BYTES * 2)
 }
 
-/** True when `(end, hash)` is after the listing line `(e, k)`. */
-export const after = (end: number, hash: string, e: number, k: string | undefined): boolean => end > e || (end === e && k !== undefined && hash > k)
+/** True when `(end, externalId)` is after the listing line `(e, k)`. */
+export const after = (end: number, externalId: string, e: number, k: string | undefined): boolean => end > e || (end === e && k !== undefined && externalId > k)
 
 export const iso = (ms: number): string => new Date(ms).toISOString()
 
