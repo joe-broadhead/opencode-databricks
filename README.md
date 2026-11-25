@@ -20,8 +20,8 @@ The plugin holds the credentials, one OpenCode integration per account alias. Wi
 ## Access levels
 
 `access` is one of `all` (the default), `ask-changes` or `read-only`. Reads run at every level. Writes, deletes, shares
-and exports run, ask or are refused according to the level. `databricks.start` is a write: it asks at `ask-changes` and
-never runs at `read-only`.
+and exports run, ask or are refused according to the level. `databricks.start` is a write with effect `ask`: it asks
+at every level where it may run, and never runs at `read-only`.
 
 <!-- generated:capabilities -->
 ### Methods

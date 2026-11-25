@@ -858,7 +858,8 @@
         "operations": [
           "sql.warehouses.get",
           "sql.warehouses.start"
-        ]
+        ],
+        "effect": "ask"
       },
       "probe": {
         "class": "read",

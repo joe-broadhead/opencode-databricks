@@ -16,8 +16,8 @@ answers the alias and its owner without reading content.
 - `databricks.history`, `databricks.jobs` and `databricks.workspace` read Query History, jobs and workspace paths.
 - `databricks.events_list` reads the `databricks.queries` and `databricks.runs` event sources.
 
-A read never starts a warehouse. If the warehouse is stopped, call `databricks.start` first; it is a write and asks at
-`ask-changes`. At `read-only` it is refused.
+A read never starts a warehouse. If the warehouse is stopped, call `databricks.start` first; it is a write with effect
+`ask`, so it asks at every level where it may run. At `read-only` it is refused.
 
 ## Change
 

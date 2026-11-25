@@ -29,9 +29,10 @@ A plan answers a preview and the commit method; committing takes only `{ planId 
 `run` is class `delete`: a SQL script, a job run or a notebook run can change or drop anything its identity can reach,
 and its effects are not known before it runs. The stricter class is the safe one.
 
-`start` is class `write` and it is the only method that starts a warehouse. A read or a plan never starts one: a stopped
-warehouse refuses with the start method as its next step, so the start's ask and its bill are never hidden inside a
-change the person approved for another reason.
+`start` is class `write` with effect `ask`: it is the only method that starts a warehouse, and it asks at every level
+where it may run (it is off at `read-only`). A read or a plan never starts one: a stopped warehouse refuses with the
+start method as its next step, so the start's ask and its bill are never hidden inside a change the person approved for
+another reason.
 
 <!-- generated:capabilities -->
 ### Methods

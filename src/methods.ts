@@ -261,8 +261,9 @@ export const METHODS = [
     name: "start",
     class: "write",
     accounts: "optional",
+    effect: "ask",
     operations: ["sql.warehouses.get", "sql.warehouses.start"],
-    description: "Start a stopped SQL warehouse. It bills until it auto-stops.",
+    description: "Start a stopped SQL warehouse. It always asks, and bills until it auto-stops.",
   },
   {
     name: "probe",
