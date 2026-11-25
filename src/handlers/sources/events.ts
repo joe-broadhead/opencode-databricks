@@ -221,8 +221,7 @@ export async function eventsPage(deps: Deps, request: PageRequest): Promise<Even
   const scope = value.scope as Scope | undefined
   const binding = bindingOf(request.source, account, scope)
   const limit = Math.max(1, Math.min(value.limit ?? 100, adapter.limitMax))
-  // The source handler has already asserted `databricks.read` on every declared operation, after the contract's method
-  // gate; this page now starts the provider work.
+  // The contract's method gate has already asserted this method's action; this page now starts the provider work.
   let state: CursorState | undefined
   if (value.cursor !== undefined) {
     const decoded = decodeState(binding, value.cursor)

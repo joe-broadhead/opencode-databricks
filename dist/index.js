@@ -188820,28 +188820,6 @@ async function savedList(deps, input, call) {
   return { options };
 }
 
-// src/handlers/sources/permission.ts
-async function assertReadOperations(deps, call, method, account) {
-  for (const operation of methodOf(method).operations) {
-    const resource = `${account}:${operation}`;
-    try {
-      await deps.permission.assert({
-        sessionID: call.sessionID,
-        action: "databricks.read",
-        resources: [resource],
-        ...call.messageID && call.id ? { source: { type: "tool", messageID: call.messageID, id: call.id } } : {}
-      });
-    } catch {
-      if (call.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.");
-      throw new DatabricksError(
-        "PERMISSION_DENIED",
-        `The source read was refused: databricks.read on ${resource}.`,
-        "Allow databricks.read for this operation, or change the rule that denied it."
-      );
-    }
-  }
-}
-
 // src/handlers/sources/probe.ts
 var SOURCES = {
   queries: "queries",
@@ -188860,7 +188838,6 @@ var probe = async (input, call, deps) => {
   if (aliases.length > 0 && !aliases.includes(account)) {
     throw new RegisterError(refusal("ACCOUNT_UNKNOWN", `This plugin has no account "${account}".`, `Pass one of: ${aliases.join(", ")}.`));
   }
-  await assertReadOperations(deps, call, "probe", account);
   const host2 = deps.auth.account(account).host;
   const me = await deps.databricks.me(account, call.signal);
   recordsOf(deps).put(account, host2, { userId: me.id, userName: me.userName, ...me.displayName ? { displayName: me.displayName } : {}, at: deps.clock.now() });
@@ -188871,7 +188848,6 @@ var probe_default = probe;
 // src/handlers/saved_list.ts
 var handler = async (input, call, deps) => {
   const account = input.account ?? Object.keys(deps.options.accounts ?? {})[0] ?? "default";
-  await assertReadOperations(deps, call, "saved_list", account);
   return savedList(deps, { account }, call);
 };
 var saved_list_default = handler;
@@ -188879,7 +188855,6 @@ var saved_list_default = handler;
 // src/handlers/sources/index.ts
 var eventsList = async (input, call, deps) => {
   const account = input.account ?? Object.keys(deps.options.accounts ?? {})[0] ?? "default";
-  await assertReadOperations(deps, call, "events_list", account);
   const request = {
     account,
     source: input.source ?? "queries",
@@ -188894,7 +188869,6 @@ var eventsList = async (input, call, deps) => {
 };
 var savedReadHandler = async (input, call, deps) => {
   const account = input.account ?? Object.keys(deps.options.accounts ?? {})[0] ?? "default";
-  await assertReadOperations(deps, call, "saved_read", account);
   return savedRead(deps, { account, ...input.query === void 0 ? {} : { query: input.query }, ...input.sha === void 0 ? {} : { sha: input.sha }, ...input.scope === void 0 ? {} : { scope: input.scope } }, call);
 };
 var SOURCE_HANDLERS = { events_list: eventsList, saved_read: savedReadHandler };
@@ -189197,10 +189171,7 @@ var src_default = Plugin.define({
         auth: auth.port,
         databricks: createDatabricksClient({ auth: auth.port }),
         ledger: createLedger(),
-        clock: { now: Date.now, uuid: () => crypto.randomUUID() },
-        permission: {
-          assert: (input) => ctx.permission.assert(input)
-        }
+        clock: { now: Date.now, uuid: () => crypto.randomUUID() }
       };
       const deps = { ...ports, reads: createReadGuard(ports) };
       const handlers = createHandlers({

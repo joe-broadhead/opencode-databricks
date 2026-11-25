@@ -8,7 +8,6 @@ import type { Deps } from "../deps.js"
 import type { Handler } from "../types.js"
 import { ownerOf } from "./owner.js"
 import { recordsOf } from "./records.js"
-import { assertReadOperations } from "./permission.js"
 
 /** The source ids a probe may name: the short name or the descriptor's id. */
 const SOURCES: Readonly<Record<string, string>> = {
@@ -29,7 +28,6 @@ const probe: Handler<"probe"> = async (input, call, deps) => {
   if (aliases.length > 0 && !aliases.includes(account)) {
     throw new RegisterError(refusal("ACCOUNT_UNKNOWN", `This plugin has no account "${account}".`, `Pass one of: ${aliases.join(", ")}.`))
   }
-  await assertReadOperations(deps, call, "probe", account)
   const host = deps.auth.account(account).host
   const me = await deps.databricks.me(account, call.signal)
   recordsOf(deps).put(account, host, { userId: me.id, userName: me.userName, ...(me.displayName ? { displayName: me.displayName } : {}), at: deps.clock.now() })

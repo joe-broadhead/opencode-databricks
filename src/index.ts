@@ -13,7 +13,7 @@ import { createReadGuard } from "./provider/guards/read.js"
 import { createLedger } from "./provider/ledger.js"
 import { createHandlers } from "./handlers/index.js"
 import { readSkills, registerSkills } from "./skills.js"
-import type { Deps, PermissionRequest } from "./handlers/deps.js"
+import type { Deps } from "./handlers/deps.js"
 
 export default Plugin.define({
   id: manifest.plugin.name,
@@ -32,9 +32,6 @@ export default Plugin.define({
         databricks: createDatabricksClient({ auth: auth.port }),
         ledger: createLedger(),
         clock: { now: Date.now, uuid: () => crypto.randomUUID() },
-        permission: {
-          assert: (input: PermissionRequest) => ctx.permission.assert(input as never),
-        },
       }
       const deps: Deps = { ...ports, reads: createReadGuard(ports) }
       const handlers = createHandlers({

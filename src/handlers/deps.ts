@@ -6,18 +6,6 @@ import type { Access } from "../constants.js"
 import type { Options } from "../options.js"
 import type { AuthPort, Clock, DatabricksPort, LedgerPort, ReadGuardPort } from "../ports.js"
 
-/** The one permission assert a source read needs: `ctx.permission.assert`, with the call's source when known. */
-export interface PermissionRequest {
-  readonly sessionID: string
-  readonly action: string
-  readonly resources: readonly string[]
-  readonly source?: { readonly type: "tool"; readonly messageID: string; readonly id: string }
-}
-
-export interface PermissionPort {
-  assert(input: PermissionRequest): Promise<void>
-}
-
 export interface Deps {
   readonly options: Options
   readonly access: Access
@@ -27,6 +15,4 @@ export interface Deps {
   readonly reads: ReadGuardPort
   readonly ledger: LedgerPort
   readonly clock: Clock
-  /** The host's permission gate, for the source reads' `databricks.read` asserts. */
-  readonly permission: PermissionPort
 }
