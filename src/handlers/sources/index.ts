@@ -1,7 +1,7 @@
 /**
  * The three source reads (contract §7): `events_list` for the two event sources, `saved_read` for the snapshot, and the
- * `probe`/`saved_list` reads a consumer uses at bind time. The contract's register owns the account, the permission gate
- * and the answer schema; these handlers own the provider work.
+ * `probe`/`saved_list` reads a consumer uses at bind time. The contract's register owns the account, the method gate and
+ * the answer schema; these handlers own the provider work and the legacy `databricks.read` operation gate.
  */
 import type { Deps } from "../deps.js"
 import type { Call, Handler } from "../types.js"
