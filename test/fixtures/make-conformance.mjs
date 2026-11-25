@@ -59,7 +59,7 @@ const fixture = {
   plugin: pkg.name,
   namespace: manifest.plugin.summary,
   accounts: {
-    real: true,
+    real: false,
     aliases: ["work", "personal"],
     required: { method: "catalog", code: "ACCOUNT_REQUIRED" },
     unknown: { method: "catalog", account: "nobodyhere", code: "ACCOUNT_UNKNOWN" },
