@@ -1,16 +1,17 @@
 // The built plugin in the real embedded OpenCode 2.4.1 host: every packaged skill must be registered after load.
 import { afterAll, describe, expect, it } from "vitest"
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { Plugin } from "@opencode/plugin"
 import type { OpenCodeClient } from "@opencode/client"
+import { expectedSkills } from "./frontmatter.js"
 
 const repo = realpathSync(fileURLToPath(new URL("../..", import.meta.url)))
 const work = mkdtempSync(join(tmpdir(), "databricks-skills-"))
-const expected = readdirSync(join(repo, "skills"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+const expected = expectedSkills(repo)
 
 afterAll(() => rmSync(work, { recursive: true, force: true }))
 
@@ -39,16 +40,23 @@ describe("the packaged skills", () => {
     })) as OpenCodeClient & { close(): Promise<void> }
     try {
       const deadline = Date.now() + 60_000
-      let ids: string[] = []
+      let registered: { id: string; description: string | undefined }[] = []
       while (Date.now() < deadline) {
         const answer = await client.skill.list({ location: { directory: work } })
-        ids = answer.data.map((skill) => String(skill.id))
-        if (ready && expected.every((id) => ids.includes(id))) break
+        registered = answer.data.map((skill) => ({ id: String(skill.id), description: typeof skill.description === "string" ? skill.description : undefined }))
+        if (ready && expected.every((skill) => registered.some((item) => item.id === skill.id && item.description === skill.description))) break
         await new Promise((resolve) => setTimeout(resolve, 100))
       }
       expect(ready).toBe(true)
       expect(expected.length).toBeGreaterThan(0)
-      for (const id of expected) expect(ids, id).toContain(id)
+      for (const skill of expected) {
+        const actual = registered.find((item) => item.id === skill.id)
+        expect(actual, skill.id).toBeDefined()
+        expect(actual?.description, skill.id).toBe(skill.description)
+        expect(skill.description.trim(), skill.id).not.toBe("")
+        expect(skill.description, skill.id).not.toBe(">")
+        expect(skill.description, skill.id).not.toBe("|")
+      }
     } finally {
       await client.close()
     }

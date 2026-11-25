@@ -23,6 +23,15 @@ export async function skillIds(): Promise<string[]> {
 
 type ParsedSkill = { readonly name: string; readonly description: string; readonly content: string }
 
+/** A real one-line description: not empty, not a YAML block marker, and not a folded or literal block. */
+function descriptionOf(id: string, raw: string | undefined): string {
+  const text = raw?.trim()
+  if (!text || text.startsWith(">") || text.startsWith("|") || text.includes("\n") || text.includes("\r")) {
+    throw invalid(`skills/${id}/SKILL.md needs a one-line description: not empty, not ">", "|", or a block scalar.`)
+  }
+  return text
+}
+
 /** Parses the frontmatter strictly: exactly `name` (equal to the folder) and a one-line `description`. */
 export function parseSkill(id: string, text: string): ParsedSkill {
   const source = text.replace(/\r\n/g, "\n")
@@ -35,8 +44,8 @@ export function parseSkill(id: string, text: string): ParsedSkill {
     fields.set(field[1]!, field[2]!.trim())
   }
   const name = fields.get("name")
-  const description = fields.get("description")
-  if (fields.size !== 2 || name !== id || !description) throw invalid(`skills/${id}/SKILL.md needs exactly a name equal to "${id}" and a description.`)
+  if (fields.size !== 2 || name !== id) throw invalid(`skills/${id}/SKILL.md needs exactly a name equal to "${id}" and a description.`)
+  const description = descriptionOf(id, fields.get("description"))
   const content = match[2]!.trimStart()
   if (content.trim() === "") throw invalid(`skills/${id}/SKILL.md has no content.`)
   return { name, description, content }
