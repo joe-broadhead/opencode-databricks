@@ -12224,7 +12224,6 @@ var WARNINGS = {
   AUTO_STOP_LONG: "The warehouse auto-stops after more than 30 minutes.",
   SCOPE_WIDER_THAN_FEATURES: "The sign-in's scopes are wider than the features configured.",
   ROLE_CAN_WRITE: "The role holds a grant beyond reading.",
-  STARTED_WAREHOUSE: "This call started a stopped warehouse, which bills until it auto-stops.",
   CLASSIFICATION_DRIFT: "Query History reported a different statement type, and it was recorded.",
   BUDGET_OVER: "An opt-in budget with action warn is exceeded; the estimate is in status.",
   SPEND_UNAVAILABLE: "system.billing.usage could not be read for the reconciliation: no grant, no running default warehouse, or the statement failed.",
@@ -19251,7 +19250,7 @@ var Param = object2({
   type: string4().max(64).optional()
 });
 var Column = object2({ name: string4(), type: string4(), nullable: boolean4().optional(), comment: string4().optional(), mask: string4().optional() });
-var WarehouseUse = object2({ id: WarehouseId, name: string4().optional(), started: boolean4(), usdPerHour: number4().optional() });
+var WarehouseUse = object2({ id: WarehouseId, name: string4().optional(), usdPerHour: number4().optional() });
 var Truncation = object2({ rows: boolean4().optional(), cells: boolean4().optional(), bytes: boolean4().optional() });
 var SqlText = string4().min(1).max(1024 * 1024);
 var Wait = number4().int().min(0).max(600);
@@ -19315,11 +19314,11 @@ var Inputs = {
   plan_admin: PlanInput,
   events_list: strictObject2({
     account: AccountInput,
-    source: _enum2(["queries", "runs"]),
+    /** The contract makes `source` optional and accepts a date-only `since`; the handler defaults to queries. */
+    source: string4().max(64).optional(),
     cursor: string4().max(65536).optional(),
-    /** The contract input's `since` (review of #8, request 5): where a first read starts, with an offset. */
-    since: string4().datetime({ offset: true }).optional(),
-    limit: number4().int().min(1).max(1e3).optional(),
+    since: string4().optional(),
+    limit: number4().int().min(1).max(500).optional(),
     scope: record3(string4(), array2(string4())).optional()
   }),
   saved_read: strictObject2({
@@ -177038,11 +177037,11 @@ async function ensureWarehouse(deps, input) {
       throw new DatabricksError("UNAVAILABLE", `${describe4(warehouse, deps.options)} is ${warehouse.state.toLowerCase()}, and this source never starts one.`, "Call databricks_start for it, or pick a warehouse that is already running.");
     }
     checkRunSize(deps, warehouse);
-    return { warehouse, started: false, warnings: [] };
+    return { warehouse, warnings: [] };
   }
   if (state === "ready") {
     checkRunSize(deps, warehouse);
-    return { warehouse, started: false, warnings: [] };
+    return { warehouse, warnings: [] };
   }
   if (state === "hopeless") throwRefusal(stoppedRefusal(warehouse, deps.options, warehouse.state));
   if (state === "starting") {
@@ -177051,7 +177050,7 @@ async function ensureWarehouse(deps, input) {
       throw new DatabricksError("UNAVAILABLE", `${describe4(warehouse, deps.options)} is starting and did not reach RUNNING within ${input.wait} seconds.`, "Try again in a few seconds.");
     }
     checkRunSize(deps, running);
-    return { warehouse: running, started: false, warnings: [] };
+    return { warehouse: running, warnings: [] };
   }
   throwRefusal(stoppedRefusal(warehouse, deps.options, warehouse.state));
 }
@@ -177095,8 +177094,8 @@ async function prepareRead(deps, request, signal) {
   if (analysis.pathSensitive.length > 0 || resolved.pathSensitive.length > 0) {
     await assertPathSafe({ databricks: deps.databricks, now: deps.clock.now }, { account: account.alias, warehouseId: ensured.warehouse.id, sessionID: request.sessionID }, signal);
   }
-  const warnings = dedupe([...resolved.warnings, ...warehouseWarnings, ...ensured.started ? [{ code: "STARTED_WAREHOUSE", message: WARNINGS.STARTED_WAREHOUSE }] : []]);
-  return { sent: analysis.sent, warehouseId: ensured.warehouse.id, warehouse: ensured.warehouse, started: ensured.started, tables: resolved.tables, enforcement: account.enforcement, warnings };
+  const warnings = dedupe([...resolved.warnings, ...warehouseWarnings]);
+  return { sent: analysis.sent, warehouseId: ensured.warehouse.id, warehouse: ensured.warehouse, tables: resolved.tables, enforcement: account.enforcement, warnings };
 }
 function createReadGuard(deps) {
   return { prepare: (request, signal) => prepareRead(deps, request, signal) };
@@ -177303,7 +177302,7 @@ function failureOf2(answer, wait) {
   return void 0;
 }
 function warehouseUse(prepared, deps) {
-  return { id: prepared.warehouse.id, name: prepared.warehouse.name, started: prepared.started, usdPerHour: usdPerHour(prepared.warehouse, deps.options) };
+  return { id: prepared.warehouse.id, name: prepared.warehouse.name, usdPerHour: usdPerHour(prepared.warehouse, deps.options) };
 }
 var estimateWarning = { code: "ESTIMATE_ONLY", message: WARNINGS.ESTIMATE_ONLY };
 
@@ -177682,6 +177681,7 @@ var query = async (input, call, deps) => {
   if (answer.state === "PENDING" || answer.state === "RUNNING") {
     return {
       state: "running",
+      trust: "untrusted",
       statementId: answer.statementId,
       warehouse: warehouseUse(prepared, deps),
       ...warnings.length ? { warnings } : {},
@@ -177934,7 +177934,7 @@ function warehouseNote(warehouse, intent, deps) {
   return `Runs on ${describe4(warehouse, deps.options)}; the warehouse is already running.`;
 }
 function warehouseUseOf(warehouse, deps) {
-  return { id: warehouse.id, name: warehouse.name, started: false, usdPerHour: usdPerHour(warehouse, deps.options) };
+  return { id: warehouse.id, name: warehouse.name, usdPerHour: usdPerHour(warehouse, deps.options) };
 }
 async function waitForRunning2(deps, account, warehouse, wait, signal) {
   const seconds = Math.max(0, wait);
@@ -177959,11 +177959,11 @@ async function ensureChangeWarehouse(deps, input) {
     }
   }
   const state = stateClass(warehouse.state);
-  if (state === "ready") return { warehouse, started: false, warnings: [] };
+  if (state === "ready") return { warehouse, warnings: [] };
   if (state === "starting") {
     const running = await waitForRunning2(deps, input.account, warehouse, input.wait, input.signal);
     if (!running) throw planChanged(`The warehouse ${describe4(warehouse, deps.options)} is still starting and did not reach RUNNING within ${input.wait} seconds.`);
-    return { warehouse: running, started: false, warnings: [] };
+    return { warehouse: running, warnings: [] };
   }
   throw planChanged(`The warehouse ${describe4(warehouse, deps.options)} is ${warehouse.state.toLowerCase()} now, and this plan needs it running.`, `Start it with databricks_start({ warehouse: ${JSON.stringify(warehouse.id)} }), then commit the plan again.`);
 }
@@ -180154,7 +180154,7 @@ var save = async (input, call, deps) => {
     bytes: written.bytes,
     sha256: written.sha256,
     statementId: written.statementId,
-    // This call's own cost: the warehouse it ran on, whether this call started it, and its estimated $/hour.
+    // This call's own cost: the warehouse it ran on and its estimated $/hour.
     warehouse: warehouseUse(prepared, deps),
     charts: { path: written.target, format, rows: written.rows, fitsCharts: fit },
     ...warnings.length ? { warnings } : {},
@@ -181478,7 +181478,7 @@ var eventsList = async (input, call, deps) => {
   const account = input.account ?? Object.keys(deps.options.accounts ?? {})[0] ?? "default";
   const request = {
     account,
-    source: input.source,
+    source: input.source ?? "queries",
     ...input.cursor === void 0 ? {} : { cursor: input.cursor },
     ...input.since === void 0 ? {} : { since: input.since },
     ...input.limit === void 0 ? {} : { limit: input.limit },

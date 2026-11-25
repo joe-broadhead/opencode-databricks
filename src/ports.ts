@@ -384,8 +384,6 @@ export interface PreparedRead {
   readonly warehouseId: string
   /** The warehouse as the guard last read it (RUNNING): its size, type and clusters, for cost text and the ledger. */
   readonly warehouse: Warehouse
-  /** This call started the warehouse (STARTED_WAREHOUSE). */
-  readonly started: boolean
   /** Resolved tables, `catalog.schema.table`. */
   readonly tables: readonly string[]
   /** `AccountInfo.enforcement`, read when the read was prepared. */

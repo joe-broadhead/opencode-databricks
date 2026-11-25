@@ -107,6 +107,15 @@ describe("a same-timestamp page boundary", () => {
   })
 })
 
+describe("the published events_list input", () => {
+  it("defaults a missing source and accepts a date-only since", async () => {
+    const page = (await eventsList({ account: "work", since: "2026-11-25" }, call, deps("queries"))) as EventsListResult
+    expect(page.source).toBe("queries")
+    expect(page.trust).toBe("untrusted")
+    expect(page.events.length).toBeGreaterThan(0)
+  })
+})
+
 describe("a since filter across cursor pages", () => {
   it("queries: since survives cursor paging and drops the earlier statement", async () => {
     const found = await pages("queries", { since: new Date(NOW - 2 * 60 * 60_000).toISOString(), includeBefore: true })

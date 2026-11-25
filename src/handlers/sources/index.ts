@@ -16,7 +16,7 @@ const eventsList: Handler<"events_list"> = async (input, call, deps) => {
   const account = input.account ?? Object.keys(deps.options.accounts ?? {})[0] ?? "default"
   const request: PageRequest = {
     account,
-    source: input.source,
+    source: (input.source ?? "queries") as PageRequest["source"],
     ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
     ...(input.since === undefined ? {} : { since: input.since }),
     ...(input.limit === undefined ? {} : { limit: input.limit }),

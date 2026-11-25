@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import * as z from "zod"
-import { LIST_OPTIONS_SCHEMA, PAGE_SCHEMA, PROBE_SCHEMA } from "@we-the-rebel-alliance/plugin-contract/events"
+import { EVENTS_LIST_INPUT_SCHEMA, LIST_OPTIONS_SCHEMA, PAGE_SCHEMA, PROBE_SCHEMA } from "@we-the-rebel-alliance/plugin-contract/events"
 import { STATUS_SCHEMA } from "@we-the-rebel-alliance/plugin-contract/accounts"
 import { createHandlers } from "../../src/handlers/index.js"
 import { Inputs, Outputs } from "../../src/handlers/schemas.js"
@@ -30,11 +30,14 @@ describe("the handler table", () => {
     }
   })
 
-  it("reuses the contract's page, probe, status and list-options schemas", () => {
+  it("reuses the contract's events input, page, probe, status and list-options schemas", () => {
+    expect(table.events_list?.input).toEqual(EVENTS_LIST_INPUT_SCHEMA)
     expect(table.events_list?.output).toEqual(PAGE_SCHEMA)
     expect(table.probe?.output).toEqual(PROBE_SCHEMA)
     expect(table.status?.output).toEqual(STATUS_SCHEMA)
     expect(table.saved_list?.output).toEqual(LIST_OPTIONS_SCHEMA)
+    expect(Inputs.events_list.safeParse({ since: "2026-11-25" }).success).toBe(true)
+    expect(Inputs.events_list.safeParse({ since: "2026-11-25", source: "queries" }).success).toBe(true)
   })
 
   it("requires trust on every plugin-owned success answer schema", () => {

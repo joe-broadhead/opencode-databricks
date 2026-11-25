@@ -53,6 +53,7 @@ const query: Handler<"query"> = async (input, call, deps) => {
   if (answer.state === "PENDING" || answer.state === "RUNNING") {
     return {
       state: "running",
+      trust: "untrusted",
       statementId: answer.statementId,
       warehouse: warehouseUse(prepared, deps),
       ...(warnings.length ? { warnings } : {}),

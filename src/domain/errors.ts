@@ -89,7 +89,6 @@ export const WARNINGS = {
   AUTO_STOP_LONG: "The warehouse auto-stops after more than 30 minutes.",
   SCOPE_WIDER_THAN_FEATURES: "The sign-in's scopes are wider than the features configured.",
   ROLE_CAN_WRITE: "The role holds a grant beyond reading.",
-  STARTED_WAREHOUSE: "This call started a stopped warehouse, which bills until it auto-stops.",
   CLASSIFICATION_DRIFT: "Query History reported a different statement type, and it was recorded.",
   BUDGET_OVER: "An opt-in budget with action warn is exceeded; the estimate is in status.",
   SPEND_UNAVAILABLE: "system.billing.usage could not be read for the reconciliation: no grant, no running default warehouse, or the statement failed.",

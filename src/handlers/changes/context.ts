@@ -116,9 +116,9 @@ export function warehouseNote(warehouse: Warehouse, intent: WarehouseIntent, dep
   return `Runs on ${describe(warehouse, deps.options)}; the warehouse is already running.`
 }
 
-/** The preview's `warehouse`, in the contract's shape. A plan starts nothing, so `started` is always false. */
-export function warehouseUseOf(warehouse: Warehouse, deps: Deps): { id: string; name: string; started: boolean; usdPerHour: number } {
-  return { id: warehouse.id, name: warehouse.name, started: false, usdPerHour: usdPerHour(warehouse, deps.options) }
+/** The preview's `warehouse`, in the contract's shape. A plan starts nothing. */
+export function warehouseUseOf(warehouse: Warehouse, deps: Deps): { id: string; name: string; usdPerHour: number } {
+  return { id: warehouse.id, name: warehouse.name, usdPerHour: usdPerHour(warehouse, deps.options) }
 }
 
 async function waitForRunning(deps: Deps, account: string, warehouse: Warehouse, wait: number, signal: AbortSignal): Promise<Warehouse | undefined> {
@@ -139,7 +139,6 @@ const planChanged = (detail: string, next = "Plan the change again, and show the
 
 export interface EnsuredChangeWarehouse {
   readonly warehouse: Warehouse
-  readonly started: boolean
   readonly warnings: readonly Warning[]
 }
 
@@ -171,11 +170,11 @@ export async function ensureChangeWarehouse(
     }
   }
   const state = stateClass(warehouse.state)
-  if (state === "ready") return { warehouse, started: false, warnings: [] }
+  if (state === "ready") return { warehouse, warnings: [] }
   if (state === "starting") {
     const running = await waitForRunning(deps, input.account, warehouse, input.wait, input.signal)
     if (!running) throw planChanged(`The warehouse ${describe(warehouse, deps.options)} is still starting and did not reach RUNNING within ${input.wait} seconds.`)
-    return { warehouse: running, started: false, warnings: [] }
+    return { warehouse: running, warnings: [] }
   }
   // This plugin never starts a warehouse inside a change: a start is its own method, so its ask is not hidden in a
   // plan the person approved for another reason. A stopped warehouse refuses here, before anything is sent.

@@ -74,7 +74,7 @@ export const Param = z.object({
 export const Column = z.object({ name: z.string(), type: z.string(), nullable: z.boolean().optional(), comment: z.string().optional(), mask: z.string().optional() })
 
 /** What a statement used of the warehouse. */
-export const WarehouseUse = z.object({ id: WarehouseId, name: z.string().optional(), started: z.boolean(), usdPerHour: z.number().optional() })
+export const WarehouseUse = z.object({ id: WarehouseId, name: z.string().optional(), usdPerHour: z.number().optional() })
 
 export const Truncation = z.object({ rows: z.boolean().optional(), cells: z.boolean().optional(), bytes: z.boolean().optional() })
 
@@ -145,11 +145,11 @@ export const Inputs = {
   plan_admin: PlanInput,
   events_list: z.strictObject({
     account: AccountInput,
-    source: z.enum(["queries", "runs"]),
+    /** The contract makes `source` optional and accepts a date-only `since`; the handler defaults to queries. */
+    source: z.string().max(64).optional(),
     cursor: z.string().max(65536).optional(),
-    /** The contract input's `since` (review of #8, request 5): where a first read starts, with an offset. */
-    since: z.string().datetime({ offset: true }).optional(),
-    limit: z.number().int().min(1).max(1000).optional(),
+    since: z.string().optional(),
+    limit: z.number().int().min(1).max(500).optional(),
     scope: z.record(z.string(), z.array(z.string())).optional(),
   }),
   saved_read: z.strictObject({

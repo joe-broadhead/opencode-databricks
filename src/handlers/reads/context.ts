@@ -151,8 +151,8 @@ export function failureOf(answer: StatementAnswer, wait: number): DatabricksErro
 }
 
 /** The result's `warehouse`, with the list price per hour the call's own estimates use. */
-export function warehouseUse(prepared: Pick<PreparedRead, "warehouse" | "started">, deps: Deps): { id: string; name: string; started: boolean; usdPerHour: number } {
-  return { id: prepared.warehouse.id, name: prepared.warehouse.name, started: prepared.started, usdPerHour: usdPerHour(prepared.warehouse, deps.options) }
+export function warehouseUse(prepared: Pick<PreparedRead, "warehouse">, deps: Deps): { id: string; name: string; usdPerHour: number } {
+  return { id: prepared.warehouse.id, name: prepared.warehouse.name, usdPerHour: usdPerHour(prepared.warehouse, deps.options) }
 }
 
 /** A warning for a cost figure: every price here is a list-price estimate (design §6.1). */

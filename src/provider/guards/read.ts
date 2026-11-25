@@ -29,7 +29,7 @@
  * **TOCTOU**, said plainly: a warehouse that stops between the check and the submit is restarted by Databricks [18]; the
  * guard's own view of the warehouse can be one round trip stale.
  */
-import { DatabricksError, WARNINGS } from "../../domain/errors.js"
+import { DatabricksError } from "../../domain/errors.js"
 import { sizeRank } from "../cost.js"
 import type { Options } from "../../options.js"
 import type { AuthPort, Clock, DatabricksPort, LedgerPort, PreparedRead, ReadGuardPort, ReadRequest, Warehouse } from "../../ports.js"
@@ -91,7 +91,6 @@ function checkRunSize(deps: GuardDeps, warehouse: Warehouse): void {
 
 interface EnsuredWarehouse {
   readonly warehouse: Warehouse
-  readonly started: boolean
   readonly warnings: readonly Warning[]
 }
 
@@ -107,11 +106,11 @@ async function ensureWarehouse(
       throw new DatabricksError("UNAVAILABLE", `${describe(warehouse, deps.options)} is ${warehouse.state.toLowerCase()}, and this source never starts one.`, "Call databricks_start for it, or pick a warehouse that is already running.")
     }
     checkRunSize(deps, warehouse)
-    return { warehouse, started: false, warnings: [] }
+    return { warehouse, warnings: [] }
   }
   if (state === "ready") {
     checkRunSize(deps, warehouse)
-    return { warehouse, started: false, warnings: [] }
+    return { warehouse, warnings: [] }
   }
   if (state === "hopeless") throwRefusal(stoppedRefusal(warehouse, deps.options, warehouse.state))
   if (state === "starting") {
@@ -120,7 +119,7 @@ async function ensureWarehouse(
       throw new DatabricksError("UNAVAILABLE", `${describe(warehouse, deps.options)} is starting and did not reach RUNNING within ${input.wait} seconds.`, "Try again in a few seconds.")
     }
     checkRunSize(deps, running)
-    return { warehouse: running, started: false, warnings: [] }
+    return { warehouse: running, warnings: [] }
   }
   // This plugin never starts a warehouse in a read: a start is its own method, with its own ask. A stopped warehouse
   // refuses here, before anything is sent.
@@ -172,8 +171,8 @@ export async function prepareRead(deps: GuardDeps, request: ReadRequest, signal:
   if (analysis.pathSensitive.length > 0 || resolved.pathSensitive.length > 0) {
     await assertPathSafe({ databricks: deps.databricks, now: deps.clock.now }, { account: account.alias, warehouseId: ensured.warehouse.id, sessionID: request.sessionID }, signal)
   }
-  const warnings = dedupe([...resolved.warnings, ...warehouseWarnings, ...(ensured.started ? [{ code: "STARTED_WAREHOUSE" as const, message: WARNINGS.STARTED_WAREHOUSE }] : [])])
-  return { sent: analysis.sent, warehouseId: ensured.warehouse.id, warehouse: ensured.warehouse, started: ensured.started, tables: resolved.tables, enforcement: account.enforcement, warnings }
+  const warnings = dedupe([...resolved.warnings, ...warehouseWarnings])
+  return { sent: analysis.sent, warehouseId: ensured.warehouse.id, warehouse: ensured.warehouse, tables: resolved.tables, enforcement: account.enforcement, warnings }
 }
 
 /** The `ReadGuardPort` implementation (design §16; package E's `saved_read` and `save` call it through the port). */

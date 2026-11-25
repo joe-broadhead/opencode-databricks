@@ -122,7 +122,7 @@ const save: Handler<"save"> = async (input, call, deps) => {
     bytes: written.bytes,
     sha256: written.sha256,
     statementId: written.statementId,
-    // This call's own cost: the warehouse it ran on, whether this call started it, and its estimated $/hour.
+    // This call's own cost: the warehouse it ran on and its estimated $/hour.
     warehouse: warehouseUse(prepared, deps),
     charts: { path: written.target, format, rows: written.rows, fitsCharts: fit },
     ...(warnings.length ? { warnings } : {}),

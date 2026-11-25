@@ -38,7 +38,8 @@ commit the result, and CI fails when the committed bundle is stale.
 
 `package.json` pins the contract to `github:we-the-rebel-alliance/plugin-contract#v0.0.0`. Move the pin to the
 contract's next release tag; never follow a branch. Never copy a contract module into this repository. The committed
-`package-lock.json` records the contract over `git+https`, so a fresh `npm ci` needs no SSH key.
+`package-lock.json` records the contract over `git+ssh`; CI rewrites GitHub SSH URLs to HTTPS with
+`git config url."https://github.com/".insteadOf "ssh://git@github.com/"`, so a fresh `npm ci` needs no SSH key.
 
 ## Pull requests
 

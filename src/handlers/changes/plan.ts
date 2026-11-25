@@ -27,7 +27,7 @@ interface Preview {
   readonly targets: readonly { readonly name: string; readonly type?: string; readonly owner?: string; readonly exists?: boolean }[]
   readonly tables: readonly string[]
   readonly functions: readonly string[]
-  readonly warehouse?: { readonly id: string; readonly name: string; readonly started: boolean; readonly usdPerHour: number }
+  readonly warehouse?: { readonly id: string; readonly name: string; readonly usdPerHour: number }
   readonly notes: readonly string[]
   readonly reason?: string
 }
