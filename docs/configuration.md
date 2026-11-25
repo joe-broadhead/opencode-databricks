@@ -36,7 +36,7 @@ An example with two accounts:
 {
   "plugins": [
     {
-      "package": "github:we-the-rebel-alliance/databricks-plugin#vX.Y.Z",
+      "package": "github:we-the-rebel-alliance/databricks-plugin#v0.0.0",
       "options": {
         "access": "ask-changes",
         "accounts": {

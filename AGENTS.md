@@ -37,13 +37,16 @@ credentials: one OpenCode integration per account alias. The provider client liv
 src/index.ts            one Plugin.define and one register call
 src/handlers/           one handler per method, the handler table, schemas and status
 src/handlers/sources/   events_list, saved_read, probe and the source adapters
-src/provider/           the Databricks client, the read path, SQL analysis and the parser
+src/provider/           the Databricks client, the read path, SQL analysis and the generated parser
+src/provider/sql/generated/  the parser generated from grammar/spark/
 src/accounts.ts         the account wiring the contract accounts module calls
 src/auth/               the integration sign-in and token
 src/options.ts          the options schema
 src/methods.ts          the code's method table, checked against package.json capabilities
-test/unit/              the method table, schemas, source pages, the read path
-test/fixtures/          the conformance recording
+grammar/                the pinned Apache Spark grammar and its action ports
+test/unit/              the method table, access rules, schemas, source pages, the read path and the cursor tie
+test/fixtures/          the conformance fixture builder
+fixtures/conformance.json  the recorded answers the kit replays
 ```
 
 ## Rules

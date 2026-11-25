@@ -1,15 +1,16 @@
 # Databricks plugin
 
 Databricks for OpenCode: Unity Catalog, SQL warehouses, queries, jobs and saved results, through the plugin contract.
-The plugin reads with your Databricks identity and never starts a warehouse unless you call `databricks.start`.
+The plugin reads with your Databricks identity, plans every change before committing it, and never starts a warehouse
+unless you call `databricks.start`.
 
 ## Install
 
 ```sh
-opencode plugin add github:we-the-rebel-alliance/databricks-plugin#vX.Y.Z
+opencode plugin add github:we-the-rebel-alliance/databricks-plugin#v0.0.0
 ```
 
-Replace `vX.Y.Z` with a published tag; the first release is `v0.0.0`. The plugin needs OpenCode 2.4.1 (the tested release). An unsupported release refuses with `HOST_UNTESTED`; set
+The plugin needs OpenCode 2.4.1 (the tested release). An unsupported release refuses with `HOST_UNTESTED`; set
 `allowUntestedHost: true` only to try one.
 
 ## Sign in
@@ -106,6 +107,27 @@ Every failure reads `CODE: What happened. Next step: What to do.`
 | `OPTIONS_INVALID` | the plugin's options do not match their schema |
 | `UNAVAILABLE` | the provider could not be reached |
 <!-- /generated:errors -->
+
+## Options
+
+- `access`: `all` (the default), `ask-changes` or `read-only`.
+- `accounts`: one profile per alias; each alias is one workspace, with optional `host`, `warehouse`, `catalog`, `schema`,
+  `features` and `mode`.
+- `allowUntestedHost`: start outside the tested OpenCode range (default `false`).
+
+The full schema, defaults and examples are in [docs/configuration.md](docs/configuration.md).
+
+## Troubleshooting
+
+Start with `databricks.status`: it reports each alias as `ready`, `needs_sign_in` or `error`, and names the agents that
+lack the generated access rules. Every failure is `CODE: What happened. Next step: What to do.` — follow the next step.
+A stopped warehouse is not started by a read or a plan; call `databricks.start` (it always asks). If a commit refuses
+with `PLAN_INVALID`, plan the change again and commit the new id.
+
+## Contract
+
+This plugin implements [plugin-contract](https://github.com/we-the-rebel-alliance/plugin-contract) v0.0.0 and the
+[plugin standard](https://github.com/we-the-rebel-alliance/plugin-contract/blob/master/docs/plugin-standard.md).
 
 ## Documentation
 

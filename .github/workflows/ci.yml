@@ -27,7 +27,10 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
+      - name: Fetch the contract over HTTPS
+        # The contract is a public repository, and an older lock may record its dependency over ssh; a runner has no key.
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
       # OpenCode installs plugins without lifecycle scripts, and no dev dependency needs them.
       - run: npm ci --ignore-scripts
-      # Typecheck, build, unit, pack, then plugin-kit check. The kit does not run the repository's own steps.
+      # Parser drift, typecheck, build, unit, pack, then plugin-kit check. The kit does not run these steps.
       - run: npm run check
