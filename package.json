@@ -31,17 +31,18 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "npm run lint && npm run typecheck && npm run bundle && npm run test:unit && npm run test:pack && npm run kit && npm run docs:check",
+    "check": "npm run lint && npm run typecheck && npm run bundle && npm run test:unit && npm run test:host && npm run test:pack && npm run kit && npm run docs:check",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "bundle": "node scripts/build.mjs",
     "test": "vitest run",
-    "test:unit": "vitest run",
+    "test:unit": "vitest run test/unit",
     "test:pack": "node test/pack/pack.mjs",
     "conformance": "plugin-kit conformance",
     "kit": "plugin-kit check",
     "docs": "plugin-kit docs",
     "lint": "biome check .",
-    "docs:check": "plugin-kit docs --check"
+    "docs:check": "plugin-kit docs --check",
+    "test:host": "vitest run test/host"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.9",

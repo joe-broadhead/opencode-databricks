@@ -20,11 +20,16 @@ npm run check
 
 | Step | What it proves |
 |---|---|
+| `npm run lint` | `biome check .` finds no lint error |
 | `npm run typecheck` | the sources and tests typecheck under strict settings |
 | `npm run bundle` | `dist/index.js` is built from `src/index.ts` with esbuild |
 | `npm run test:unit` | the method table, access rules, schemas, the read path, both events sources and the warehouse start |
-| `npm run test:pack` | the tarball holds `package.json`, `dist/index.js`, the skills, the assets, `README.md` and `LICENSE` |
+| `npm run test:host` | every packaged skill is registered on the real OpenCode 2.4.1 host |
+| `npm run test:pack` | the tarball holds `package.json`, `dist/index.js`, the skills, the assets, `README.md` and `LICENSE`, and it host-loads |
 | `plugin-kit check` | conformance T0 and T1, the doc file set, the forbidden patterns and no bundled kit |
+| `npm run docs:check` | every generated doc section matches the manifest |
+
+`biome.json` is strict JSON; its only exclusion beyond the template is `src/provider/sql/generated`, the ANTLR tree, which the parser tool generates rather than a person writing it.
 
 CI runs `npm run check` in one job, named `ci`. `dist/` is committed: after a source change, run `npm run bundle` and
 commit the result, and CI fails when the committed bundle is stale.

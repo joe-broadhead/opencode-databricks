@@ -27,6 +27,7 @@ credentials: one OpenCode integration per account alias. The provider client liv
 | `npm ci` | installs dev tooling only; there are no runtime dependencies |
 | `npm run check` | typecheck, bundle, unit and pack tests, then `plugin-kit check` |
 | `npm run bundle` | rebuilds `dist/index.js`, then commit it |
+| `npm run test:host` | every packaged skill is registered on the real OpenCode 2.4.1 host |
 | `npx plugin-kit check` | the contract's conformance, docs, forbidden and bundle checks |
 | `npx plugin-kit docs` | regenerates the generated doc sections from the manifest |
 | `npx plugin-kit record --account <alias>` | records and redacts conformance fixtures from a real account |
@@ -41,11 +42,13 @@ src/handlers/sources/   events_list, saved_read, probe and the source adapters
 src/provider/           the Databricks client, the read path, SQL analysis and the generated parser
 src/provider/sql/generated/  the parser generated from grammar/spark/
 src/accounts.ts         the account wiring the contract accounts module calls
+src/skills.ts           registers skills/*/SKILL.md with ctx.skill.transform
 src/auth/               the integration sign-in and token
 src/options.ts          the options schema
 src/methods.ts          the code's method table, checked against package.json capabilities
 grammar/                the pinned Apache Spark grammar and its action ports
 test/unit/              the method table, access rules, schemas, source pages, the read path and the cursor tie
+test/host/              the real-host skill registration proof
 test/fixtures/          the conformance fixture builder (writes fixtures/conformance.json)
 fixtures/conformance.json  the recorded answers the kit replays
 ```
