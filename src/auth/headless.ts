@@ -34,7 +34,7 @@ export type MintedToken = Omit<Token, "host">
 /** A token with the moment it stops being usable, shared by the modes that mint one. */
 export interface TokenCache {
   get(key: string, now: number): MintedToken | undefined
-  set(key: string, token: MintedToken): void
+  set(key: string, minted: MintedToken): void
 }
 
 export function tokenCache(): TokenCache {
@@ -45,8 +45,8 @@ export function tokenCache(): TokenCache {
       if (!token || token.expiresAt - CACHE_SKEW_MS <= now) return undefined
       return token
     },
-    set(key, token) {
-      entries.set(key, token)
+    set(key, minted) {
+      entries.set(key, minted)
     },
   }
 }
@@ -248,7 +248,7 @@ export async function cliToken(input: CliInput): Promise<MintedToken> {
   if (!access) throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI returned no access token for profile ${profile}.`, `Run databricks auth login --profile ${profile} again.`)
   if (Number.isNaN(expiry)) throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI returned no usable expiry for profile ${profile}.`, "Update the Databricks CLI, then run databricks auth login again.")
   if (expiry <= input.now()) throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI's cached token for profile ${profile} has expired.`, `Run databricks auth login --profile ${profile} again.`)
-  const token: MintedToken = { accessToken: access, expiresAt: expiry, scopes: ["all-apis"] }
-  input.cache.set(`cli:${alias}`, token)
-  return token
+  const minted: MintedToken = { accessToken: access, expiresAt: expiry, scopes: ["all-apis"] }
+  input.cache.set(`cli:${alias}`, minted)
+  return minted
 }

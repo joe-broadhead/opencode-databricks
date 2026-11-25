@@ -704,7 +704,7 @@ const queries: Adapter = {
         truncated = true
         break
       }
-      const token = pageToken
+      const cursor = pageToken
       const answer = await provider(() =>
         context.deps.databricks.history(
           context.account,
@@ -715,7 +715,7 @@ const queries: Adapter = {
             endMs: to,
             maxResults: 1000,
             includeMetrics: false,
-            ...(token === undefined ? {} : { pageToken: token }),
+            ...(cursor === undefined ? {} : { pageToken: cursor }),
           },
           context.call.signal,
         ),
@@ -746,8 +746,8 @@ const queries: Adapter = {
           truncated = true
           break
         }
-        const token = pageToken
-        const answer = await provider(() => context.deps.databricks.history(context.account, { ...filter, ...(token === undefined ? {} : { pageToken: token }) }, context.call.signal))
+        const cursor = pageToken
+        const answer = await provider(() => context.deps.databricks.history(context.account, { ...filter, ...(cursor === undefined ? {} : { pageToken: cursor }) }, context.call.signal))
         items.push(...answer.items)
         pageToken = answer.nextPageToken
         if (pageToken === undefined) break
@@ -834,11 +834,11 @@ const runs: Adapter = {
           truncated = true
           break
         }
-        const token = pageToken
+        const cursor = pageToken
         const answer = await provider(() =>
           context.deps.databricks.listRuns(
             context.account,
-            { ...(jobId === undefined ? {} : { jobId }), startTimeFrom: from, startTimeTo: to, limit: 25, ...(token === undefined ? {} : { pageToken: token }) },
+            { ...(jobId === undefined ? {} : { jobId }), startTimeFrom: from, startTimeTo: to, limit: 25, ...(cursor === undefined ? {} : { pageToken: cursor }) },
             context.call.signal,
           ),
         )

@@ -8,35 +8,38 @@ import type { HistoryQuery, RunInfo } from "../../src/ports.js"
 
 const NOW = Date.UTC(2026, 10, 25, 12, 0, 0)
 const END = NOW - 60 * 60_000
+const BEFORE = NOW - 3 * 60 * 60_000
 const HOST = "https://dbc-1.cloud.databricks.com"
 
-const query = (id: string): HistoryQuery => ({
+const query = (id: string, end = END): HistoryQuery => ({
   queryId: id,
   status: "FINISHED",
   statementType: "SELECT",
   warehouseId: "wh-small",
   userId: 42,
   userName: "ana@example.com",
-  queryStartTimeMs: END - 1_000,
-  queryEndTimeMs: END,
+  queryStartTimeMs: end - 1_000,
+  queryEndTimeMs: end,
   isFinal: true,
   rowsProduced: 1,
 })
 
-const run = (id: number): RunInfo => ({
+const run = (id: number, end = END): RunInfo => ({
   runId: id,
   jobId: 7,
   runName: "nightly",
   state: { lifeCycleState: "TERMINATED", resultState: "SUCCESS" },
-  startTime: END - 1_000,
-  endTime: END,
+  startTime: end - 1_000,
+  endTime: end,
   creatorUserName: "ana@example.com",
 })
 
 const QUERIES = [query("q-a"), query("q-b")]
 const RUNS = [run(101), run(102)]
+const BEFORE_QUERY = query("q-before", BEFORE)
+const BEFORE_RUN = run(100, BEFORE)
 
-function deps(source: "queries" | "runs"): Deps {
+function deps(source: "queries" | "runs", includeBefore = false): Deps {
   const base = {
     options: loadOptions({}),
     auth: {
@@ -46,13 +49,15 @@ function deps(source: "queries" | "runs"): Deps {
     },
     databricks: {
       me: async () => ({ id: "42", userName: "ana@example.com", displayName: "Ana" }),
-      history: async (_account: string, filter: { startMs?: number; endMs?: number }) => ({
-        items: QUERIES.filter((item) => item.queryStartTimeMs >= (filter.startMs ?? 0) && item.queryStartTimeMs <= (filter.endMs ?? Number.MAX_SAFE_INTEGER)),
-      }),
-      listRuns: async (_account: string, filter: { startTimeFrom?: number; startTimeTo?: number }) => ({
-        items: RUNS.filter((item) => item.startTime >= (filter.startTimeFrom ?? 0) && item.startTime <= (filter.startTimeTo ?? Number.MAX_SAFE_INTEGER)),
-      }),
-      getRun: async (_account: string, id: number) => RUNS.find((item) => item.runId === id)!,
+      history: async (_account: string, filter: { startMs?: number; endMs?: number }) => {
+        const rows = includeBefore ? [BEFORE_QUERY, ...QUERIES] : QUERIES
+        return { items: rows.filter((item) => item.queryStartTimeMs >= (filter.startMs ?? 0) && item.queryStartTimeMs <= (filter.endMs ?? Number.MAX_SAFE_INTEGER)) }
+      },
+      listRuns: async (_account: string, filter: { startTimeFrom?: number; startTimeTo?: number }) => {
+        const rows = includeBefore ? [BEFORE_RUN, ...RUNS] : RUNS
+        return { items: rows.filter((item) => item.startTime >= (filter.startTimeFrom ?? 0) && item.startTime <= (filter.startTimeTo ?? Number.MAX_SAFE_INTEGER)) }
+      },
+      getRun: async (_account: string, id: number) => (includeBefore ? [BEFORE_RUN, ...RUNS] : RUNS).find((item) => item.runId === id)!,
     },
     reads: { prepare: async () => { throw new Error("not used") } },
     ledger: { totals: async () => ({ startsToday: 0, dbuHoursToday: 0, startsSession: 0, dbuHoursSession: 0, estimate: true }), charge: async () => ({ recorded: true, totals: { startsToday: 0, dbuHoursToday: 0, startsSession: 0, dbuHoursSession: 0, estimate: true } }), starts: async () => [] },
@@ -64,25 +69,62 @@ function deps(source: "queries" | "runs"): Deps {
 }
 
 const call = { sessionID: "s", agent: "a", messageID: "m", id: "c", signal: new AbortController().signal, account: "work" }
+const external = (source: "queries" | "runs", id: string | number) => `${HOST.replace(/^https:\/\//u, "")}:${id}`
 
-async function both(source: "queries" | "runs", expected: readonly string[]) {
-  const d = deps(source)
-  const first = (await eventsList({ source, account: "work", since: new Date(NOW - 2 * 60 * 60_000).toISOString(), limit: 1 }, call, d)) as EventsListResult
-  const second = (await eventsList({ source, account: "work", cursor: first.cursor, limit: 1 }, call, d)) as EventsListResult
-  const ids = [...first.events, ...second.events].map((event) => event.external_id)
-  expect(ids).toHaveLength(expected.length)
-  expect(new Set(ids).size).toBe(expected.length)
-  expect([...ids].sort()).toEqual([...expected].sort())
-  expect(first.gap).toBeUndefined()
-  expect(second.gap).toBeUndefined()
+/** Reads page 1 with `limit: 1`, then follows every cursor until `more: false`. */
+async function pages(source: "queries" | "runs", options: { since?: string; includeBefore?: boolean } = {}) {
+  const d = deps(source, options.includeBefore === true)
+  const found: EventsListResult[] = []
+  let cursor: string | undefined
+  let more = true
+  while (more) {
+    const page = (await eventsList({ source, account: "work", ...(options.since === undefined ? {} : { since: options.since }), ...(cursor === undefined ? {} : { cursor }), limit: 1 }, call, d)) as EventsListResult
+    found.push(page)
+    cursor = page.cursor
+    more = page.more
+    expect(page.gap).toBeUndefined()
+  }
+  return found
 }
 
 describe("a same-timestamp page boundary", () => {
   it("queries: both statements with one occurred_at are listed once across the pages", async () => {
-    await both("queries", QUERIES.map((item) => `${HOST.replace(/^https:\/\//u, "")}:${item.queryId}`))
+    const found = await pages("queries")
+    const ids = found.flatMap((page) => page.events.map((event) => event.external_id))
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+    expect([...ids].sort()).toEqual([external("queries", "q-a"), external("queries", "q-b")].sort())
+    expect(found.at(-1)?.more).toBe(false)
   })
 
   it("runs: both runs with one occurred_at are listed once across the pages", async () => {
-    await both("runs", RUNS.map((item) => `${HOST.replace(/^https:\/\//u, "")}:${item.runId}`))
+    const found = await pages("runs")
+    const ids = found.flatMap((page) => page.events.map((event) => event.external_id))
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+    expect([...ids].sort()).toEqual([external("runs", 101), external("runs", 102)].sort())
+    expect(found.at(-1)?.more).toBe(false)
+  })
+})
+
+describe("a since filter across cursor pages", () => {
+  it("queries: since survives cursor paging and drops the earlier statement", async () => {
+    const found = await pages("queries", { since: new Date(NOW - 2 * 60 * 60_000).toISOString(), includeBefore: true })
+    const ids = found.flatMap((page) => page.events.map((event) => event.external_id))
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+    expect([...ids].sort()).toEqual([external("queries", "q-a"), external("queries", "q-b")].sort())
+    expect(ids).not.toContain(external("queries", "q-before"))
+    expect(found.at(-1)?.more).toBe(false)
+  })
+
+  it("runs: since survives cursor paging and drops the earlier run", async () => {
+    const found = await pages("runs", { since: new Date(NOW - 2 * 60 * 60_000).toISOString(), includeBefore: true })
+    const ids = found.flatMap((page) => page.events.map((event) => event.external_id))
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+    expect([...ids].sort()).toEqual([external("runs", 101), external("runs", 102)].sort())
+    expect(ids).not.toContain(external("runs", 100))
+    expect(found.at(-1)?.more).toBe(false)
   })
 })

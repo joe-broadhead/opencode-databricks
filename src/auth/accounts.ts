@@ -2,10 +2,10 @@
  * One account is one workspace (design §3.1). These are the option-derived settings, the mode-specific requirements
  * checked at setup, and the `AccountInfo` the auth port hands to every tool and to status.
  *
- * The settings hold no secret: `tokenEnv` and `clientSecretEnv` name variables, `profile` names a CLI profile, and the
- * client ID of a public app connection is public [11][12]. A missing requirement of a headless mode is an option error
- * (`OPTIONS_INVALID`) at setup, before any call: a `pat` account without `tokenEnv` can never work, and failing at
- * startup says so once instead of on every tool call.
+ * The settings hold no credential: the environment-variable names, the profile name, and the client JSON identify
+ * where a value is read, and the client ID of a public app connection is public [11][12]. A missing requirement of a
+ * headless mode is an option error (`OPTIONS_INVALID`) at setup, before any call: an account with no environment
+ * variable can never work, and failing at startup says so once instead of on every tool call.
  */
 import type { Feature } from "../methods.js"
 import { DatabricksError } from "../domain/errors.js"

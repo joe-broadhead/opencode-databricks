@@ -433,7 +433,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
     /**
      * `GET /api/2.2/jobs/get` (`jobs.jobs.get`): one job's settings and each task's compute. The reference paginates
      * the array properties — "a request for a single job will return … the first 100 elements of array properties
-     * (`tasks`, `job_clusters`, …); use the `next_page_token` field … and pass its value as the `page_token`" — so every
+     * (`tasks`, `job_clusters`, …); use the `next_page_token` field … and pass its value as the page cursor" — so every
      * page is read and the arrays merged (https://docs.databricks.com/api/jobs/v2/get-job.md).
      */
     async getJob(account: string, jobId: number, signal: AbortSignal): Promise<JobInfo> {
@@ -441,7 +441,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       let pageToken: string | undefined
       for (let page = 0; page < JOB_PAGES_MAX; page++) {
         const answer = record(
-          await call(account, "jobs.jobs.get", "GET", "/api/2.2/jobs/get", { query: { job_id: jobId, ...(pageToken === undefined ? {} : { page_token: pageToken }) }, idempotent: true, signal }),
+          await call(account, "jobs.jobs.get", "GET", "/api/2.2/jobs/get", { query: { job_id: jobId, ...(pageToken === undefined ? {} : { pageToken }) }, idempotent: true, signal }),
         )
         pages.push(answer)
         const next = maybeText(answer.next_page_token)
@@ -508,7 +508,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       if (filter.statementIds?.length) query["filter_by.statement_ids"] = filter.statementIds
       if (filter.startMs !== undefined) query["filter_by.query_start_time_range.start_time_ms"] = filter.startMs
       if (filter.endMs !== undefined) query["filter_by.query_start_time_range.end_time_ms"] = filter.endMs
-      if (filter.pageToken) query.page_token = filter.pageToken
+      if (filter.pageToken) query.pageToken = filter.pageToken
       // 1,000 rows a page is the API's cap (Query History [24]); the default is 100.
       query.max_results = Math.min(filter.maxResults ?? 100, 1000)
       // `metrics` (read bytes, result_from_cache) comes only when asked for, and the API asks for a small page with it.
@@ -520,7 +520,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
 
     async listCatalogs(account: string, pageInput, signal: AbortSignal): Promise<Page<{ name: string; comment?: string; owner?: string }>> {
       const query: Record<string, QueryValue> = {}
-      if (pageInput.pageToken) query.page_token = pageInput.pageToken
+      if (pageInput.pageToken) query.pageToken = pageInput.pageToken
       if (pageInput.maxResults !== undefined) query.max_results = pageInput.maxResults
       return page(await call(account, "unity-catalog.catalogs.list", "GET", "/api/2.1/unity-catalog/catalogs", { query, idempotent: true, signal }), "catalogs", (value) => {
         const item = record(value)
@@ -530,7 +530,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
 
     async listSchemas(account: string, catalog: string, pageInput, signal: AbortSignal): Promise<Page<{ name: string; comment?: string; owner?: string }>> {
       const query: Record<string, QueryValue> = { catalog_name: catalog }
-      if (pageInput.pageToken) query.page_token = pageInput.pageToken
+      if (pageInput.pageToken) query.pageToken = pageInput.pageToken
       if (pageInput.maxResults !== undefined) query.max_results = pageInput.maxResults
       return page(await call(account, "unity-catalog.schemas.list", "GET", "/api/2.1/unity-catalog/schemas", { query, idempotent: true, signal }), "schemas", (value) => {
         const item = record(value)
@@ -540,7 +540,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
 
     async listTables(account: string, catalog: string, schema: string, pageInput, signal: AbortSignal): Promise<Page<{ name: string; tableType: string; comment?: string; owner?: string; updatedAt?: number }>> {
       const query: Record<string, QueryValue> = { catalog_name: catalog, schema_name: schema }
-      if (pageInput.pageToken) query.page_token = pageInput.pageToken
+      if (pageInput.pageToken) query.pageToken = pageInput.pageToken
       if (pageInput.maxResults !== undefined) query.max_results = pageInput.maxResults
       return page(await call(account, "unity-catalog.tables.list", "GET", "/api/2.1/unity-catalog/tables", { query, idempotent: true, signal }), "tables", (value) => {
         const item = record(value)
@@ -561,7 +561,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
 
     async listFunctions(account: string, catalog: string, schema: string, pageInput, signal: AbortSignal): Promise<Page<{ name: string; routineBody: string }>> {
       const query: Record<string, QueryValue> = { catalog_name: catalog, schema_name: schema }
-      if (pageInput.pageToken) query.page_token = pageInput.pageToken
+      if (pageInput.pageToken) query.pageToken = pageInput.pageToken
       return page(await call(account, "unity-catalog.functions.list", "GET", "/api/2.1/unity-catalog/functions", { query, idempotent: true, signal }), "functions", (value) => {
         const item = record(value)
         return { name: text(item.name), routineBody: text(item.routine_body).toUpperCase() === "EXTERNAL" ? "EXTERNAL" : "SQL" }
@@ -585,7 +585,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       for (let page = 0; page < MODEL_PAGES_MAX; page++) {
         const answer = record(
           await call(account, "unity-catalog.registered-models.list", "GET", "/api/2.1/unity-catalog/models", {
-            query: { catalog_name: catalog, schema_name: schema, max_results: MODEL_PAGE, ...(pageToken === undefined ? {} : { page_token: pageToken }) },
+            query: { catalog_name: catalog, schema_name: schema, max_results: MODEL_PAGE, ...(pageToken === undefined ? {} : { pageToken }) },
             idempotent: true,
             signal,
           }),
@@ -605,7 +605,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
 
     async listVolumes(account: string, catalog: string, schema: string, pageInput, signal: AbortSignal): Promise<Page<{ name: string; volumeType: string }>> {
       const query: Record<string, QueryValue> = { catalog_name: catalog, schema_name: schema }
-      if (pageInput.pageToken) query.page_token = pageInput.pageToken
+      if (pageInput.pageToken) query.pageToken = pageInput.pageToken
       return page(await call(account, "unity-catalog.volumes.list", "GET", "/api/2.1/unity-catalog/volumes", { query, idempotent: true, signal }), "volumes", (value) => {
         const item = record(value)
         return { name: text(item.name), volumeType: text(item.volume_type) }
@@ -616,11 +616,11 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       // The API names a securable type in upper case (TABLE, SCHEMA, CATALOG, FUNCTION, VOLUME…), pages, and takes
       // `principal` to narrow the assignments to one person or group.
       const assignments: { principal: string; privileges: string[] }[] = []
-      let pageToken: string | undefined
+      let cursor: string | undefined
       do {
         const query: Record<string, QueryValue> = {}
         if (principal) query.principal = principal
-        if (pageToken) query.page_token = pageToken
+        if (cursor) query.pageToken = cursor
         const body = record(
           await call(account, "unity-catalog.effective-permissions.get", "GET", `/api/2.1/unity-catalog/effective-permissions/${encodeURIComponent(securable.type.toUpperCase())}/${encodeURIComponent(securable.fullName)}`, {
             query,
@@ -637,14 +637,14 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
               .filter((privilege) => privilege !== ""),
           })
         }
-        pageToken = maybeText(body.next_page_token)
-      } while (pageToken !== undefined)
+        cursor = maybeText(body.next_page_token)
+      } while (cursor !== undefined)
       return assignments
     },
 
     async listConnections(account: string, pageInput, signal: AbortSignal): Promise<Page<{ name: string; connectionType?: string }>> {
       const query: Record<string, QueryValue> = { max_results: 1000 }
-      if (pageInput.pageToken) query.page_token = pageInput.pageToken
+      if (pageInput.pageToken) query.pageToken = pageInput.pageToken
       return page(await call(account, "unity-catalog.connections.list", "GET", "/api/2.1/unity-catalog/connections", { query, idempotent: true, signal }), "connections", (value) => {
         const item = record(value)
         return { name: text(item.name), ...(maybeText(item.connection_type) ? { connectionType: maybeText(item.connection_type) } : {}) }
@@ -680,7 +680,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
 
     listQueries(account: string, pageInput, signal: AbortSignal): Promise<Page<{ id: string; name: string; owner?: string; warehouseId?: string; queryText: string }>> {
       const query: Record<string, QueryValue> = { page_size: 100 }
-      if (pageInput.pageToken) query.page_token = pageInput.pageToken
+      if (pageInput.pageToken) query.pageToken = pageInput.pageToken
       return oneAtATime(account, async () => page(await call(account, "sql.queries.list", "GET", "/api/2.0/sql/queries", { query, idempotent: true, signal }), "results", (value) => {
         const item = record(value)
         return {
@@ -707,7 +707,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
 
     async listJobs(account: string, pageInput, signal: AbortSignal): Promise<Page<{ jobId: number; name: string; creatorUserName?: string }>> {
       const query: Record<string, QueryValue> = {}
-      if (pageInput.pageToken) query.page_token = pageInput.pageToken
+      if (pageInput.pageToken) query.pageToken = pageInput.pageToken
       if (pageInput.limit !== undefined) query.limit = pageInput.limit
       return page(await call(account, "jobs.jobs.list", "GET", "/api/2.2/jobs/list", { query, idempotent: true, signal }), "jobs", (value) => {
         const item = record(value)
@@ -726,7 +726,7 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
       if (filter.completedOnly !== undefined) query.completed_only = filter.completedOnly
       if (filter.startTimeFrom !== undefined) query.start_time_from = filter.startTimeFrom
       if (filter.startTimeTo !== undefined) query.start_time_to = filter.startTimeTo
-      if (filter.pageToken) query.page_token = filter.pageToken
+      if (filter.pageToken) query.pageToken = filter.pageToken
       if (filter.limit !== undefined) query.limit = Math.min(filter.limit, 25)
       return page(await call(account, "jobs.runs.list", "GET", "/api/2.2/jobs/runs/list", { query, idempotent: true, signal }), "runs", toRun)
     },

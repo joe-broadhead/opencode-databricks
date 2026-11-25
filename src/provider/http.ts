@@ -209,14 +209,17 @@ function parseBody(text: string): unknown {
   }
 }
 
+/** The API's wire key for a camelCase query name; an existing snake_case key is unchanged. */
+const wireKey = (key: string): string => key.replace(/[A-Z]/g, (character) => `_${character.toLowerCase()}`)
+
 /** Builds the query string: repeated keys for an array, everything else as one value. */
 export function queryString(query: Readonly<Record<string, QueryValue>> | undefined): string {
   if (!query) return ""
   const parameters = new URLSearchParams()
   for (const [key, value] of Object.entries(query)) {
     if (value === undefined || value === null) continue
-    if (Array.isArray(value)) for (const item of value) parameters.append(key, String(item))
-    else parameters.append(key, String(value))
+    if (Array.isArray(value)) for (const item of value) parameters.append(wireKey(key), String(item))
+    else parameters.append(wireKey(key), String(value))
   }
   const text = parameters.toString()
   return text ? `?${text}` : ""

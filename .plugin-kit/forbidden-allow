@@ -1,4 +1,0 @@
-src/auth/accounts.ts:secret kit v0.0.0 detector false positive: a comment naming tokenEnv/clientSecretEnv, line 5
-src/auth/headless.ts:secret kit v0.0.0 detector false positive: the TokenCache.set(key, token: MintedToken) type annotation and a CLI-minted Token value, lines 37 and 251
-src/handlers/sources/events.ts:secret kit v0.0.0 detector false positive: pageToken locals in the history walks, lines 707, 749 and 837
-src/provider/client.ts:secret kit v0.0.0 detector false positive: the page_token query fields, lines 444, 588 and 623
