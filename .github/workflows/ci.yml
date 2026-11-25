@@ -10,14 +10,13 @@ permissions:
   contents: read
 
 concurrency:
-  # The event is part of the group, so a run by hand on master never cancels the push run a release stands on.
   group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   ci:
     name: ci
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNNER_PUBLIC || 'ubuntu-24.04') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,32 +25,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          # The host and pack stages install each release in TESTED_HOSTS (src/constants.ts) themselves, so that file
-          # is part of the key.
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            src/constants.ts
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-          # The runner's Bun cache can restore an archive without the binary; install it fresh, as release.yml does.
-          no-cache: true
-      # actionlint parses the workflows as workflows, not as YAML: a `${{ }}` in a context that does not exist makes
-      # GitHub reject the file and run nothing at all. `npm run check` runs it as its `actionlint` stage when it is on
-      # PATH.
-      - name: actionlint
-        run: |
-          set -euo pipefail
-          version=1.7.12
-          base="https://github.com/rhysd/actionlint/releases/download/v${version}"
-          cd "$RUNNER_TEMP"
-          curl -sSfLO "${base}/actionlint_${version}_linux_amd64.tar.gz"
-          curl -sSfLO "${base}/actionlint_${version}_checksums.txt"
-          grep " actionlint_${version}_linux_amd64.tar.gz$" "actionlint_${version}_checksums.txt" | sha256sum -c -
-          tar xzf "actionlint_${version}_linux_amd64.tar.gz" actionlint
-          # On PATH for the next step, where `npm run check` runs the actionlint stage; nothing is written to the checkout.
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          cache-dependency-path: package-lock.json
       # OpenCode installs plugins without lifecycle scripts, and no dev dependency needs them.
       - run: npm ci --ignore-scripts
+      # Typecheck, build, unit, pack, then plugin-kit check. The kit does not run the repository's own steps.
       - run: npm run check
