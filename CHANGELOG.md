@@ -20,7 +20,7 @@
   real OpenCode 2.4.1 host test proves both `databricks` and `databricks-sql` are listed after load, alongside all 31
   tools.
 
-### Removed since v0.0.<n> (4a, pre-4b)
+### Removed since the 4a build
 
 - **The permission-only `databricks.read` action.** plugin-contract v0 has no permission-only action, so the old rule
   no longer applies on its own. The four source reads (`events_list`, `saved_read`, `probe` and `saved_list`) are gated
