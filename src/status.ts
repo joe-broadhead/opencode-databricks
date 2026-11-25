@@ -265,6 +265,8 @@ export interface StatusPorts {
   readonly ledger: LedgerPort
   readonly reads: ReadGuardPort
   readonly clock: Clock
+  /** Whether this process holds the machine's automation lock; status reports it. */
+  readonly automationOwner?: () => boolean
 }
 
 export interface Scan {
@@ -273,13 +275,17 @@ export interface Scan {
   readonly cleanup: readonly CleanupAction[]
   readonly problems: readonly string[]
   readonly spend: Spend
-  readonly automation: { readonly mode: Options["automation"]; readonly active: boolean }
+  readonly automation: { readonly mode: Options["automation"]; readonly active: boolean; readonly owner: boolean }
 }
 
-/** Automation's consent (design §7): `auto` is on at `all` only; `on` is the person's standing yes; `off` never. */
-export const automationOf = (options: Options): { mode: Options["automation"]; active: boolean } => ({
+/**
+ * Automation's consent and owner (design §7): `auto` is on at `all` only; `on` is the person's standing yes; `off`
+ * never. `owner` says whether this process holds the machine's automation lock, so status says which process sweeps.
+ */
+export const automationOf = (options: Options, owner = false): { mode: Options["automation"]; active: boolean; owner: boolean } => ({
   mode: options.automation,
   active: options.automation === "on" || (options.automation === "auto" && options.access === "all"),
+  owner,
 })
 
 /** One scan of every configured account (or the ones named). Databricks failures become problems; nothing is thrown. */
@@ -315,7 +321,7 @@ export async function scanAccounts(ports: StatusPorts, sessionID: string, signal
   const limit = spent?.limit ?? budget?.daily?.dbuHours ?? budget?.daily?.starts ?? budget?.session?.dbuHours ?? budget?.session?.starts
   const spend: Spend = { startsToday, dbuHoursToday, dbuHoursSession, estimate: true, budget: { state, ...(limit === undefined ? {} : { limit }) } }
 
-  return { scans, running, cleanup, problems, spend, automation: automationOf(ports.options) }
+  return { scans, running, cleanup, problems, spend, automation: automationOf(ports.options, ports.automationOwner?.() ?? false) }
 }
 
 /**
@@ -408,6 +414,10 @@ type StatusContext = {
   readonly skill: Pick<Plugin.Context["skill"], "list">
 }
 
+/** The tested releases in one phrase, for the untested-host next step: one release names itself. */
+export const testedHostsText = (hosts: readonly string[] = TESTED_HOSTS): string =>
+  hosts.length === 1 ? `OpenCode ${hosts[0]}` : `OpenCode ${hosts.slice(0, -1).join(", ")} or ${hosts.at(-1)}`
+
 export type StatusExtras = {
   readonly hostVersion: string
   readonly hostWarning?: string
@@ -451,7 +461,7 @@ export async function computeStatus(ctx: StatusContext, ports: StatusPorts, extr
       (state === "sign_in_required" ? `Run /connect and choose ${DISPLAY_NAME} to sign in to ${scan.scans.map((item) => item.account.alias).join(", ") || "your workspace"}.` : undefined) ??
       (unguarded.length > 0 ? AGENT_STEP : undefined) ??
       (shadowed.length > 0 ? `Rename or move the skill ${shadowed[0]!.id} at ${shadowed[0]!.path}, which OpenCode loads instead of the plugin's.` : undefined) ??
-      (extras.hostWarning ? `If ${DISPLAY_NAME} misbehaves, use OpenCode ${TESTED_HOSTS.slice(0, -1).join(", ")} or ${TESTED_HOSTS.at(-1)}, where it is tested.` : undefined) ??
+      (extras.hostWarning ? `If ${DISPLAY_NAME} misbehaves, use ${testedHostsText()}, where it is tested.` : undefined) ??
       NOTHING_TO_DO,
   }
 }

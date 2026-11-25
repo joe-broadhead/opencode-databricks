@@ -90,6 +90,8 @@ describe("databricks_table", () => {
     const result = await runTool("table", { name: "main.sales.orders_v", sample: 5 }, h.call(), h.deps, HANDLERS)
     expect(readRequests(h.databricks)[0]?.statement).toBe("SELECT * FROM (\nSELECT * FROM `main`.`sales`.`orders_v` LIMIT 5\n) AS oc_q")
     expect(result.sample).toEqual({ columns: ["id"], rows: [[1]] })
+    // The sample's own cost: the warehouse it ran on and its estimated $/hour.
+    expect(result.warehouse).toEqual({ id: "wh-small", name: "bi-small", started: false, usdPerHour: expect.any(Number) })
     // The tool's own metadata read asserts the table (LOW 4), then the read path asserts the sample's table and both
     // sources of the view's dependencies: the recorded one and the one its body names (the union, review delta check).
     expect(asserted(h.permission)).toEqual([
@@ -124,6 +126,7 @@ describe("databricks_table", () => {
     expect(readRequests(h.databricks)[0]?.statement).toBe(`SELECT * FROM (\n${LINEAGE_SQL}\n) AS oc_q`)
     expect(readRequests(h.databricks)[0]?.parameters).toEqual([{ name: "oc_table", value: "main.sales.orders_v", type: "STRING" }])
     expect(result.lineage).toEqual([{ source: "main.sales.orders", target: "main.sales.orders_v", at: "2026-11-17T09:00:00Z" }])
+    expect(result.warehouse).toEqual({ id: "wh-small", name: "bi-small", started: false, usdPerHour: expect.any(Number) })
     // The lineage table is resolved and asserted like any other the read touches.
     expect(asserted(h.permission)).toEqual(expect.arrayContaining(["databricks.table on work:table:system.access.table_lineage"]))
   })

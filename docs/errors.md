@@ -16,13 +16,12 @@ Every error has the form `CODE: What happened. Next step: What to do.` Databrick
 | `CANCELLED` | failed | The call was stopped, and the statement it started was cancelled. | Call the tool again if you still need the result. |
 | `CATEGORY_MISMATCH` | refused | A read was sent to plan, or a plan was committed with another category's tool. | Use the tool the message names. |
 | `CLASSIFICATION_DRIFT` | failed | Query History's statement type differed from the plan or the read, and it was recorded. | Report it; databricks_history shows the statement. |
-| `DEPENDENCIES_UNKNOWN` | refused | A view's dependencies cannot be resolved while a fence, an inline rule or strictDependencies applies. | Name tables fully and avoid views without recorded dependencies. |
+| `DEPENDENCIES_UNKNOWN` | refused | A view's dependencies cannot be resolved while a fence or an inline rule applies. | Name tables fully and avoid views without recorded dependencies. |
 | `EXTERNAL_LINK_REFUSED` | refused | A result link was not https on the cloud's storage host. | Report it; databricks_save falls back only when links are unavailable. |
 | `FENCED` | refused | A resolved table is outside the fence, or a permission rule denied it. | Query allowed catalogs only, or change the fence option. |
 | `FENCE_UNVERIFIABLE` | refused | A path-based read cannot be checked against the fence. | Read the table by its Unity Catalog name. |
 | `FUNCTION_NAME_PARTIAL` | refused | A read calls a function that is not an allowlisted built-in by a one- or two-part name, which Databricks resolves along the SQL path, not where the plugin checks it. | Write the function's full name, catalog.schema.function. |
 | `FUNCTION_REFUSED` | refused | reflect, java_method, try_reflect, a script transform or a bucket sample on a function is refused. | Do it another way; these run code outside SQL. |
-| `HEADLESS_REFUSED` | refused | A headless mode (pat, m2m or cli) was configured in a hosted engine. | Sign in interactively, or set allowHeadlessInHost. |
 | `HOST_INVALID` | refused | The workspace URL is not https, or not a Databricks host. | Enter the workspace URL from the browser, or set allowCustomHost for a private link. |
 | `HOST_UNTESTED` | refused | This OpenCode version is outside the tested range. | Use a tested OpenCode release, or set the option allowUntestedHost. |
 | `IDENTIFIER_REFUSED` | refused | A read used IDENTIFIER(…), a name chosen at run time. | Write the table or function name literally, and pass values in params. |
@@ -30,8 +29,7 @@ Every error has the form `CODE: What happened. Next step: What to do.` Databrick
 | `INPUT_INVALID` | refused | The input does not fit the tool's schema. | Check the input against the tool's schema, then call it again. |
 | `NEEDS_PLAN` | refused | A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read. | Plan it with databricks_plan({ sql }). |
 | `NOT_FOUND` | refused | The catalog, schema, table, function, statement, job or run was not found or is not visible. | Call databricks_catalog with filter to find the name. |
-| `NOT_IMPLEMENTED` | refused | This tool is declared but not built in this version. | Use the Databricks SQL editor for now, or update the plugin. |
-| `NOT_RELEASED` | refused | This copy is not a released install, so Databricks was not called. | Wait for a release tag. Do not install this repository from source if you need to call Databricks. |
+| `NOT_RELEASED` | refused | This copy is not a released install, so Databricks was not called. | Wait for a release tag: only a tagged release calls Databricks. |
 | `OPTIONS_INVALID` | refused | A plugin option is invalid or unknown. | Fix the plugin's options in opencode.json; the message names the option. |
 | `PATH_NOT_DEFAULT` | refused | The workspace's SQL path does not put system.builtin before every user schema, so a keyword-form built-in could resolve to a user function. | Ask an admin to restore the default path, or write the function call form, which the plugin qualifies as system.builtin. |
 | `PERMISSION_DENIED` | refused | Unity Catalog or an access control list refused the call. | Ask for the privilege the message names. |
@@ -67,4 +65,4 @@ Every error has the form `CODE: What happened. Next step: What to do.` Databrick
 
 ## Warnings
 
-Warnings come in a result's `warnings` and never refuse: `ESTIMATE_ONLY`, `SAVE_INLINE_FALLBACK`, `PII_SOURCE`, `MASKED_COLUMNS`, `ROW_FILTERED`, `DEPENDENCIES_UNKNOWN`, `AUTO_STOP_OFF`, `AUTO_STOP_LONG`, `SCOPE_WIDER_THAN_FEATURES`, `HEADLESS_IDENTITY`, `ROLE_CAN_WRITE`, `VIEW_BODY_UNREAD`, `STARTED_WAREHOUSE`, `CLASSIFICATION_DRIFT`, `BUDGET_OVER`, `PATH_READ`, `SPEND_UNAVAILABLE` (the spend reconciliation could not run: no grant, no running default warehouse, or the statement failed; status still answers `ok`).
+Warnings come in a result's `warnings` and never refuse: `ESTIMATE_ONLY`, `SAVE_INLINE_FALLBACK`, `MASKED_COLUMNS`, `ROW_FILTERED`, `DEPENDENCIES_UNKNOWN`, `AUTO_STOP_OFF`, `AUTO_STOP_LONG`, `SCOPE_WIDER_THAN_FEATURES`, `ROLE_CAN_WRITE`, `STARTED_WAREHOUSE`, `CLASSIFICATION_DRIFT`, `BUDGET_OVER`, `PATH_READ`, `SPEND_UNAVAILABLE` (the spend reconciliation could not run: no grant, no running default warehouse, or the statement failed; status still answers `ok`).

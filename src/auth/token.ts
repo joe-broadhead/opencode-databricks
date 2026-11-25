@@ -30,6 +30,9 @@ async function refuseUnreleasedToken(request: TokenRequest): Promise<void> {
 }
 
 const TIMEOUT_MS = 30_000
+
+/** The timeout in a message: whole seconds as written, a shorter one as its fraction ("0.05 seconds"). */
+const secondsText = (ms: number): string => `${ms >= 1000 ? Math.round(ms / 1000) : ms / 1000} seconds`
 /** The codes an endpoint may return, as the OAuth standard defines them; anything else is not repeated. */
 const OAUTH_CODE = /^[a-z][a-z0-9_]{2,40}$/u
 
@@ -86,7 +89,9 @@ function failure(status: number, json: Record<string, unknown>, invalidScope: "c
 export async function requestToken(request: TokenRequest): Promise<TokenSet> {
   if (request.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.")
   await refuseUnreleasedToken(request)
-  const timeout = AbortSignal.timeout(request.timeoutMs ?? TIMEOUT_MS)
+  // The one effective timeout: the abort signal and the message name the same number.
+  const timeoutMs = request.timeoutMs ?? TIMEOUT_MS
+  const timeout = AbortSignal.timeout(timeoutMs)
   const signal = AbortSignal.any([request.signal, timeout])
   const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }
   if (request.basic) headers["Authorization"] = `Basic ${Buffer.from(`${request.basic.user}:${request.basic.secret}`).toString("base64")}`
@@ -101,7 +106,7 @@ export async function requestToken(request: TokenRequest): Promise<TokenSet> {
     })
   } catch (error) {
     if (request.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.")
-    if (timeout.aborted) throw new DatabricksError("UNAVAILABLE", `The OAuth token endpoint did not answer within ${Math.round(TIMEOUT_MS / 1000)} seconds.`, "Try again; if it persists, check the network and the workspace URL.")
+    if (timeout.aborted) throw new DatabricksError("UNAVAILABLE", `The OAuth token endpoint did not answer within ${secondsText(timeoutMs)}.`, "Try again; if it persists, check the network and the workspace URL.")
     throw new DatabricksError("UNAVAILABLE", "The OAuth token endpoint could not be reached.", "Try again; if it persists, check the network and the workspace URL.")
   }
   let text = ""

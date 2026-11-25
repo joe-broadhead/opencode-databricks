@@ -15,14 +15,12 @@
  *   than resolved by the server out of the person's rules' reach.
  * - **A job run** (`job`): `POST /api/2.2/jobs/run-now` at commit, with the job's parameters and `idempotency_token` =
  *   the plan id ([29], https://docs.databricks.com/api/jobs/v2/run-now.md). The preview names the job, what its last
- *   run's tasks were, and — once `DatabricksPort.getJob` lands (contract request 1) — each task's compute and the job's
- *   `timeout_seconds`.
+ *   run's tasks were, and each task's compute and the job's `timeout_seconds`.
  * - **A one-time notebook run** (`notebook`): `POST /api/2.2/jobs/runs/submit` on serverless compute, which returns a
  *   `run_id` and carries `timeout_seconds`, whose documented default is `0` — no timeout ([29],
  *   https://docs.databricks.com/api/jobs/v2/submit-run.md). So the plan always carries `runTimeoutSeconds`.
- * - **A warehouse edit** (`warehouse`, admin): the plan previews the change and the rate it implies. The commit applies
- *   it once `DatabricksPort.editWarehouse` lands (contract request 2); until then its commit answers `NOT_IMPLEMENTED`
- *   and nothing runs.
+ * - **A warehouse edit** (`warehouse`, admin): the plan previews the change and the rate it implies; the commit applies
+ *   it once.
  *
  * The plan is stored with the account, session and agent that made it (`src/domain/plans.ts`), expires after
  * `planTtlSeconds`, is used once, and records the fingerprint its commit compares again: the target set and a JSON of

@@ -27,7 +27,7 @@ import { bytesOf } from "../../options.js"
 import type { ExternalLink, ResultColumn, StatementAnswer, StatementRequest } from "../../ports.js"
 import { assertTool, type Deps } from "../../registry.js"
 import type { Call, Handler } from "../../tool-spec.js"
-import { accountOf, failureOf, queryTags } from "../reads/context.js"
+import { accountOf, failureOf, queryTags, warehouseUse } from "../reads/context.js"
 import { columnsOf, messageFrames, readArrowStream, streamRowCount, type ArrowType } from "./arrow.js"
 import { csvLine, fitsCharts, jsonLine } from "./formats.js"
 import { typedRow } from "./inline.js"
@@ -126,6 +126,8 @@ const save: Handler<"save"> = async (input, call, deps) => {
     bytes: written.bytes,
     sha256: written.sha256,
     statementId: written.statementId,
+    // This call's own cost: the warehouse it ran on, whether this call started it, and its estimated $/hour.
+    warehouse: warehouseUse(prepared, deps),
     charts: { path: written.target, format, rows: written.rows, fitsCharts: fit },
     ...(warnings.length ? { warnings } : {}),
     ...(fit

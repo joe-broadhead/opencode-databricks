@@ -1,6 +1,6 @@
 {
-  "name": "@joe-broadhead/opencode-databricks",
-  "version": "0.0.1",
+  "name": "@we-the-rebel-alliance/databricks-plugin",
+  "version": "0.0.0",
   "private": true,
   "description": "Unofficial OpenCode plugin for Databricks",
   "keywords": [
@@ -10,13 +10,13 @@
     "unity-catalog",
     "sql"
   ],
-  "homepage": "https://github.com/joe-broadhead/opencode-databricks#readme",
+  "homepage": "https://github.com/we-the-rebel-alliance/databricks-plugin#readme",
   "bugs": {
-    "url": "https://github.com/joe-broadhead/opencode-databricks/issues"
+    "url": "https://github.com/we-the-rebel-alliance/databricks-plugin/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joe-broadhead/opencode-databricks.git"
+    "url": "git+https://github.com/we-the-rebel-alliance/databricks-plugin.git"
   },
   "license": "MIT",
   "type": "module",
@@ -59,9 +59,9 @@
   "devDependencies": {
     "@babel/core": "7.29.7",
     "@babel/preset-typescript": "7.27.1",
-    "@opencode/client": "2.2.3",
-    "@opencode/plugin": "2.2.3",
-    "@opencode/sdk": "2.2.3",
+    "@opencode/client": "2.4.1",
+    "@opencode/plugin": "2.4.1",
+    "@opencode/sdk": "2.4.1",
     "@opentui/core": "0.8.0",
     "@opentui/solid": "0.8.0",
     "@types/bun": "1.4.4",
@@ -71,6 +71,7 @@
     "antlr4ng": "3.0.16",
     "apache-arrow": "21.1.0",
     "babel-preset-solid": "1.9.16",
+    "effect": "4.1.0",
     "esbuild": "0.28.2",
     "hyparquet": "1.32.0",
     "solid-js": "1.9.18",
@@ -79,7 +80,7 @@
     "zod": "4.6.7"
   },
   "opencode": {
-    "host": ">=2.2.3 <2.4.0",
+    "host": ">=2.4.1 <2.5.0",
     "icons": [
       {
         "src": "assets/icon.svg",
@@ -114,7 +115,7 @@
     "summary": "Find, query and save your Databricks data, with every change planned first.",
     "icon": "assets/icon.svg",
     "cost": "A SQL warehouse bills by the hour while it runs (serverless about $0.70 per DBU, 4 DBU an hour at 2X-Small); starting a stopped one bills until it auto-stops. Saved-query reads run only on a warehouse already running, which then stays up until it auto-stops. AI functions and jobs bill separately.",
-    "admin": "add an OAuth app connection (public client) with this plugin's redirect URLs, including Jelly's relay, in the account console, and give you Can use on a SQL warehouse and SELECT on the data you read",
+    "admin": "add an OAuth app connection (public client) with this plugin's redirect URLs, including the host's relay, in the account console, and give you Can use on a SQL warehouse and SELECT on the data you read",
     "tools": [
       {
         "name": "databricks.status",
@@ -281,8 +282,8 @@
       }
     ],
     "skills": [
-      "opencode-databricks",
-      "opencode-databricks-sql"
+      "databricks",
+      "databricks-sql"
     ],
     "rpc": [],
     "views": [],

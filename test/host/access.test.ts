@@ -1,4 +1,4 @@
-// Design §15.3's access rules, in a real embedded host: Jelly's access levels through the family's default rules, over
+// Design §15.3's access rules, in a real embedded host: the three access levels through the family's default rules, over
 // every action package D can assert. The rules are what OpenCode resolves a call against, so this is the level the
 // design's §10.3 table is about: at Allowed everything is allowed; at Ask before changes the six commits, `save`,
 // `cancel` and `stop` ask and a warehouse start asks; at Read only those are denied and reads (the plan too) run.

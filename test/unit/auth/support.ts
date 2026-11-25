@@ -106,7 +106,6 @@ export function memoryStorage(initial?: unknown): SummaryStorage & { readonly va
 
 export interface CoreOptions {
   readonly env?: NodeJS.ProcessEnv
-  readonly hosted?: boolean
   readonly fetch?: typeof globalThis.fetch
   readonly runCli?: CliRunner
   readonly cliCommand?: string
@@ -143,7 +142,6 @@ export function authCore(rawOptions: Record<string, unknown>, options: CoreOptio
     },
     env: options.env ?? {},
     now: options.now ?? Date.now,
-    hosted: options.hosted ?? false,
     fetch: options.fetch ?? globalThis.fetch,
     ...(options.runCli !== undefined ? { runCli: options.runCli } : {}),
     ...(options.cliCommand !== undefined ? { cliCommand: options.cliCommand } : {}),

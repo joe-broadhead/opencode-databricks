@@ -16,8 +16,6 @@ import { parseWorkspaceHost } from "./host.js"
 import type { ScopeChoice } from "./scopes.js"
 
 export const DEFAULT_ALIAS = "default"
-export const HEADLESS_MODES: readonly Mode[] = ["pat", "m2m", "cli"]
-export const isHeadless = (mode: Mode): boolean => HEADLESS_MODES.includes(mode)
 
 export interface AccountSettings {
   readonly alias: string

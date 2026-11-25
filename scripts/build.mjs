@@ -85,7 +85,7 @@ function checkNotice(metafiles) {
   // licence and notice ship with it, though no Spark package is installed.
   const pin = join(root, "grammar", "spark", "PIN.json")
   const spark = !existsSync(pin) ? [] : [`## Apache Spark SQL grammar, ${JSON.parse(readFileSync(pin, "utf8")).tag} (Apache-2.0)\n\nsrc/sql/generated/ is generated from SqlBaseLexer.g4 and SqlBaseParser.g4 of Apache Spark (grammar/spark/).\n\n${readFileSync(join(root, "grammar", "spark", "NOTICE"), "utf8").trim()}\n\n${readFileSync(join(root, "grammar", "spark", "LICENSE"), "utf8").trim()}\n`]
-  const notice = `opencode-databricks bundles this third-party code into dist/.\n\n${[...sections, ...spark].join("\n")}`
+  const notice = `databricks-plugin bundles this third-party code into dist/.\n\n${[...sections, ...spark].join("\n")}`
   const path = join(root, "NOTICE")
   if (process.argv.includes("--notice")) writeFileSync(path, notice)
   else if (!existsSync(path) || readFileSync(path, "utf8") !== notice) {

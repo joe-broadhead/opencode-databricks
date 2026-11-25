@@ -1,7 +1,9 @@
 // The credential-store read (review of #5, M4's mitigation): a failed resolve is retried once, so a rotation another
 // process finished is picked up; a credential that is still broken answers AUTH_REQUIRED, and a stopped call CANCELLED.
+// A host-held sign-in is used while its access token is valid and fails after one read once it has expired.
 import { describe, expect, it } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
+import { HOST_HELD_REFRESH } from "../../../src/auth/credential.js"
 import { readHostCredential, type HostCredentialStore } from "../../../src/auth/host-credential.js"
 import type { HostConnection, HostCredential } from "../../../src/auth/types.js"
 import { hostCredential } from "./support.js"
@@ -51,6 +53,20 @@ describe("reading a stored credential", () => {
 
     const absent: HostCredentialStore = { active: async () => undefined, resolve: async () => undefined }
     await expect(readHostCredential(absent, "work", signal())).resolves.toBeUndefined()
+  })
+
+  it("fails an expired host-held sign-in after one read, and returns a valid one as it is", async () => {
+    const expired = store(async () => hostCredential({ refresh: HOST_HELD_REFRESH, expires: 1_000 }))
+    const error = (await readHostCredential(expired.port, "work", signal(), () => 2_000).catch((caught: unknown) => caught)) as DatabricksError
+    expect(error.code).toBe("AUTH_REQUIRED")
+    expect(error.message).toContain("held by the host")
+    expect(error.nextStep).toContain("/connect")
+    expect(expired.calls()).toBe(1)
+
+    const valid = store(async () => hostCredential({ refresh: HOST_HELD_REFRESH, expires: 2_000 }))
+    const credential = await readHostCredential(valid.port, "work", signal(), () => 1_000)
+    expect(credential?.refresh).toBe(HOST_HELD_REFRESH)
+    expect(valid.calls()).toBe(1)
   })
 
   it("stops before a read when the call is already aborted", async () => {

@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
 import { formatStatus, isStatus, statusRows } from "../../../src/rpc.js"
-import { automationOf, computeStatus, requestedScopes, statusHandler } from "../../../src/status.js"
+import { automationOf, computeStatus, requestedScopes, statusHandler, testedHostsText } from "../../../src/status.js"
 import type { HistoryQuery, Token, Warehouse } from "../../../src/ports.js"
 import { FakeAuth, FAKE_HOST, RecordingPermission, DUMMY_TOKEN } from "../../fake/ports.js"
 import { answerOf, asserted, harness, runningWarehouse } from "../reads/harness.js"
@@ -200,20 +200,41 @@ describe("databricks_status", () => {
   it("computes the UI status the command, the RPC and the TUI share, and it is valid", async () => {
     const h = setup({ items: [history({ queryId: "read-1", queryTags: { oc_plugin: "databricks", oc_tool: "query" } })] })
     const ctx = { agent: { list: async () => ({ data: [] }) }, skill: { list: async () => ({ data: [] }) } }
-    const status = await computeStatus(ctx as never, h.deps, { hostVersion: "2.2.3", skills: [], problems: () => [] })
+    const status = await computeStatus(ctx as never, h.deps, { hostVersion: "2.4.1", skills: [], problems: () => [] })
     expect(isStatus(status)).toBe(true)
-    expect(status).toMatchObject({ state: "ready", access: "all", writes: "without asking", automation: { mode: "auto", active: true } })
+    expect(status).toMatchObject({ state: "ready", access: "all", writes: "without asking", automation: { mode: "auto", active: true, owner: false } })
     expect(status.running).toHaveLength(1)
     const rows = statusRows(status).map((row) => row.label)
     expect(rows).toEqual(["Connection", "Workspaces", "Access", "Writes", "Masks and filters", "Warehouses", "Running", "Spend", "Automation", "Cleanup", "Agents without default rules", "OpenCode", "Next step"])
     expect(formatStatus(status)).toContain("Databricks status")
     expect(formatStatus(status)).toContain("Cleanup:")
+    expect(formatStatus(status)).toContain("another process holds the machine's automation lock")
+  })
+
+  it("reports the process that holds the machine's automation lock, through the tool and the UI", async () => {
+    const h = setup()
+    const ctx = { agent: { list: async () => ({ data: [] }) }, skill: { list: async () => ({ data: [] }) } }
+    const deps = { ...h.deps, automationOwner: () => true }
+    const status = await computeStatus(ctx as never, deps, { hostVersion: "2.4.1", skills: [], problems: () => [] })
+    expect(status.automation).toEqual({ mode: "auto", active: true, owner: true })
+    expect(isStatus(status)).toBe(true)
+    expect(formatStatus(status)).toContain("this process holds the machine's automation lock")
+    expect((await statusHandler({}, h.call(), deps)).automation.owner).toBe(true)
+  })
+
+  it("names the one tested release in the untested-host next step (review F1)", async () => {
+    const h = setup()
+    const ctx = { agent: { list: async () => ({ data: [] }) }, skill: { list: async () => ({ data: [] }) } }
+    const status = await computeStatus(ctx as never, h.deps, { hostVersion: "2.5.0", hostWarning: "OpenCode 2.5.0 is outside the supported range >=2.4.1 <2.5.0.", skills: [], problems: () => [] })
+    expect(status.nextStep).toBe("If Databricks misbehaves, use OpenCode 2.4.1, where it is tested.")
+    expect(testedHostsText(["2.4.1"])).toBe("OpenCode 2.4.1")
+    expect(testedHostsText(["2.4.1", "2.4.2"])).toBe("OpenCode 2.4.1 or 2.4.2")
   })
 
   it("says no workspace configured only when there is none, and sign-in required otherwise", async () => {
     const h = setup({ auth: new RefusingAuth() })
     const ctx = { agent: { list: async () => ({ data: [] }) }, skill: { list: async () => ({ data: [] }) } }
-    const status = await computeStatus(ctx as never, h.deps, { hostVersion: "2.2.3", skills: [], problems: () => [] })
+    const status = await computeStatus(ctx as never, h.deps, { hostVersion: "2.4.1", skills: [], problems: () => [] })
     expect(status.state).toBe("sign_in_required")
     expect(status.nextStep).toContain("/connect")
   })
@@ -225,10 +246,10 @@ describe("databricks_status", () => {
   })
 
   it("automation is on at Allowed, off at the other levels, and on when the person says so", () => {
-    expect(automationOf(loadOptions({}))).toEqual({ mode: "auto", active: true })
-    expect(automationOf(loadOptions({ access: "ask-changes" }))).toEqual({ mode: "auto", active: false })
-    expect(automationOf(loadOptions({ access: "read-only", automation: "on" }))).toEqual({ mode: "on", active: true })
-    expect(automationOf(loadOptions({ automation: "off" }))).toEqual({ mode: "off", active: false })
+    expect(automationOf(loadOptions({}))).toEqual({ mode: "auto", active: true, owner: false })
+    expect(automationOf(loadOptions({ access: "ask-changes" }))).toEqual({ mode: "auto", active: false, owner: false })
+    expect(automationOf(loadOptions({ access: "read-only", automation: "on" }))).toEqual({ mode: "on", active: true, owner: false })
+    expect(automationOf(loadOptions({ automation: "off" }), true)).toEqual({ mode: "off", active: false, owner: true })
   })
 
   it("never puts a token in a result", async () => {

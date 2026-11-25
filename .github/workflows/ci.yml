@@ -4,7 +4,6 @@ on:
   push:
     branches: [master]
   pull_request:
-  # A run by hand on any branch: the full matrix, macOS included.
   workflow_dispatch:
 
 permissions:
@@ -16,80 +15,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  workflows:
-    name: workflows
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+  ci:
+    name: ci
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNNER_PUBLIC || 'ubuntu-24.04') || 'ubuntu-24.04' }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # The host and pack stages install each release in TESTED_HOSTS (src/constants.ts) themselves, so that file
+          # is part of the key.
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            src/constants.ts
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+          # The runner's Bun cache can restore an archive without the binary; install it fresh, as release.yml does.
+          no-cache: true
       # actionlint parses the workflows as workflows, not as YAML: a `${{ }}` in a context that does not exist makes
-      # GitHub reject the file and run nothing at all.
+      # GitHub reject the file and run nothing at all. `npm run check` runs it as its `actionlint` stage when it is on
+      # PATH.
       - name: actionlint
         run: |
           set -euo pipefail
           version=1.7.12
           base="https://github.com/rhysd/actionlint/releases/download/v${version}"
+          cd "$RUNNER_TEMP"
           curl -sSfLO "${base}/actionlint_${version}_linux_amd64.tar.gz"
           curl -sSfLO "${base}/actionlint_${version}_checksums.txt"
           grep " actionlint_${version}_linux_amd64.tar.gz$" "actionlint_${version}_checksums.txt" | sha256sum -c -
           tar xzf "actionlint_${version}_linux_amd64.tar.gz" actionlint
-          ./actionlint -color
-
-  check:
-    name: check (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        # Linux x64, Linux arm64, macOS arm64, pinned to image versions.
-        # A pull request runs the two Linux runners; a push to master, or a run by hand, runs three: macOS arm64 too. macOS
-        # runs on master and for releases only, and the release planner requires that push run with every runner.
-        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04","ubuntu-24.04-arm"]' || '["ubuntu-24.04","ubuntu-24.04-arm","macos-26"]') }}
-    runs-on: ${{ matrix.os }}
-    # The host and pack stages install each tested OpenCode release (TESTED_HOSTS in src/constants.ts:
-    # 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.1 and 2.3.2) themselves, with scripts disabled.
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          # Caches ~/.npm per OS and architecture. The host and pack stages install @opencode/sdk and the stock
-          # @opencode/cli for each release in TESTED_HOSTS (src/constants.ts) through npm, so that file is part of the key.
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            src/constants.ts
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
+          # On PATH for the next step, where `npm run check` runs the actionlint stage; nothing is written to the checkout.
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       # OpenCode installs plugins without lifecycle scripts, and no dev dependency needs them.
       - run: npm ci --ignore-scripts
       - run: npm run check
-
-  # The differential fuzz (docs/parser.md): the generated TypeScript parser against Spark's own JVM parser from the
-  # pinned spark-sql-api jar, whose sha256 grammar/spark/PIN.json records. Java 17 is preinstalled on the runner image.
-  fuzz:
-    name: fuzz (generated parser vs Spark's JVM parser)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            src/constants.ts
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-      - run: npm ci --ignore-scripts
-      - name: fuzz
-        run: JAVA_HOME="$JAVA_HOME_17_X64" node test/fuzz/run.mjs --cases 6000

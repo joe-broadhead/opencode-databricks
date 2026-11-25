@@ -1,19 +1,20 @@
 # Repository rules
 
-This repository builds `@joe-broadhead/opencode-databricks`, an unofficial OpenCode plugin for Databricks: Unity
+This repository builds `@we-the-rebel-alliance/databricks-plugin`, an unofficial OpenCode plugin for Databricks: Unity
 Catalog, SQL warehouses, queries, jobs and saved results, over Databricks' REST APIs, with every change planned
 first. User docs: `README.md`, `docs/configuration.md`, `docs/safety.md`; contributor docs: `docs/architecture.md`,
 `docs/ownership.md`, `docs/parser.md`, `CONTRIBUTING.md`.
 
 ## Platform
 
-- Use only public APIs of `@opencode/plugin` 2.2.3. The supported host range is exactly `>=2.2.3 <2.4.0`, in
+- Use only public APIs of `@opencode/plugin` 2.4.1. The supported host range is exactly `>=2.4.1 <2.5.0`, in
   `package.json` `opencode.host`, `SUPPORTED_HOST` in `src/constants.ts` and `HOST_RANGE` in `scripts/check.mjs`.
-  Never write it as `^2.2.3`.
-- Test against stock OpenCode 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.1 and 2.3.2. `TESTED_HOSTS` in
-  `src/constants.ts` is the one list.
+  Never write it as `^2.4.1`.
+- Test against stock OpenCode 2.4.1. `TESTED_HOSTS` in `src/constants.ts` is the one list.
 - Keep the plugin ids `databricks.databricks` (status RPC), `databricks.databricks.tools` (tools RPC) and
   `databricks.databricks.tui` (TUI), and the namespace `databricks`.
+- The fixed context is a budget: the namespace line is at most 400 characters, each skill description at most 300, no
+  method is pinned and nothing registers a per-request hook. `test/unit/fixed-context.test.ts` checks it.
 
 ## Forbidden
 
@@ -32,7 +33,8 @@ contract's tools RPC).
   checks are best-effort; the identity's privileges are the only server-enforced read-only, and the docs say so.
 - **Changes go plan, then commit.** `databricks_plan` sends no statement, never `EXPLAIN`. The parser's category is
   final; token rules only raise it.
-- **Every assert uses the dotted action** `databricks.<tool>`, the name Jelly declares. Asserted equals declared.
+- **Every assert uses the dotted action** `databricks.<tool>`, the same name the declaration lists. Asserted equals
+  declared.
 - **No secret in config or in a result.** Tokens live in OpenCode's credential store; external-link URLs carry
   credentials and are never returned, logged or stored. Databricks' text goes only in `providerError`.
 - **Never invent Databricks facts.** Every fact cites Databricks' docs, a live check or a measurement.

@@ -2,7 +2,6 @@
 // on. A test double of the client's mapping can agree with its own fixtures; this file cannot: every request the client
 // builds is handed to `DocumentedApi`, which refuses a wrong method, path, field or documented constraint (the review of
 // #7's M3). A wrong field in the client — `notebook_params` where Jobs API 2.2 documents `job_parameters` — fails here.
-import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import type { StatementRequest } from "../../../src/ports.js"
 import { createDatabricksClient } from "../../../src/process/client.js"
@@ -63,17 +62,10 @@ function real() {
   return { api, port, signal }
 }
 
-/**
- * Jobs API 2.2 `run-now` documents `job_parameters` and has no `notebook_params`
- * (https://docs.databricks.com/api/jobs/v2/run-now.md). Package B's client currently sends `notebook_params`; the fix is
- * the contract keeper's, in its next PR. This case reads the client's own source so it starts running the moment that
- * fix lands — and fails if the field regresses afterwards — while the rest of the file proves the real client against
- * the documented fake today.
- */
-const clientSendsJobParameters = readFileSync(new URL("../../../src/process/client.ts", import.meta.url), "utf8").includes("job_parameters")
-
 describe("the real client against the documented fake", () => {
-  it.skipIf(!clientSendsJobParameters)("run-now: the job's parameters go in `job_parameters`, with the token", async () => {
+  // Jobs API 2.2 `run-now` documents `job_parameters` and has no `notebook_params`
+  // (https://docs.databricks.com/api/jobs/v2/run-now.md); a regression to `notebook_params` fails here.
+  it("run-now: the job's parameters go in `job_parameters`, with the token", async () => {
     const { api, port, signal } = real()
     const answer = await port.runNow("work", { jobId: 100, params: { day: "2026-11-18" }, idempotencyToken: "pln_8f018174-4792-40d5-bcbc-3e6a527352c8" }, signal)
     expect(answer.runId).toBeTypeOf("number")

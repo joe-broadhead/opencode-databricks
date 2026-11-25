@@ -22,10 +22,10 @@ export interface LedgerOptions {
   readonly sessionId?: string
 }
 
-/** `$XDG_STATE_HOME/opencode-databricks/spend.jsonl`, or `~/.local/state/…` without it. */
+/** `$XDG_STATE_HOME/databricks/spend.jsonl`, or `~/.local/state/…` without it. */
 export function defaultLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
   const base = env.XDG_STATE_HOME && env.XDG_STATE_HOME.startsWith("/") ? env.XDG_STATE_HOME : join(homedir(), ".local", "state")
-  return join(base, "opencode-databricks", "spend.jsonl")
+  return join(base, "databricks", "spend.jsonl")
 }
 
 /** The local calendar day of a time, `YYYY-MM-DD`. */

@@ -4,9 +4,8 @@
 // target here, so any request off the machine is blocked and fails the host's close(); a test that expects the plugin's
 // Databricks port to try (because no fake answers it) says so with `expectBlocked`, and asserts what the report says.
 //
-// Host version: the SDK in devDependencies (2.2.3). HOST_SDK_DIR names a directory whose node_modules holds another
-// @opencode/sdk (scripts/check.mjs installs each tested release outside the lockfile); the host then runs that SDK.
-import { ROOT, SDK_OVERRIDE } from "./isolate.js"
+// Host version: the SDK in devDependencies (2.4.1), the one tested release.
+import { ROOT } from "./isolate.js"
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -19,7 +18,7 @@ import { simulateTaggedRelease } from "../../src/release.js"
 import { DatabricksRpc, type Status } from "../../src/rpc.js"
 
 const REPO = realpathSync(fileURLToPath(new URL("../../", import.meta.url)))
-const SDK = join(SDK_OVERRIDE ? realpathSync(SDK_OVERRIDE) : REPO, "node_modules", "@opencode", "sdk")
+const SDK = join(REPO, "node_modules", "@opencode", "sdk")
 const manifest = JSON.parse(readFileSync(join(SDK, "package.json"), "utf8")) as { version: string; exports: { ".": { import: string } } }
 /** The OpenCode release under test: the version of the SDK that runs the host. */
 export const SDK_VERSION = manifest.version
@@ -78,9 +77,9 @@ let hosts = 0
 /**
  * One host start's overall bound: importing the SDK, creating the host, and waiting for the readiness signal (the
  * plugin's state is reported and the probe plugin has loaded). The first host in a test process pays the cold start:
- * the SDK's import and the first plugin load took 4 to 6 s on 2.3.0 and 5 to 9 s on 2.3.1 on a loaded machine, against
- * under 3 s for every later host. So the bound is generous, and the harness, not the test runner, enforces it: a host
- * that misses it fails with its OpenCode version, the phase and the plugin's last state.
+ * the SDK's import and the first plugin load took 5 to 9 s on a loaded machine, against under 3 s for every later host.
+ * So the bound is generous, and the harness, not the test runner, enforces it: a host that misses it fails with its
+ * OpenCode version, the phase and the plugin's last state.
  */
 export const HOST_START_MS = 90_000
 /**

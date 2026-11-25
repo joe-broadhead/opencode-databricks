@@ -5,7 +5,7 @@ Queries, Jobs, Workspace, Files and SCIM `Me`). It wraps no MCP server. [Ownersh
 
 | File | Role |
 |---|---|
-| `src/index.ts`, `src/plugin.ts` | `Plugin.define` with the id `databricks.databricks`: default rules, the 23 tools, status, the cleanup command, automation, the context hook, the tools RPC, skills. |
+| `src/index.ts`, `src/plugin.ts` | `Plugin.define` with the id `databricks.databricks`: default rules, the 23 tools, status, the cleanup command, automation, the tools RPC, skills. |
 | `src/domain/actions.ts` | The tool table: names, classes, dotted actions, permission-only entries, operations, scopes. |
 | `src/domain/contract.ts` | Every tool's input and output schema (zod). |
 | `src/domain/errors.ts` | Every code, in the family form, and the docs rows. |
@@ -20,9 +20,8 @@ Queries, Jobs, Workspace, Files and SCIM `Me`). It wraps no MCP server. [Ownersh
 | `src/registry.ts`, `src/tool-spec.ts` | One handler per tool; the model's tool and the script's method from one spec. |
 | `src/permissions.ts`, `src/options.ts` | The `access` rules block and every option. |
 | `src/status.ts`, `src/rpc.ts`, `src/tui/index.tsx` | `databricks_status`, `/databricks-status`, the status RPC and the `/databricks` dialog. |
-| `src/automation/index.ts` | The sweep: this plugin's own orphaned reads, the idle-warehouse snapshot, one owner per machine. |
+| `src/automation/index.ts` | The sweep and the owner lock: this plugin's own orphaned reads, with one owner per machine, which status reports. |
 | `src/automation/cleanup.ts` | `/databricks-cleanup`: the report, the permission prompts, the stops and cancels. |
-| `src/hooks/context.ts` | The one-line context hook, at most 200 characters, on the request's tail only. |
 | `src/tools/reads/`, `src/tools/save/`, `src/sources/`, `src/tools/changes/` | The handlers, by package. |
 | `src/tools-rpc.ts` | `databricks.databricks.tools`: the read tools, `probe` and `saved_list` for scripts and sources. |
 
@@ -30,5 +29,5 @@ Every tool returns `{ state, …, error?, message?, next?, warnings? }`; Databri
 `providerError`, marked untrusted. Status, the command and the dialog share one computation (`src/status.ts`), so they
 cannot disagree. The TUI bundle imports only the RPC contract and constants, never zod or a tool.
 
-Automation and the hook never act on their own beyond cancelling this plugin's own orphaned reads: there is no code
+Automation never acts on its own beyond cancelling this plugin's own orphaned reads: there is no code
 path from them to a delete, a stop, or a change statement.

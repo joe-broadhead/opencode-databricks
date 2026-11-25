@@ -1,12 +1,13 @@
 /**
  * The 23 tools and the actions they assert (design §4, §10.1). This table is the one list: the registry, the default
- * rules, the jelly declaration, the tools RPC and the docs all derive from it, and tests check each against it.
+ * rules, the package.json declaration, the tools RPC and the docs all derive from it, and tests check each against it.
  *
  * - The engine name is `databricks_<tool>`; the permission action each tool asserts is `databricks.<tool>` (dotted, the
- *   name Jelly declares and rules). Asserted equals declared: a test runs every tool against the fakes and records what
+ *   name a consumer rules on). Asserted equals declared: a test runs every tool against the fakes and records what
  *   it asserts.
  * - `databricks.start`, `databricks.probe` and `databricks.read` are permission-only: actions the plugin asserts that
- *   are not tools. They are declared in `jelly.tools` so Jelly's rules give them their intended effects (design §10.2).
+ *   are not tools. They are declared in the kept declaration's `tools` list so a consumer's rules give them their
+ *   intended effects (design §10.2).
  *   `databricks.read` is what a source's content reads assert (`events_list`, `saved_read`; review of #8, request 3):
  *   allowed at every access, so the namespace pattern never asks for or denies a bound source's read.
  * - Data tools also assert each resolved table as `<account>:table:<catalog>.<schema>.<table>` under their own action.
@@ -31,7 +32,7 @@ export interface ToolEntry {
   /** Whether scripts and sources may call it through the tools RPC (reads only; design §4). */
   readonly rpc: boolean
   readonly description: string
-  /** Shown on Jelly's card; at most 200 characters. */
+  /** Shown on a consumer's card; at most 200 characters. */
   readonly note?: string
 }
 

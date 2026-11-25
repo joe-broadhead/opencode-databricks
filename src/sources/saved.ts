@@ -19,7 +19,7 @@ import { assertOperation, assertRead, type ReadMode } from "./assert.js"
 import { sourceError, sourceErrorOf } from "./errors.js"
 import { typedCell } from "../tools/save/inline.js"
 import { chargeStatement } from "../guards/budget.js"
-import { sizeOf } from "../guards/warehouse.js"
+import { sizeOf, usdPerHour } from "../guards/warehouse.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { StatementAnswer } from "../ports.js"
 import type { Deps } from "../registry.js"
@@ -34,6 +34,8 @@ export interface TableData {
 export interface SnapshotAnswer {
   readonly data: TableData
   readonly asOf: string
+  /** This read's own cost: the warehouse it ran on and its estimated $/hour. The source never starts one. */
+  readonly cost: { readonly class: "billed"; readonly warehouse: { readonly id: string; readonly name: string; readonly usdPerHour: number } }
   readonly trust: "untrusted"
 }
 
@@ -85,19 +87,25 @@ export async function savedRead(deps: Deps, input: SavedInput, call: Call, mode:
   if (warehouse.state !== "RUNNING") {
     throw sourceError("UNAVAILABLE", `The saved query's warehouse is ${warehouse.state.toLowerCase()}, and this source never starts one.`, "Start the warehouse in Databricks and read again; a start here would bill without the person asking.")
   }
-  const prepared = await deps.reads.prepare(
-    {
-      account: input.account,
-      sql: query.queryText,
-      warehouse: query.warehouseId,
-      runningOnly: true,
-      tool: "saved_read",
-      sessionID: call.sessionID,
-      messageID: call.messageID,
-      callID: call.id,
-    },
-    call.signal,
-  )
+  let prepared: Awaited<ReturnType<Deps["reads"]["prepare"]>>
+  try {
+    prepared = await deps.reads.prepare(
+      {
+        account: input.account,
+        sql: query.queryText,
+        warehouse: query.warehouseId,
+        runningOnly: true,
+        tool: "saved_read",
+        sessionID: call.sessionID,
+        messageID: call.messageID,
+        callID: call.id,
+      },
+      call.signal,
+    )
+  } catch (error) {
+    // The read path's refusals (a missing sign-in, a fence, a policy) are the source contract's, not this plugin's.
+    throw sourceErrorOf(error)
+  }
   let answer: StatementAnswer
   const startedAt = deps.clock.now()
   try {
@@ -174,7 +182,8 @@ export async function savedRead(deps: Deps, input: SavedInput, call: Call, mode:
     columns: columns.map((column) => ({ key: column.name, label: column.name })),
     rows: rows.map((row) => Object.fromEntries(columns.map((column, index) => [column.name, cell(typedCell(row[index] ?? null, column))]))),
   }
-  return { data, asOf: new Date(deps.clock.now()).toISOString(), trust: "untrusted" }
+  const cost = { class: "billed" as const, warehouse: { id: prepared.warehouse.id, name: prepared.warehouse.name, usdPerHour: usdPerHour(prepared.warehouse, deps.options) } }
+  return { data, asOf: new Date(deps.clock.now()).toISOString(), cost, trust: "untrusted" }
 }
 
 /** The model's view of the same read: the plugin's `table` shape (column names and row arrays). */

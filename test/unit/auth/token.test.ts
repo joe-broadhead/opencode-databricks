@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
 import { readSignIn } from "../../../src/auth/credential.js"
+import { requestToken } from "../../../src/auth/token.js"
 import { DUMMY_TOKEN, FAKE_HOST, authCore, hostCredential, memoryStorage } from "./support.js"
 
 const NOW = 1_800_000_000_000
@@ -15,6 +16,25 @@ const codeOf = async (run: () => Promise<unknown>): Promise<string> => {
     return error instanceof DatabricksError ? error.code : "OTHER"
   }
 }
+
+describe("the token endpoint's timeout", () => {
+  it("names the timeout it was given, not the 30-second default", async () => {
+    const fetch = ((_url: unknown, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+      })) as unknown as typeof globalThis.fetch
+    const error = (await requestToken({
+      endpoint: "https://workspace.example/oidc/v1/token",
+      form: { grant_type: "client_credentials" },
+      fetch,
+      signal: signal(),
+      timeoutMs: 50,
+    }).catch((caught: unknown) => caught)) as DatabricksError
+    expect(error.code).toBe("UNAVAILABLE")
+    expect(error.message).toContain("within 0.05 seconds")
+    expect(error.message).not.toContain("30 seconds")
+  })
+})
 
 describe("an interactive token", () => {
   it("returns the stored access token with the granted scopes and when it expires", async () => {

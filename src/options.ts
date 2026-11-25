@@ -34,13 +34,11 @@ export const OptionsSchema = z.strictObject({
   redirectUri: z.string().url().optional(),
   callbackPort: z.number().int().min(1024).max(65535).default(8765),
   allowCustomHost: z.boolean().default(false),
-  allowHeadlessInHost: z.boolean().default(false),
   maxStartSize: z.enum(SIZES as [string, ...string[]]).default("Small"),
   maxStartAutoStopMinutes: z.number().int().min(1).max(10080).default(15),
   maxRunSize: z.enum(SIZES as [string, ...string[]]).optional(),
   maxRunSeconds: z.number().int().min(51).max(172800).default(600),
   wait: z.number().int().min(0).max(600).default(50),
-  maxConcurrentStatements: z.number().int().min(1).max(32).default(4),
   budget: z.strictObject({ daily: BudgetLimit.optional(), session: BudgetLimit.optional(), action: z.enum(["warn", "refuse"]) }).optional(),
   usdPerDbu: z.strictObject({ serverless: z.number().min(0), pro: z.number().min(0), classic: z.number().min(0) }).default({ serverless: 0.7, pro: 0.55, classic: 0.22 }),
   maxRows: z.number().int().min(1).max(500).default(50),
@@ -50,11 +48,9 @@ export const OptionsSchema = z.strictObject({
   resultsDir: z.string().max(4096).default(".databricks/results"),
   allowedRoots: z.array(z.string().max(4096)).default([]),
   inlinePii: z.enum(["warn", "save-only"]).default("warn"),
-  strictDependencies: z.boolean().default(false),
   dependencyDepth: z.number().int().min(1).max(10).default(4),
   runTimeoutSeconds: z.number().int().min(60).max(172800).default(3600),
   automation: z.enum(["auto", "on", "off"]).default("auto"),
-  autoStopIdleMinutes: z.number().int().min(1).max(1440).default(10),
   planTtlSeconds: z.number().int().min(30).max(3600).default(300),
   admin: z.strictObject({ enabled: z.boolean().default(true), requireReason: z.boolean().default(true) }).default({ enabled: true, requireReason: true }),
   allowUntestedHost: z.boolean().default(false),
@@ -63,7 +59,7 @@ export const OptionsSchema = z.strictObject({
 export type Options = z.output<typeof OptionsSchema>
 export type AccountOptions = z.output<typeof AccountSchema>
 
-const EXAMPLE = `"plugins": [{ "package": "github:joe-broadhead/opencode-databricks#v0.0.1", "options": { "access": "ask-changes" } }]`
+const EXAMPLE = `"plugins": [{ "package": "github:we-the-rebel-alliance/databricks-plugin#v<version>", "options": { "access": "ask-changes" } }]`
 
 /** Bytes for a size option: a number, or "32KiB", "256MiB", "1GiB". */
 export function bytesOf(value: number | string): number {

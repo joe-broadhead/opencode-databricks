@@ -68,7 +68,7 @@ function fakePort(options: PortOptions = {}): DatabricksPort {
     listFunctions: () => ({ items: options.functions ?? [] }),
     listWarehouses: () => [],
     listConnections: () => {
-      if (options.connectionsUnavailable) throw new DatabricksError("NOT_IMPLEMENTED", "no connection read")
+      if (options.connectionsUnavailable) throw new DatabricksError("UNAVAILABLE", "no connection read")
       return { items: options.connections ?? [] }
     },
     currentMetastoreAssignment: () => ({ ...(options.assignment !== undefined ? { defaultCatalogName: options.assignment } : {}) }),

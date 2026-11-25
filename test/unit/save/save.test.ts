@@ -131,6 +131,8 @@ describe("databricks_save", () => {
   it("writes CSV, JSONL and Parquet that charts' own readers read back", async () => {
     const csv = await run({ format: "csv", path: join(root, "out.csv") }, harnessFor().test)
     expect(csv.state).toBe("ok")
+    // This call's own cost, as the read tools report it.
+    expect(csv.warehouse).toEqual({ id: "wh-small", name: "small", started: false, usdPerHour: expect.any(Number) })
     expect(readFileSync(join(root, "out.csv"), "utf8")).toBe("id,name,ok,amount\n1,alpha,true,1.5\n2,,false,2.25\n3,gamma,true,3.125\n")
     expect(csv.rows).toBe(3)
 
@@ -194,7 +196,7 @@ describe("databricks_save", () => {
     await run({ format: "csv", path: join(root, "exists.csv") }, harnessFor().test)
     const again = await run({ format: "csv", path: join(root, "exists.csv") }, harnessFor().test)
     expect(again.error).toBe("SAVE_EXISTS")
-    const outside = await run({ format: "csv", path: "/etc/opencode-databricks-nope.csv" }, harnessFor().test)
+    const outside = await run({ format: "csv", path: "/etc/databricks-nope.csv" }, harnessFor().test)
     expect(outside.error).toBe("SAVE_PATH_REFUSED")
   })
 

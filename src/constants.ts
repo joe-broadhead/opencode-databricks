@@ -15,6 +15,6 @@ export const ACCESS_VALUES = ["all", "ask-changes", "read-only"] as const
 export type Access = (typeof ACCESS_VALUES)[number]
 
 /** The OpenCode versions the plugin starts on. Equals `opencode.host` in package.json. */
-export const SUPPORTED_HOST = ">=2.2.3 <2.4.0"
+export const SUPPORTED_HOST = ">=2.4.1 <2.5.0"
 /** The OpenCode releases every check runs on: the one list. Status calls only these "tested". */
-export const TESTED_HOSTS: readonly string[] = ["2.2.3", "2.2.4", "2.2.5", "2.2.6", "2.2.7", "2.3.0", "2.3.1", "2.3.2"]
+export const TESTED_HOSTS: readonly string[] = ["2.4.1"]

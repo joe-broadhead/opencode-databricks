@@ -1,9 +1,10 @@
 // Refresh (design §3.2; L1): the documented request, rotation, invalid_grant, one request for two concurrent callers,
-// and Jelly's host-owned copy refused without a call.
+// and a host-held sign-in refused before any request.
 import { afterEach, describe, expect, it } from "vitest"
 import { DatabricksError } from "../../../src/domain/errors.js"
-import { HOST_OWNED_REFRESH, readSignIn } from "../../../src/auth/credential.js"
+import { HOST_HELD_REFRESH, readSignIn } from "../../../src/auth/credential.js"
 import { refreshSignIn, refreshState } from "../../../src/auth/refresh.js"
+import { sourceErrorOf } from "../../../src/sources/errors.js"
 import { DUMMY_TOKEN, hostCredential, tokenEndpoint, type FakeTokenEndpoint } from "./support.js"
 
 const endpoints: FakeTokenEndpoint[] = []
@@ -157,27 +158,51 @@ describe("renewing a sign-in", () => {
     expect(error.message).not.toContain("R9")
   })
 
-  it("refuses Jelly's host-owned copy without a network call", async () => {
-    const endpoint = await rotationEndpoint()
+  it("refuses a host-held sign-in before any request: one attempt, no fetch, no renewal chain", async () => {
+    let fetches = 0
+    const fetch = (async () => {
+      fetches += 1
+      throw new Error("a host-held sign-in must not reach the network")
+    }) as unknown as typeof globalThis.fetch
+    const state = refreshState()
     const error = (await refreshSignIn({
       alias: "work",
       name: "Databricks",
-      credential: hostCredential({ refresh: HOST_OWNED_REFRESH, expires: NOW }),
-      fetch: globalThis.fetch,
+      credential: hostCredential({ refresh: HOST_HELD_REFRESH, expires: NOW + 3_600_000 }),
+      fetch,
       now: () => NOW,
-      state: refreshState(),
-      tokenEndpoint: endpoint.url,
+      state,
     }).catch((caught: unknown) => caught)) as DatabricksError
     expect(error.code).toBe("AUTH_REQUIRED")
-    expect(error.message).toContain("renewed by the host")
-    expect(endpoint.requests).toHaveLength(0)
+    expect(error.message).toContain("held by the host")
+    expect(error.message).toContain("cannot be renewed here")
+    expect(error.nextStep).toContain("/connect")
+    expect(fetches).toBe(0)
+    // No rotation was recorded and no per-account chain was opened: the refusal is the one attempt.
+    expect(state.latest.size).toBe(0)
+    expect(state.chains.size).toBe(0)
+    // The source layer calls the same refusal NEEDS_SIGN_IN.
+    expect(sourceErrorOf(error).code).toBe("NEEDS_SIGN_IN")
   })
 
-  it("refuses a sign-in with no record or no refresh token", async () => {
+  it("refuses a sign-in with no stored record", async () => {
     const endpoint = await rotationEndpoint()
     const withoutRecord = { ...hostCredential({ refresh: "R1", expires: NOW }), metadata: undefined }
     const error = (await refreshSignIn({ alias: "work", name: "Databricks", credential: withoutRecord, fetch: globalThis.fetch, now: () => NOW, state: refreshState(), tokenEndpoint: endpoint.url }).catch((caught: unknown) => caught)) as DatabricksError
     expect(error.code).toBe("AUTH_REQUIRED")
     expect(error.message).not.toContain(DUMMY_TOKEN)
+  })
+
+  it("refuses a sign-in with no refresh token, before any request", async () => {
+    let fetches = 0
+    const fetch = (async () => {
+      fetches += 1
+      throw new Error("a sign-in with no refresh token must not reach the network")
+    }) as unknown as typeof globalThis.fetch
+    const error = (await refreshSignIn({ alias: "work", name: "Databricks", credential: hostCredential({ refresh: "", expires: NOW }), fetch, now: () => NOW, state: refreshState() }).catch((caught: unknown) => caught)) as DatabricksError
+    expect(error.code).toBe("AUTH_REQUIRED")
+    expect(error.message).toContain("no refresh token")
+    expect(error.message).not.toContain(DUMMY_TOKEN)
+    expect(fetches).toBe(0)
   })
 })

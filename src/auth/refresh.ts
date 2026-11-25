@@ -18,12 +18,9 @@
  * Single-use refresh tokens (Beta, `enable_single_use_refresh_tokens` [12]) invalidate the old token on each refresh.
  * Within this process, refreshes of one account are serialized, so two callers never race; across processes the
  * credential store is the host's (M4: see `docs/auth.md` Known limits).
- *
- * Jelly's copy of a sign-in for an agent carries `jelly-host-owns-refresh` in place of the refresh token; the host
- * renews it, so this module refuses without a network call.
  */
 import { DatabricksError } from "../domain/errors.js"
-import { isHostOwnedRefresh, readSignIn, signInMetadata, type SignIn } from "./credential.js"
+import { isHostHeld, readSignIn, signInMetadata, type SignIn } from "./credential.js"
 import { parseWorkspaceHost } from "./host.js"
 import { requestToken } from "./token.js"
 import type { HostCredential } from "./types.js"
@@ -75,11 +72,21 @@ export interface RefreshInput {
 const cannotRenew = (alias: string, name: string, what: string) =>
   new DatabricksError("AUTH_REQUIRED", `${what} for ${alias}, so it cannot be renewed.`, `Run /connect and choose ${name}, and sign in again.`)
 
+/**
+ * The host holds this credential's refresh token, so no request of ours can renew it: the sentinel is not a token and
+ * the host is the only one that can sign in again. One attempt, no network call.
+ */
+const heldByHost = (alias: string, name: string) =>
+  new DatabricksError(
+    "AUTH_REQUIRED",
+    `The stored Databricks sign-in for ${alias} is held by the host and cannot be renewed here.`,
+    `Run /connect and choose ${name}, and sign in again from the host that holds the credential.`,
+  )
+
 export async function refreshSignIn(input: RefreshInput): Promise<HostCredential> {
   const { alias, name, credential, state } = input
-  if (isHostOwnedRefresh(credential)) {
-    throw new DatabricksError("AUTH_REQUIRED", `The Databricks sign-in for ${alias} is renewed by the host, not by this plugin.`, `Wait for the host to refresh it, or run /connect and choose ${name} to sign in again.`)
-  }
+  // Before any request: the sentinel is the host's marker, never a refresh token to POST.
+  if (isHostHeld(credential)) throw heldByHost(alias, name)
   const stored: SignIn | undefined = readSignIn(credential.metadata)
   if (!stored) throw cannotRenew(alias, name, "The stored sign-in has no workspace record")
   if (!credential.refresh) throw cannotRenew(alias, name, "The stored sign-in has no refresh token")

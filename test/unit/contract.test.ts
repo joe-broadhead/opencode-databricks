@@ -49,7 +49,7 @@ describe("the tools' schemas amended for packages E and F", () => {
   it("status names each running item's account and a reconciliation that is never complete (review of #10, request 3)", async () => {
     const { Outputs } = await import("../../src/domain/contract.js")
     const running = { kind: "statement", account: "work", id: "01ef-statement", startedAt: "2026-11-18T08:00:00Z", tool: "query" }
-    const base = { state: "ok", access: "all", accounts: [], automation: { mode: "auto", active: false }, disclosure: "d" }
+    const base = { state: "ok", access: "all", accounts: [], automation: { mode: "auto", active: false, owner: false }, disclosure: "d" }
     const spend = { startsToday: 0, dbuHoursToday: 0, dbuHoursSession: 0, estimate: true, budget: { state: "off" } }
     expect(Outputs.status.safeParse({ ...base, running: [running] }).success).toBe(true)
     const { account: _, ...noAccount } = running

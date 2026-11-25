@@ -15,9 +15,6 @@
  */
 import * as z from "zod"
 
-/** The family's sentinel for a sign-in Jelly holds the refresh token for: this plugin must never renew it (gws). */
-export const HOST_OWNED_REFRESH = "jelly-host-owns-refresh"
-
 const SignIn = z.object({
   version: z.literal(1),
   host: z.string().min(1).max(2048),
@@ -31,6 +28,17 @@ const SignIn = z.object({
 })
 
 export type SignIn = z.output<typeof SignIn>
+
+/**
+ * The host-held credential marker in the kept sign-in metadata: a host that owns the refresh writes this in place of a
+ * refresh token, so this plugin must never POST it or try to renew the sign-in itself. 4b replaces it.
+ */
+export const HOST_HELD_REFRESH = "jelly-host-owns-refresh"
+
+/** True when the host holds this sign-in's refresh token and renews it itself. */
+export function isHostHeld(credential: { readonly refresh?: string }): boolean {
+  return credential.refresh === HOST_HELD_REFRESH
+}
 
 export interface SignInInput {
   readonly host: string
@@ -61,11 +69,6 @@ export function signInMetadata(input: SignInInput): Record<string, unknown> {
 export function readSignIn(metadata: Readonly<Record<string, unknown>> | undefined): SignIn | undefined {
   const parsed = SignIn.safeParse(metadata)
   return parsed.success ? parsed.data : undefined
-}
-
-/** True when the credential is Jelly's copy for an agent: the host renews it, so this plugin must not. */
-export function isHostOwnedRefresh(credential: { readonly refresh?: string }): boolean {
-  return credential.refresh === HOST_OWNED_REFRESH
 }
 
 /** The role a stored sign-in was bound to, as `AccountInfo.role`. */

@@ -3,7 +3,7 @@
  *
  * The fields are the gws mechanism's: the workspace URL, the public client ID of the customer's own app connection, the
  * scope set (fine-grained, or the single `all-apis` scope an app made in the account console needs), and an optional
- * RBAC role; then two hidden fields a host fills, `redirectUri` and `callbackPort`, for Jelly's relay (§18.1). The role
+ * RBAC role; then two hidden fields a host fills, `redirectUri` and `callbackPort`, for a host's relay (§18.1). The role
  * field carries the §5.6 disclosure verbatim, and recommends a read-only role: it is the only hard limit.
  *
  * A configured value wins over the form for the host and the client ID, and the form shows it hidden. Everything an
@@ -200,7 +200,7 @@ export function readSignInAnswer(answer: Record<string, unknown>, account: Accou
     host = parseWorkspaceHost(answeredHost, allowCustomHost)
   }
   const clientId = account.clientId ?? text(answer, "clientId")
-  if (!clientId) clientError("No OAuth client ID: the app connection's client ID is required.", "Ask your account admin for the client ID of the app connection they created for opencode-databricks, then sign in again.")
+  if (!clientId) clientError("No OAuth client ID: the app connection's client ID is required.", "Ask your account admin for the client ID of the app connection they created for databricks-plugin, then sign in again.")
   if (!CLIENT_ID.test(clientId)) clientError("The sign-in's client ID is not an OAuth client ID.", "Copy the client ID from the app connection (it is a UUID) and sign in again.")
   const rawScopes = text(answer, "scopes")
   const scopes: ScopeChoice =

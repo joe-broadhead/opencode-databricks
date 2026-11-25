@@ -32,7 +32,7 @@ import { checkDrift } from "../../drift.js"
 import { assertTool, PRIMARY_OPERATION } from "../../registry.js"
 import type { Call, Handler } from "../../tool-spec.js"
 import type { Warning } from "../../guards/dependencies.js"
-import { accountOf, changeFailure, commitParameters, decodePolicy, ensureChangeWarehouse, requireFeature, statementNext, submitChange } from "./context.js"
+import { accountOf, changeFailure, commitParameters, decodePolicy, ensureChangeWarehouse, requireFeature, statementNext, submitChange, warehouseUse } from "./context.js"
 import { jobSettingsKey } from "./plan.js"
 import { assertTargets, categoryFor, changeTargets, resolveTargets, type ResolvedTarget, type TargetKind } from "./targets.js"
 
@@ -80,6 +80,8 @@ interface CommitOutcome {
   readonly runId?: number
   readonly rowsAffected?: number
   readonly durationMs?: number
+  /** This call's own cost: the warehouse the committed statement ran on, and its estimated $/hour. */
+  readonly warehouse?: ReturnType<typeof warehouseUse>
   readonly warnings?: readonly Warning[]
   readonly next?: string
 }
@@ -141,6 +143,7 @@ async function commitSql(tool: CommitTool, plan: Plan, call: Call, deps: CommitD
     statementId: answer.statementId,
     ...(rowsAffected === undefined ? {} : { rowsAffected }),
     durationMs,
+    warehouse: warehouseUse(ensured, deps),
     ...(warnings.length ? { warnings } : {}),
     next: recovered
       ? `The submit got no answer and Databricks found the statement by this call's tag, so it is reported rather than resent: ${statementNext(answer.statementId)} reads it. Nothing was retried.`

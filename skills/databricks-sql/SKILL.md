@@ -1,8 +1,8 @@
 ---
-name: opencode-databricks-sql
+name: databricks-sql
 description: The Databricks SQL dialect as the databricks_* read path accepts it - three-level names, :name parameters, built-in functions qualified by the plugin, keyword forms and the SQL path, QUALIFY, time travel, system tables, and what needs a plan.
 ---
-If Databricks' tools are absent, run `/connect` and choose Databricks, or on Jelly call jelly_connection_request.
+If Databricks' tools are absent, run `/connect` and choose Databricks.
 
 # Databricks SQL for the read path
 
@@ -60,7 +60,7 @@ pinned grammar refuses `current_date()` (`SQL_UNSUPPORTED`).
 - **In the grammar, but not the strictest category:** `CREATE STREAMING TABLE … AS SELECT` plans as `write`,
   `CREATE OR REFRESH STREAMING TABLE` as `run`, and `GRANT` as `share`. Show the preview either way.
 - **No path at all:** `DESCRIBE HISTORY` is refused by a read (`STATEMENT_NOT_READ`) and by `databricks_plan`
-  (`CATEGORY_MISMATCH`); use the SQL editor in v0.1.0.
+  (`CATEGORY_MISMATCH`); use the SQL editor in this version.
 
 ## Ten worked examples
 

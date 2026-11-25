@@ -1,7 +1,7 @@
 // Default permission rules for the plugin's actions, inserted into each agent right after its base `* * allow` rule.
 // OpenCode applies the last matching rule, so the agent's own stricter rules, the user's `permissions` rules and saved
 // approvals all still win. The `access` option generates the block from the one tool table (src/domain/actions.ts), and
-// it gives every action the effect Jelly's own rules give it at the same level (test/unit/jelly.test.ts).
+// it gives every change the same effect at every level, and every read its own.
 import type { Plugin } from "@opencode/plugin"
 import { type Access, NAMESPACE } from "./constants.js"
 import { actionOf, PERMISSION_ONLY, START_ACTION, TOOLS } from "./domain/actions.js"

@@ -21,6 +21,24 @@ describe("databricks.saved", () => {
       { region: "South", revenue: "98.25" },
     ])
     expect(snapshot.trust).toBe("untrusted")
+    expect(snapshot.cost).toMatchObject({ class: "billed", warehouse: { id: "wh-small", name: expect.any(String) } })
+    expect(snapshot.cost.warehouse.usdPerHour).toBeGreaterThan(0)
+    // The shape is the cost's own: no `started`, because this source never starts a warehouse.
+    expect(Object.keys(snapshot.cost).sort()).toEqual(["class", "warehouse"])
+    expect(Object.keys(snapshot.cost.warehouse).sort()).toEqual(["id", "name", "usdPerHour"])
+  })
+
+  test("a host-held sign-in surfaces as the source contract's NEEDS_SIGN_IN", async () => {
+    const deps = depsFor(fakeRest({ saved: [QUERY] }), open)
+    const held = new DatabricksError(
+      "AUTH_REQUIRED",
+      "The stored Databricks sign-in for work is held by the host and cannot be renewed here.",
+      "Run /connect and choose Databricks, and sign in again from the host that holds the credential.",
+    )
+    const reads = { prepare: async () => Promise.reject(held) }
+    const error = await savedRead({ ...deps, reads: reads as never }, { account: "work", query: QUERY.id, sha: sha(QUERY.queryText) }, call()).catch((caught: unknown) => caught)
+    expect(error).toMatchObject({ code: "NEEDS_SIGN_IN" })
+    expect((error as Error).message).toContain("held by the host")
   })
 
   test("refuses a query whose SQL changed since it was chosen", async () => {

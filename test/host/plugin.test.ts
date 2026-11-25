@@ -59,13 +59,12 @@ describe("the plugin in a host", () => {
       const planned = (await tools.plan!({ sessionID, input: { sql: "DROP TABLE main.sales.orders" } })) as Record<string, unknown>
       expect(planned).toMatchObject({ state: "refused", error: "AUTH_REQUIRED" })
       const read = (await tools.query!({ sessionID, input: { sql: "select 1" } })) as Record<string, unknown>
-      // A read with no usable credential refuses before anything is sent: package C's tools are real, and the auth seam
-      // is package A's; a tool no package has built yet still says NOT_IMPLEMENTED.
+      // A read with no usable credential refuses before anything is sent: the tool is real, and the auth seam refuses
+      // at the account.
       expect(read).toMatchObject({ state: "refused", error: "AUTH_REQUIRED" })
       // `jobs` is package D's and needs an account (its jobs family); with no credential it refuses at the account.
       expect(await tools.jobs!({ sessionID, input: {} })).toMatchObject({ state: "refused", error: "AUTH_REQUIRED" })
-      // `saved_read` is package E's; with no credential it throws an unhandled error, which is E's to fix, so this shared
-      // test leaves it to E's own suite.
+      // `saved_read` is exercised by its own suite, which owns its source shape.
     } finally {
       await host.close()
     }

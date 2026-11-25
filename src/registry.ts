@@ -1,17 +1,11 @@
 /**
- * The registry: one handler per tool, and who builds it (docs/ownership.md). Day 0 ships every handler as a stub that
- * does what every tool must do first, and nothing more:
- * 1. assert its own dotted action, `databricks.<tool>`, on `<account>:<operation>`, before any Databricks call;
- * 2. answer NOT_IMPLEMENTED.
- * Package C's eight reads and package D's plan, commit, run and workspace tools are real; package E's and F's tools
- * still answer NOT_IMPLEMENTED.
- *
- * A package replaces its stubs in its own file under src/tools/ and wires it here in one line (`HANDLERS`); it never
- * edits another package's file.
+ * The registry: one handler per tool (docs/ownership.md). Every handler is built in its own file under `src/tools/`,
+ * `src/sources/` or `src/status.ts`, and wired here in one line (`HANDLERS`); the shared step every tool runs first is
+ * `assertTool`, which asserts its own dotted action, `databricks.<tool>`, on `<account>:<operation>` before any
+ * Databricks call.
  */
 import type { Access } from "./constants.js"
 import { actionOf, COMMIT_TOOL, type Operation, operationResource, type ToolName, TOOLS } from "./domain/actions.js"
-import { DatabricksError } from "./domain/errors.js"
 import type { PlanStorePort } from "./domain/plans.js"
 import { classifyPlan } from "./domain/statements.js"
 import type { Options } from "./options.js"
@@ -21,7 +15,7 @@ import { CHANGE_HANDLERS } from "./tools/changes/index.js"
 import { READ_HANDLERS } from "./tools/reads/index.js"
 import save from "./tools/save/index.js"
 import { SOURCE_HANDLERS } from "./sources/index.js"
-import type { Call, Handler, Handlers } from "./tool-spec.js"
+import type { Call, Handlers } from "./tool-spec.js"
 
 export interface Deps {
   readonly options: Options
@@ -34,6 +28,8 @@ export interface Deps {
   readonly plans: PlanStorePort
   readonly permission: PermissionPort
   readonly clock: Clock
+  /** Whether this process holds the machine's automation lock; status reports it. */
+  readonly automationOwner?: () => boolean
 }
 
 /** The operation each tool asserts first (design §10.1). Sources and commits may assert more later. */
@@ -63,55 +59,15 @@ export const PRIMARY_OPERATION: Readonly<Record<ToolName, Operation>> = {
   stop: "sql.warehouses.stop",
 }
 
-/** Who builds each handler (design §16). */
-export const OWNER: Readonly<Record<ToolName, "C" | "D" | "E" | "F">> = {
-  status: "F",
-  catalog: "C",
-  table: "C",
-  warehouses: "C",
-  explain: "C",
-  query: "C",
-  statement: "C",
-  history: "C",
-  profile: "C",
-  jobs: "D",
-  workspace: "D",
-  plan: "D",
-  events_list: "E",
-  saved_read: "E",
-  save: "E",
-  write: "D",
-  delete: "D",
-  share: "D",
-  export: "D",
-  run: "D",
-  admin: "D",
-  cancel: "D",
-  stop: "D",
-}
-
-const accountOf = (input: unknown, deps: Deps): string => {
-  const alias = (input as { account?: string }).account
-  if (alias) return alias
-  const accounts = Object.keys(deps.options.accounts ?? {})
-  return accounts[0] ?? "default"
-}
-
 /** Step 1 of every tool: its own dotted action, on `<account>:<operation>`. */
 export async function assertTool(tool: ToolName, account: string, call: Call, deps: Deps, operation: Operation = PRIMARY_OPERATION[tool]): Promise<void> {
   await deps.permission.assert({ action: actionOf(tool), resource: operationResource(account, operation), sessionID: call.sessionID, messageID: call.messageID, callID: call.id }, call.signal)
 }
 
-const stub = <T extends ToolName>(tool: T): Handler<T> =>
-  (async (input, call, deps) => {
-    await assertTool(tool, accountOf(input, deps), call, deps)
-    throw new DatabricksError("NOT_IMPLEMENTED", `databricks_${tool} is declared but not built yet (package ${OWNER[tool]}).`)
-  }) as Handler<T>
-
 /**
- * Every tool's handler. `catalog`, `table`, `warehouses`, `explain`, `query`, `statement`, `history` and `profile` are
- * package C's (`src/tools/reads/`); `plan`, the six commit tools, `cancel`, `stop`, `jobs` and `workspace` are package
- * D's (`src/tools/changes/`); the rest are still Day 0 stubs.
+ * Every tool's handler: the eight reads (`src/tools/reads/`), package D's plan, the six commit tools, `cancel`, `stop`,
+ * `jobs` and `workspace` (`src/tools/changes/`), the two sources and `saved_read`, `save`, status and the two
+ * permission-only source actions.
  */
 export const HANDLERS: Handlers = {
   status: statusHandler,

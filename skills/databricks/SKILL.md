@@ -1,8 +1,8 @@
 ---
-name: opencode-databricks
+name: databricks
 description: How to work with Databricks through the databricks_* tools - Unity Catalog first, warehouse state and cost before SQL, reads through the read path, changes as plan then commit, cleanup, and what each error's next step means.
 ---
-If Databricks' tools are absent, run `/connect` and choose Databricks, or on Jelly call jelly_connection_request.
+If Databricks' tools are absent, run `/connect` and choose Databricks.
 
 # Databricks
 
@@ -54,9 +54,15 @@ plugin checks is best-effort.
 | AI functions, materialized views, streaming tables, job runs | Separately, outside the warehouse |
 | `databricks_save` | A warehouse, often served from the 24-hour result cache |
 
-No call starts a warehouse silently. `databricks_status` shows today's starts and DBU-hour estimate (an estimate), what
-this plugin has running, and each running warehouse with one call. `databricks_status({ include: ["spend"] })` also
-reconciles the estimate with `system.billing.usage` when you have the grants, through one read on a running warehouse.
+No call starts a warehouse silently. A result from a call that ran on a warehouse names it: `databricks_query`,
+`databricks_profile`, `databricks_explain`, a `databricks_table` sample or lineage, `databricks_save` and a committed
+change carry `warehouse: { id, name, started, usdPerHour }`. `databricks_saved_read` carries
+`cost: { class: "billed", warehouse: { id, name, usdPerHour } }` instead (no `started`: that source never starts one).
+`databricks_catalog`, `databricks_warehouses`, `databricks_statement` and `databricks_history` run on no warehouse and
+name none. Totals stay in `databricks_status`, which shows today's starts and DBU-hour estimate (an estimate), what this
+plugin has running, and the warehouses this plugin started with their idle time and $/hour; `/databricks-cleanup` lists
+every running warehouse. `databricks_status({ include: ["spend"] })` also reconciles the estimate with
+`system.billing.usage` when you have the grants, through one read on a running warehouse.
 
 ## Cleanup: do your part
 

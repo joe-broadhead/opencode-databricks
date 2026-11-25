@@ -440,8 +440,8 @@ export interface LedgerPort {
   charge(charge: Omit<Charge, "at">, budget?: Budget): Promise<{ readonly recorded: boolean; readonly exceeded?: string; readonly totals: SpendTotals }>
   /**
    * The warehouse starts this plugin charged for the account at or after `sinceMs`, oldest first: the ledger's own
-   * `start` lines, read back (review of #10, request 4). Package F scopes its context hook and cleanup suggestions to
-   * them. `sessionId` is empty for a start charged outside a session.
+   * `start` lines, read back (review of #10, request 4). Package F scopes its cleanup suggestions to them. `sessionId`
+   * is empty for a start charged outside a session.
    */
   starts(account: string, sinceMs: number): Promise<readonly { readonly warehouseId: string; readonly atMs: number; readonly sessionId: string }[]>
 }

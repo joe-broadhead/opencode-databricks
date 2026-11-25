@@ -7,8 +7,8 @@
 - macOS or Linux.
 
 ```sh
-git clone https://github.com/joe-broadhead/opencode-databricks.git
-cd opencode-databricks
+git clone https://github.com/we-the-rebel-alliance/databricks-plugin.git
+cd databricks-plugin
 npm ci --ignore-scripts
 npm run check
 ```
@@ -17,15 +17,8 @@ No dependency needs install scripts, and OpenCode installs plugins without them,
 
 ### Run your checkout in OpenCode
 
-Build it, then add the clone's path to `plugins` in your OpenCode config instead of the release install:
-
-```sh
-npm run build
-```
-
-```json
-{ "plugins": [{ "package": "/path/to/opencode-databricks" }] }
-```
+Build it with `npm run build`, then point the `plugins` entry of a development OpenCode config at the clone's directory
+instead of the release install. A development build answers `NOT_RELEASED` and never calls Databricks.
 
 ## `npm run check`
 
@@ -64,5 +57,4 @@ Each release is the GitHub tag `v<version>`, made only by `.github/workflows/rel
 `release` environment. While changes land, their notes go under `## [Unreleased]` in `CHANGELOG.md`; a release-prep
 commit runs `node scripts/changelog.mjs release`. `package.json` stays `"private": true` and in canonical form.
 
-A pull request's CI runs the Linux runners only; the push to `master` runs every runner, Apple-silicon macOS
-(`macos-26`) too, and the release stands on that run. An Intel Mac (`macos-26-intel`) is not required.
+CI runs one `ci` job on every pull request and every push to `master`; the release stands on that run.
