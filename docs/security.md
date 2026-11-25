@@ -15,6 +15,13 @@ An interactive sign-in requests the fine-grained scopes for the features the acc
 `unity-catalog`, `query-history`, `jobs`, `workspace`, `files`), or `all-apis` when the app connection is made that way.
 A missing scope is `SCOPE_MISSING` before any request.
 
+## Source reads
+
+The four source reads (`events_list`, `saved_read`, `probe` and `saved_list`) assert their method action
+(`databricks.events_list`, `databricks.saved_read`, `databricks.probe`, `databricks.saved_list`) and, for every operation
+the method declares, `databricks.read` on `<account>:<operation>`. An old `databricks.read` allow, ask or deny rule
+therefore still governs all four; a deny stops the call before any provider request.
+
 ## Plan and commit
 
 A write is planned first. The plan writes nothing; it previews the targets, the warehouse and the cost. The commit

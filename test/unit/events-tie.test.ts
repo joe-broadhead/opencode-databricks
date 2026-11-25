@@ -62,6 +62,7 @@ function deps(source: "queries" | "runs", includeBefore = false): Deps {
     reads: { prepare: async () => { throw new Error("not used") } },
     ledger: { totals: async () => ({ startsToday: 0, dbuHoursToday: 0, startsSession: 0, dbuHoursSession: 0, estimate: true }), charge: async () => ({ recorded: true, totals: { startsToday: 0, dbuHoursToday: 0, startsSession: 0, dbuHoursSession: 0, estimate: true } }), starts: async () => [] },
     clock: { now: () => NOW, uuid: () => "id" },
+    permission: { assert: async () => {} },
   }
   useRecords(base, memoryRecords([{ account: "work", host: HOST, record: { userId: "42", userName: "ana@example.com", at: NOW } }]))
   void source
