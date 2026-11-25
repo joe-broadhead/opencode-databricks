@@ -37,7 +37,7 @@ const page = (source, account, owner, events) =>
 const queryEvent = event("queries", "work", "query-work-1", "x-databricks/query", "2026-11-19T10:15:00.000Z", "SELECT count(*) FROM main.default.orders", ["SELECT", "FINISHED"])
 const runEvent = event("runs", "work", "run-work-1", "x-databricks/run", "2026-11-19T11:00:00.000Z", "Job nightly-refresh run 1 succeeded", ["SUCCESS"])
 
-const probe = (source, answer) => ({ answer: { ...(source === undefined ? {} : { source }), account: "work", owner: workOwner, scopes: ["sql"], trust: "untrusted", ...answer } })
+const probe = (source, answer) => ({ answer: { ...(source === undefined ? {} : { source }), account: "work", owner: workOwner, trust: "untrusted", ...answer } })
 
 const status = statusAnswer({
   manifest,

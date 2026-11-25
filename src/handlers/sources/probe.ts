@@ -32,7 +32,7 @@ const probe: Handler<"probe"> = async (input, call, deps) => {
   }
   const me = await deps.databricks.me(account, call.signal)
   recordsOf(deps).put(account, host, { userId: me.id, userName: me.userName, ...(me.displayName ? { displayName: me.displayName } : {}), at: deps.clock.now() })
-  return probeResult({ source: name, account, owner: ownerOf(me, host) }, { scopes: ["sql"] })
+  return probeResult({ source: name, account, owner: ownerOf(me, host) })
 }
 
 export default probe
