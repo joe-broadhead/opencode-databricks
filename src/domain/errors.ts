@@ -22,7 +22,7 @@ export const ERRORS = {
   CANCELLED: { state: "failed", what: "The call was stopped, and the statement it started was cancelled.", next: "Call the tool again if you still need the result." },
   INPUT_INVALID: { state: "refused", what: "The input does not fit the tool's schema.", next: "Check the input against the tool's schema, then call it again." },
   // Auth (design §3).
-  AUTH_REQUIRED: { state: "refused", what: "No usable Databricks credential: none stored, a refresh failed, or the configured role differs from the one bound at sign-in.", next: "Run /connect and choose Databricks, or run opencode auth login databricks-<alias>." },
+  AUTH_REQUIRED: { state: "refused", what: "No usable Databricks credential: none stored, a refresh failed, or the configured role differs from the one bound at sign-in.", next: "Run /connect and choose Databricks, or run opencode auth login databricks for the default account (databricks-<alias> for a named one)." },
   AUTH_SCOPE_MISSING: { state: "refused", what: "The sign-in lacks the API scope this call needs, so Databricks was not called.", next: "Add the feature and sign in again, or ask the admin to allow the scope on the app connection." },
   AUTH_CLIENT_INVALID: { state: "refused", what: "Databricks refused the OAuth client, its scopes or its redirect URL.", next: "Check the client ID; for invalid_scope choose the other scope set on the form; app changes can take 30 minutes." },
   HOST_INVALID: { state: "refused", what: "The workspace URL is not https, or not a Databricks host.", next: "Enter the workspace URL from the browser, or set allowCustomHost for a private link." },

@@ -12161,7 +12161,7 @@ var ERRORS = {
   CANCELLED: { state: "failed", what: "The call was stopped, and the statement it started was cancelled.", next: "Call the tool again if you still need the result." },
   INPUT_INVALID: { state: "refused", what: "The input does not fit the tool's schema.", next: "Check the input against the tool's schema, then call it again." },
   // Auth (design §3).
-  AUTH_REQUIRED: { state: "refused", what: "No usable Databricks credential: none stored, a refresh failed, or the configured role differs from the one bound at sign-in.", next: "Run /connect and choose Databricks, or run opencode auth login databricks-<alias>." },
+  AUTH_REQUIRED: { state: "refused", what: "No usable Databricks credential: none stored, a refresh failed, or the configured role differs from the one bound at sign-in.", next: "Run /connect and choose Databricks, or run opencode auth login databricks for the default account (databricks-<alias> for a named one)." },
   AUTH_SCOPE_MISSING: { state: "refused", what: "The sign-in lacks the API scope this call needs, so Databricks was not called.", next: "Add the feature and sign in again, or ask the admin to allow the scope on the app connection." },
   AUTH_CLIENT_INVALID: { state: "refused", what: "Databricks refused the OAuth client, its scopes or its redirect URL.", next: "Check the client ID; for invalid_scope choose the other scope set on the form; app changes can take 30 minutes." },
   HOST_INVALID: { state: "refused", what: "The workspace URL is not https, or not a Databricks host.", next: "Enter the workspace URL from the browser, or set allowCustomHost for a private link." },
@@ -18903,313 +18903,6 @@ function sameState(actual, expected) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-// src/auth/token.ts
-var TIMEOUT_MS = 3e4;
-var secondsText = (ms) => `${ms >= 1e3 ? Math.round(ms / 1e3) : ms / 1e3} seconds`;
-var OAUTH_CODE = /^[a-z][a-z0-9_]{2,40}$/u;
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function failure4(status, json2, invalidScope) {
-  const raw = typeof json2["error"] === "string" ? json2["error"] : "";
-  const code = OAUTH_CODE.test(raw) ? raw : "";
-  const says = code ? ` Databricks answered ${code}.` : "";
-  const next = "Check the client ID and the app connection's redirect URLs and scopes; app changes can take 30 minutes.";
-  if (code === "invalid_scope") {
-    return invalidScope === "scope" ? new DatabricksError("AUTH_SCOPE_MISSING", `The OAuth token request asked for a scope the OAuth secret does not allow (HTTP ${status}).${says}`, "Generate a secret with the API scopes this plugin needs, or sign in interactively.") : new DatabricksError("AUTH_CLIENT_INVALID", `Databricks refused the app connection's scopes (HTTP ${status}).${says}`, "Choose the other scope set on the sign-in form (fine or all-apis), or ask the admin to allow the scope on the app connection.");
-  }
-  if (code === "invalid_client" || code === "unauthorized_client") {
-    return new DatabricksError("AUTH_CLIENT_INVALID", `Databricks refused the OAuth client (HTTP ${status}).${says}`, next);
-  }
-  if (code === "invalid_grant") {
-    return new DatabricksError("AUTH_REQUIRED", `The sign-in's grant is no longer valid (HTTP ${status}).${says}`, "Sign in again with /connect, or with opencode auth login databricks-<alias>.");
-  }
-  return new DatabricksError("UNAVAILABLE", `The OAuth token endpoint failed (HTTP ${status}).${says}`, "Try again in a few seconds; if it persists, check the workspace URL and the app connection.");
-}
-async function requestToken(request) {
-  if (request.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.");
-  const timeoutMs = request.timeoutMs ?? TIMEOUT_MS;
-  const timeout = AbortSignal.timeout(timeoutMs);
-  const signal = AbortSignal.any([request.signal, timeout]);
-  const headers = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
-  if (request.basic) headers["Authorization"] = `Basic ${Buffer.from(`${request.basic.user}:${request.basic.secret}`).toString("base64")}`;
-  let response;
-  try {
-    response = await request.fetch(request.endpoint, {
-      method: "POST",
-      headers,
-      body: new URLSearchParams(request.form).toString(),
-      redirect: "error",
-      signal
-    });
-  } catch (error3) {
-    if (request.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.");
-    if (timeout.aborted) throw new DatabricksError("UNAVAILABLE", `The OAuth token endpoint did not answer within ${secondsText(timeoutMs)}.`, "Try again; if it persists, check the network and the workspace URL.");
-    throw new DatabricksError("UNAVAILABLE", "The OAuth token endpoint could not be reached.", "Try again; if it persists, check the network and the workspace URL.");
-  }
-  let text7 = "";
-  try {
-    text7 = await response.text();
-  } catch {
-  }
-  let json2 = {};
-  if (text7.trim()) {
-    try {
-      const parsed = JSON.parse(text7);
-      if (isRecord(parsed)) json2 = parsed;
-    } catch {
-      if (response.ok) throw new DatabricksError("UNAVAILABLE", "The OAuth token endpoint answered something that is not JSON.", "Try again; if it persists, report it.");
-    }
-  }
-  if (!response.ok) throw failure4(response.status, json2, request.invalidScope ?? "client");
-  const accessToken = typeof json2["access_token"] === "string" ? json2["access_token"] : "";
-  if (!accessToken) throw new DatabricksError("UNAVAILABLE", "The OAuth token endpoint returned no access token.", "Try again; if it persists, check the app connection.");
-  const refreshToken = typeof json2["refresh_token"] === "string" && json2["refresh_token"] ? json2["refresh_token"] : void 0;
-  const rawExpires = typeof json2["expires_in"] === "number" ? json2["expires_in"] : Number(json2["expires_in"]);
-  const expiresIn = Number.isFinite(rawExpires) && rawExpires > 0 ? Math.floor(rawExpires) : 3600;
-  const scope2 = typeof json2["scope"] === "string" ? json2["scope"] : void 0;
-  const scopes = scope2 ? scope2.split(/\s+/u).filter(Boolean) : void 0;
-  return { accessToken, expiresIn, ...refreshToken ? { refreshToken } : {}, ...scopes && scopes.length > 0 ? { scopes } : {} };
-}
-
-// src/auth/oauth.ts
-var DEFAULT_TIMEOUT_MS = 10 * 60 * 1e3;
-var OAUTH_METHOD_ID = "databricks";
-function authorizeUrl(input) {
-  const url2 = new URL(input.endpoint ?? `${input.host}/oidc/v1/authorize`);
-  url2.searchParams.set("client_id", input.clientId);
-  url2.searchParams.set("redirect_uri", input.redirectUri);
-  url2.searchParams.set("response_type", "code");
-  url2.searchParams.set("state", input.state);
-  url2.searchParams.set("code_challenge", input.pkce.challenge);
-  url2.searchParams.set("code_challenge_method", "S256");
-  url2.searchParams.set("scope", input.scopes.join(" "));
-  if (input.roleGroupId) url2.searchParams.set("assume_group", input.roleGroupId);
-  return url2.toString();
-}
-function escapeHtml(value) {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-function page(title, body) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)}</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 16px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; background: Canvas; color: CanvasText; }
-  main { max-width: 34rem; padding: 2rem; text-align: center; }
-  h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
-  p { margin: 0.5rem 0; color: color-mix(in srgb, CanvasText 78%, Canvas); }
-</style>
-</head>
-<body><main><h1>${escapeHtml(title)}</h1>${body}</main></body>
-</html>`;
-}
-function respond(response, status, title, body) {
-  if (response.writableEnded) return;
-  response.writeHead(status, {
-    "Content-Type": "text/html; charset=utf-8",
-    "Cache-Control": "no-store",
-    Connection: "close",
-    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer"
-  });
-  response.end(page(title, body));
-}
-function listen(server, port) {
-  return new Promise((resolve2, reject) => {
-    const failed = () => {
-      server.off("listening", ready);
-      reject(new DatabricksError("AUTH_CLIENT_INVALID", `The sign-in could not listen on 127.0.0.1:${port}; another program may be using callbackPort ${port}.`, "Free the port, or set the plugin's callbackPort to another local port."));
-    };
-    const ready = () => {
-      server.off("error", failed);
-      resolve2();
-    };
-    server.once("error", failed);
-    server.once("listening", ready);
-    server.listen(port, "127.0.0.1");
-  });
-}
-async function closeServer(server) {
-  if (!server.listening) return;
-  await new Promise((resolve2) => {
-    const timer = setTimeout(() => {
-      server.closeAllConnections?.();
-      resolve2();
-    }, 500);
-    timer.unref?.();
-    server.close(() => {
-      clearTimeout(timer);
-      resolve2();
-    });
-  });
-}
-function instructions(input) {
-  const relay = input.redirect.uri.startsWith("https://");
-  const hint = relay ? `If ${DISPLAY_NAME} shows redirect_uri_mismatch, the app connection does not list ${input.redirect.uri} exactly.` : `If ${DISPLAY_NAME} shows redirect_uri_mismatch, the app connection does not list ${input.redirect.uri} exactly, character for character.`;
-  return `Sign in to ${DISPLAY_NAME}${input.alias === "default" ? "" : ` (${input.alias})`} at ${input.host}. Databricks will ask you to approve exactly these scopes: ${input.scopes.join(", ")}. ${hint} Changes to an app connection can take 30 minutes.`;
-}
-async function authorizeDatabricks(input) {
-  const pkce = createPkce();
-  const state = createState();
-  const now = input.now;
-  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const tokenEndpoint = input.tokenEndpoint ?? `${input.host}/oidc/v1/token`;
-  let settle3;
-  let fail;
-  const callback = new Promise((resolve2, reject) => {
-    settle3 = resolve2;
-    fail = reject;
-  });
-  void callback.catch(() => {
-  });
-  let finished = false;
-  let processing = false;
-  let timer;
-  const finish2 = async (error3, credential) => {
-    if (finished) return;
-    finished = true;
-    if (timer) clearTimeout(timer);
-    await closeServer(server);
-    if (error3) fail(error3);
-    else if (credential) settle3(credential);
-    else fail(new DatabricksError("AUTH_REQUIRED", "The Databricks sign-in produced no credential.", "Run /connect again and choose Databricks."));
-  };
-  const handle = async (request, response) => {
-    try {
-      if (request.method !== "GET") {
-        respond(response, 405, "Method not allowed", "<p>Use the sign-in link from OpenCode.</p>");
-        return;
-      }
-      const url3 = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (!input.redirect.paths.includes(url3.pathname)) {
-        respond(response, 404, "Not found", "<p>This is not the OAuth callback.</p>");
-        return;
-      }
-      if (finished) {
-        respond(response, 409, "Sign-in already finished", "<p>This sign-in attempt has already completed.</p>");
-        return;
-      }
-      const answerState = url3.searchParams.get("state") ?? "";
-      const denied = url3.searchParams.get("error");
-      const code = url3.searchParams.get("code");
-      if (!answerState && !denied && !code) {
-        respond(response, 400, "Waiting for the Databricks sign-in", "<p>Open the sign-in link from OpenCode.</p>");
-        return;
-      }
-      if (!sameState(answerState, state)) {
-        respond(response, 400, "Sign-in not accepted", "<p>The OAuth state did not match, so this callback was ignored. The sign-in is still waiting for the browser.</p>");
-        return;
-      }
-      if (denied) {
-        const named = /^[A-Za-z0-9_.-]{1,80}$/u.test(denied) ? denied : "authorization failed";
-        respond(response, 400, "Sign-in failed", `<p>${DISPLAY_NAME} returned: ${escapeHtml(named)}.</p>`);
-        await finish2(
-          named === "invalid_scope" ? new DatabricksError("AUTH_CLIENT_INVALID", "Databricks refused the requested scopes (invalid_scope).", "Choose the other scope set on the sign-in form (fine or all-apis), or ask the admin to allow the scope on the app connection.") : new DatabricksError("AUTH_REQUIRED", `The Databricks sign-in was not completed (${named}).`, "Run /connect again and choose Databricks.")
-        );
-        return;
-      }
-      if (!code) {
-        respond(response, 400, "Sign-in failed", "<p>The callback did not include an authorization code.</p>");
-        await finish2(new DatabricksError("AUTH_REQUIRED", "The Databricks callback did not include an authorization code.", "Run /connect again and choose Databricks."));
-        return;
-      }
-      if (processing) {
-        respond(response, 409, "Sign-in already in progress", "<p>This sign-in attempt is already being completed.</p>");
-        return;
-      }
-      processing = true;
-      try {
-        const token = await requestToken({
-          endpoint: tokenEndpoint,
-          form: {
-            grant_type: "authorization_code",
-            code,
-            client_id: input.clientId,
-            redirect_uri: input.redirect.uri,
-            code_verifier: pkce.verifier,
-            scope: input.scopes.join(" ")
-          },
-          fetch: input.fetch,
-          signal: new AbortController().signal
-        });
-        if (!token.refreshToken) {
-          throw new DatabricksError(
-            "AUTH_REQUIRED",
-            "Databricks returned no refresh token, so this sign-in would stop working after an hour.",
-            "Ask the account admin to include the offline_access scope on the app connection, then sign in again."
-          );
-        }
-        const metadata = signInMetadata({
-          host: input.host,
-          clientId: input.clientId,
-          scopes: input.choice,
-          requestedScopes: input.scopes,
-          grantedScopes: token.scopes ?? input.scopes,
-          ...input.roleGroupId !== void 0 ? { roleGroupId: input.roleGroupId } : {},
-          generation: now()
-        });
-        const credential = {
-          type: "oauth",
-          methodID: OAUTH_METHOD_ID,
-          refresh: token.refreshToken,
-          access: token.accessToken,
-          expires: Math.floor(now() + token.expiresIn * 1e3),
-          metadata
-        };
-        if (!finished) respond(response, 200, "Databricks connected", "<p>Authentication is complete. You can close this window.</p>");
-        await finish2(void 0, credential);
-      } catch (error3) {
-        if (!finished) respond(response, 500, "Sign-in failed", "<p>OpenCode could not complete the Databricks token exchange. Check the terminal for the next step.</p>");
-        await finish2(error3 instanceof Error ? error3 : new DatabricksError("UNAVAILABLE", "The Databricks sign-in failed.", "Try again."));
-      }
-    } catch {
-      if (!finished) respond(response, 500, "Sign-in failed", "<p>OpenCode could not process the local OAuth callback.</p>");
-      await finish2(new DatabricksError("UNAVAILABLE", "The local OAuth callback could not be processed.", "Try the sign-in again."));
-    }
-  };
-  const server = createServer((request, response) => {
-    void handle(request, response);
-  });
-  try {
-    await listen(server, input.redirect.port);
-  } catch (error3) {
-    await closeServer(server);
-    throw error3;
-  }
-  server.unref?.();
-  server.on("error", () => {
-    void finish2(new DatabricksError("UNAVAILABLE", "The local callback server stopped unexpectedly.", "Try the sign-in again."));
-  });
-  timer = setTimeout(() => {
-    const minutes = Math.max(1, Math.round(timeoutMs / 6e4));
-    void finish2(new DatabricksError("AUTH_REQUIRED", `The Databricks sign-in timed out after ${minutes} minute${minutes === 1 ? "" : "s"}.`, "Run /connect again and choose Databricks."));
-  }, timeoutMs);
-  timer.unref?.();
-  let url2;
-  try {
-    url2 = authorizeUrl({
-      host: input.host,
-      clientId: input.clientId,
-      redirectUri: input.redirect.uri,
-      scopes: input.scopes,
-      state,
-      pkce,
-      ...input.roleGroupId !== void 0 ? { roleGroupId: input.roleGroupId } : {},
-      ...input.authorizeEndpoint !== void 0 ? { endpoint: input.authorizeEndpoint } : {}
-    });
-  } catch (error3) {
-    await closeServer(server);
-    throw error3 instanceof Error ? error3 : new DatabricksError("UNAVAILABLE", "The authorize URL could not be built.", "Check the workspace URL.");
-  }
-  return { url: url2, instructions: instructions(input), expiresAt: now() + timeoutMs, mode: "auto", callback };
-}
-
 // src/disclosures.ts
 var WRITE_DISCLOSURE = "At Allowed, the agent can change or delete anything your Databricks identity can, after a plan it makes itself. For a hard limit, sign in with a read-only role.";
 
@@ -19665,6 +19358,314 @@ function readSignInAnswer(answer, account, redirect, allowCustomHost) {
   return { host: host2, clientId, scopes, ...role ? { roleGroupId: role } : {}, redirect: resolved };
 }
 
+// src/auth/token.ts
+var TIMEOUT_MS = 3e4;
+var secondsText = (ms) => `${ms >= 1e3 ? Math.round(ms / 1e3) : ms / 1e3} seconds`;
+var OAUTH_CODE = /^[a-z][a-z0-9_]{2,40}$/u;
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function failure4(alias, status, json2, invalidScope) {
+  const raw = typeof json2["error"] === "string" ? json2["error"] : "";
+  const code = OAUTH_CODE.test(raw) ? raw : "";
+  const says = code ? ` Databricks answered ${code}.` : "";
+  const next = "Check the client ID and the app connection's redirect URLs and scopes; app changes can take 30 minutes.";
+  if (code === "invalid_scope") {
+    return invalidScope === "scope" ? new DatabricksError("AUTH_SCOPE_MISSING", `The OAuth token request asked for a scope the OAuth secret does not allow (HTTP ${status}).${says}`, "Generate a secret with the API scopes this plugin needs, or sign in interactively.") : new DatabricksError("AUTH_CLIENT_INVALID", `Databricks refused the app connection's scopes (HTTP ${status}).${says}`, "Choose the other scope set on the sign-in form (fine or all-apis), or ask the admin to allow the scope on the app connection.");
+  }
+  if (code === "invalid_client" || code === "unauthorized_client") {
+    return new DatabricksError("AUTH_CLIENT_INVALID", `Databricks refused the OAuth client (HTTP ${status}).${says}`, next);
+  }
+  if (code === "invalid_grant") {
+    return new DatabricksError("AUTH_REQUIRED", `The sign-in's grant is no longer valid (HTTP ${status}).${says}`, `Sign in again with /connect, or with opencode auth login ${integrationIdFor(alias)}.`);
+  }
+  return new DatabricksError("UNAVAILABLE", `The OAuth token endpoint failed (HTTP ${status}).${says}`, "Try again in a few seconds; if it persists, check the workspace URL and the app connection.");
+}
+async function requestToken(request) {
+  if (request.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.");
+  const timeoutMs = request.timeoutMs ?? TIMEOUT_MS;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = AbortSignal.any([request.signal, timeout]);
+  const headers = { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" };
+  if (request.basic) headers["Authorization"] = `Basic ${Buffer.from(`${request.basic.user}:${request.basic.secret}`).toString("base64")}`;
+  let response;
+  try {
+    response = await request.fetch(request.endpoint, {
+      method: "POST",
+      headers,
+      body: new URLSearchParams(request.form).toString(),
+      redirect: "error",
+      signal
+    });
+  } catch (error3) {
+    if (request.signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.");
+    if (timeout.aborted) throw new DatabricksError("UNAVAILABLE", `The OAuth token endpoint did not answer within ${secondsText(timeoutMs)}.`, "Try again; if it persists, check the network and the workspace URL.");
+    throw new DatabricksError("UNAVAILABLE", "The OAuth token endpoint could not be reached.", "Try again; if it persists, check the network and the workspace URL.");
+  }
+  let text7 = "";
+  try {
+    text7 = await response.text();
+  } catch {
+  }
+  let json2 = {};
+  if (text7.trim()) {
+    try {
+      const parsed = JSON.parse(text7);
+      if (isRecord(parsed)) json2 = parsed;
+    } catch {
+      if (response.ok) throw new DatabricksError("UNAVAILABLE", "The OAuth token endpoint answered something that is not JSON.", "Try again; if it persists, report it.");
+    }
+  }
+  if (!response.ok) throw failure4(request.alias, response.status, json2, request.invalidScope ?? "client");
+  const accessToken = typeof json2["access_token"] === "string" ? json2["access_token"] : "";
+  if (!accessToken) throw new DatabricksError("UNAVAILABLE", "The OAuth token endpoint returned no access token.", "Try again; if it persists, check the app connection.");
+  const refreshToken = typeof json2["refresh_token"] === "string" && json2["refresh_token"] ? json2["refresh_token"] : void 0;
+  const rawExpires = typeof json2["expires_in"] === "number" ? json2["expires_in"] : Number(json2["expires_in"]);
+  const expiresIn = Number.isFinite(rawExpires) && rawExpires > 0 ? Math.floor(rawExpires) : 3600;
+  const scope2 = typeof json2["scope"] === "string" ? json2["scope"] : void 0;
+  const scopes = scope2 ? scope2.split(/\s+/u).filter(Boolean) : void 0;
+  return { accessToken, expiresIn, ...refreshToken ? { refreshToken } : {}, ...scopes && scopes.length > 0 ? { scopes } : {} };
+}
+
+// src/auth/oauth.ts
+var DEFAULT_TIMEOUT_MS = 10 * 60 * 1e3;
+var OAUTH_METHOD_ID = "databricks";
+function authorizeUrl(input) {
+  const url2 = new URL(input.endpoint ?? `${input.host}/oidc/v1/authorize`);
+  url2.searchParams.set("client_id", input.clientId);
+  url2.searchParams.set("redirect_uri", input.redirectUri);
+  url2.searchParams.set("response_type", "code");
+  url2.searchParams.set("state", input.state);
+  url2.searchParams.set("code_challenge", input.pkce.challenge);
+  url2.searchParams.set("code_challenge_method", "S256");
+  url2.searchParams.set("scope", input.scopes.join(" "));
+  if (input.roleGroupId) url2.searchParams.set("assume_group", input.roleGroupId);
+  return url2.toString();
+}
+function escapeHtml(value) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function page(title, body) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; font: 16px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; background: Canvas; color: CanvasText; }
+  main { max-width: 34rem; padding: 2rem; text-align: center; }
+  h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
+  p { margin: 0.5rem 0; color: color-mix(in srgb, CanvasText 78%, Canvas); }
+</style>
+</head>
+<body><main><h1>${escapeHtml(title)}</h1>${body}</main></body>
+</html>`;
+}
+function respond(response, status, title, body) {
+  if (response.writableEnded) return;
+  response.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    Connection: "close",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer"
+  });
+  response.end(page(title, body));
+}
+function listen(server, port) {
+  return new Promise((resolve2, reject) => {
+    const failed = () => {
+      server.off("listening", ready);
+      reject(new DatabricksError("AUTH_CLIENT_INVALID", `The sign-in could not listen on 127.0.0.1:${port}; another program may be using callbackPort ${port}.`, "Free the port, or set the plugin's callbackPort to another local port."));
+    };
+    const ready = () => {
+      server.off("error", failed);
+      resolve2();
+    };
+    server.once("error", failed);
+    server.once("listening", ready);
+    server.listen(port, "127.0.0.1");
+  });
+}
+async function closeServer(server) {
+  if (!server.listening) return;
+  await new Promise((resolve2) => {
+    const timer = setTimeout(() => {
+      server.closeAllConnections?.();
+      resolve2();
+    }, 500);
+    timer.unref?.();
+    server.close(() => {
+      clearTimeout(timer);
+      resolve2();
+    });
+  });
+}
+function instructions(input) {
+  const relay = input.redirect.uri.startsWith("https://");
+  const hint = relay ? `If ${DISPLAY_NAME} shows redirect_uri_mismatch, the app connection does not list ${input.redirect.uri} exactly.` : `If ${DISPLAY_NAME} shows redirect_uri_mismatch, the app connection does not list ${input.redirect.uri} exactly, character for character.`;
+  return `Sign in to ${DISPLAY_NAME}${input.alias === "default" ? "" : ` (${input.alias})`} at ${input.host}. Databricks will ask you to approve exactly these scopes: ${input.scopes.join(", ")}. ${hint} Changes to an app connection can take 30 minutes.`;
+}
+async function authorizeDatabricks(input) {
+  const pkce = createPkce();
+  const state = createState();
+  const now = input.now;
+  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const tokenEndpoint = input.tokenEndpoint ?? `${input.host}/oidc/v1/token`;
+  let settle3;
+  let fail;
+  const callback = new Promise((resolve2, reject) => {
+    settle3 = resolve2;
+    fail = reject;
+  });
+  void callback.catch(() => {
+  });
+  let finished = false;
+  let processing = false;
+  let timer;
+  const finish2 = async (error3, credential) => {
+    if (finished) return;
+    finished = true;
+    if (timer) clearTimeout(timer);
+    await closeServer(server);
+    if (error3) fail(error3);
+    else if (credential) settle3(credential);
+    else fail(new DatabricksError("AUTH_REQUIRED", "The Databricks sign-in produced no credential.", "Run /connect again and choose Databricks."));
+  };
+  const handle = async (request, response) => {
+    try {
+      if (request.method !== "GET") {
+        respond(response, 405, "Method not allowed", "<p>Use the sign-in link from OpenCode.</p>");
+        return;
+      }
+      const url3 = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (!input.redirect.paths.includes(url3.pathname)) {
+        respond(response, 404, "Not found", "<p>This is not the OAuth callback.</p>");
+        return;
+      }
+      if (finished) {
+        respond(response, 409, "Sign-in already finished", "<p>This sign-in attempt has already completed.</p>");
+        return;
+      }
+      const answerState = url3.searchParams.get("state") ?? "";
+      const denied = url3.searchParams.get("error");
+      const code = url3.searchParams.get("code");
+      if (!answerState && !denied && !code) {
+        respond(response, 400, "Waiting for the Databricks sign-in", "<p>Open the sign-in link from OpenCode.</p>");
+        return;
+      }
+      if (!sameState(answerState, state)) {
+        respond(response, 400, "Sign-in not accepted", "<p>The OAuth state did not match, so this callback was ignored. The sign-in is still waiting for the browser.</p>");
+        return;
+      }
+      if (denied) {
+        const named = /^[A-Za-z0-9_.-]{1,80}$/u.test(denied) ? denied : "authorization failed";
+        respond(response, 400, "Sign-in failed", `<p>${DISPLAY_NAME} returned: ${escapeHtml(named)}.</p>`);
+        await finish2(
+          named === "invalid_scope" ? new DatabricksError("AUTH_CLIENT_INVALID", "Databricks refused the requested scopes (invalid_scope).", "Choose the other scope set on the sign-in form (fine or all-apis), or ask the admin to allow the scope on the app connection.") : new DatabricksError("AUTH_REQUIRED", `The Databricks sign-in was not completed (${named}).`, "Run /connect again and choose Databricks.")
+        );
+        return;
+      }
+      if (!code) {
+        respond(response, 400, "Sign-in failed", "<p>The callback did not include an authorization code.</p>");
+        await finish2(new DatabricksError("AUTH_REQUIRED", "The Databricks callback did not include an authorization code.", "Run /connect again and choose Databricks."));
+        return;
+      }
+      if (processing) {
+        respond(response, 409, "Sign-in already in progress", "<p>This sign-in attempt is already being completed.</p>");
+        return;
+      }
+      processing = true;
+      try {
+        const token = await requestToken({
+          alias: input.alias,
+          endpoint: tokenEndpoint,
+          form: {
+            grant_type: "authorization_code",
+            code,
+            client_id: input.clientId,
+            redirect_uri: input.redirect.uri,
+            code_verifier: pkce.verifier,
+            scope: input.scopes.join(" ")
+          },
+          fetch: input.fetch,
+          signal: new AbortController().signal
+        });
+        if (!token.refreshToken) {
+          throw new DatabricksError(
+            "AUTH_REQUIRED",
+            "Databricks returned no refresh token, so this sign-in would stop working after an hour.",
+            "Ask the account admin to include the offline_access scope on the app connection, then sign in again."
+          );
+        }
+        const metadata = signInMetadata({
+          host: input.host,
+          clientId: input.clientId,
+          scopes: input.choice,
+          requestedScopes: input.scopes,
+          grantedScopes: token.scopes ?? input.scopes,
+          ...input.roleGroupId !== void 0 ? { roleGroupId: input.roleGroupId } : {},
+          generation: now()
+        });
+        const credential = {
+          type: "oauth",
+          methodID: OAUTH_METHOD_ID,
+          refresh: token.refreshToken,
+          access: token.accessToken,
+          expires: Math.floor(now() + token.expiresIn * 1e3),
+          metadata
+        };
+        if (!finished) respond(response, 200, "Databricks connected", "<p>Authentication is complete. You can close this window.</p>");
+        await finish2(void 0, credential);
+      } catch (error3) {
+        if (!finished) respond(response, 500, "Sign-in failed", "<p>OpenCode could not complete the Databricks token exchange. Check the terminal for the next step.</p>");
+        await finish2(error3 instanceof Error ? error3 : new DatabricksError("UNAVAILABLE", "The Databricks sign-in failed.", "Try again."));
+      }
+    } catch {
+      if (!finished) respond(response, 500, "Sign-in failed", "<p>OpenCode could not process the local OAuth callback.</p>");
+      await finish2(new DatabricksError("UNAVAILABLE", "The local OAuth callback could not be processed.", "Try the sign-in again."));
+    }
+  };
+  const server = createServer((request, response) => {
+    void handle(request, response);
+  });
+  try {
+    await listen(server, input.redirect.port);
+  } catch (error3) {
+    await closeServer(server);
+    throw error3;
+  }
+  server.unref?.();
+  server.on("error", () => {
+    void finish2(new DatabricksError("UNAVAILABLE", "The local callback server stopped unexpectedly.", "Try the sign-in again."));
+  });
+  timer = setTimeout(() => {
+    const minutes = Math.max(1, Math.round(timeoutMs / 6e4));
+    void finish2(new DatabricksError("AUTH_REQUIRED", `The Databricks sign-in timed out after ${minutes} minute${minutes === 1 ? "" : "s"}.`, "Run /connect again and choose Databricks."));
+  }, timeoutMs);
+  timer.unref?.();
+  let url2;
+  try {
+    url2 = authorizeUrl({
+      host: input.host,
+      clientId: input.clientId,
+      redirectUri: input.redirect.uri,
+      scopes: input.scopes,
+      state,
+      pkce,
+      ...input.roleGroupId !== void 0 ? { roleGroupId: input.roleGroupId } : {},
+      ...input.authorizeEndpoint !== void 0 ? { endpoint: input.authorizeEndpoint } : {}
+    });
+  } catch (error3) {
+    await closeServer(server);
+    throw error3 instanceof Error ? error3 : new DatabricksError("UNAVAILABLE", "The authorize URL could not be built.", "Check the workspace URL.");
+  }
+  return { url: url2, instructions: instructions(input), expiresAt: now() + timeoutMs, mode: "auto", callback };
+}
+
 // src/auth/headless.ts
 import { spawn } from "node:child_process";
 
@@ -19751,6 +19752,7 @@ async function m2mToken(input) {
   const cached3 = input.cache.get(key, input.now());
   if (cached3) return cached3;
   const token = await requestToken({
+    alias,
     endpoint: input.tokenEndpoint ?? `${endpoint}/oidc/v1/token`,
     form: {
       grant_type: "client_credentials",
@@ -19934,6 +19936,7 @@ async function refreshSignIn(input) {
       if (latest.generation > generation) return latest.credential;
     }
     const token = await requestToken({
+      alias,
       endpoint: input.tokenEndpoint ?? `${host2}/oidc/v1/token`,
       form: {
         grant_type: "refresh_token",

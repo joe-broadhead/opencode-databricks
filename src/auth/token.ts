@@ -15,6 +15,7 @@
  * - Refresh: `POST` the token endpoint with `grant_type=refresh_token&refresh_token=…&client_id=…` [partner guide].
  */
 import { DatabricksError } from "../domain/errors.js"
+import { integrationIdFor } from "./form.js"
 
 const TIMEOUT_MS = 30_000
 
@@ -33,6 +34,8 @@ export interface TokenSet {
 }
 
 export interface TokenRequest {
+  /** The account alias, for the sign-in command a refused token names. */
+  readonly alias: string
   readonly endpoint: string
   readonly form: Readonly<Record<string, string>>
   readonly fetch: typeof globalThis.fetch
@@ -48,7 +51,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function failure(status: number, json: Record<string, unknown>, invalidScope: "client" | "scope"): DatabricksError {
+function failure(alias: string, status: number, json: Record<string, unknown>, invalidScope: "client" | "scope"): DatabricksError {
   const raw = typeof json["error"] === "string" ? json["error"] : ""
   const code = OAUTH_CODE.test(raw) ? raw : ""
   const says = code ? ` Databricks answered ${code}.` : ""
@@ -62,7 +65,7 @@ function failure(status: number, json: Record<string, unknown>, invalidScope: "c
     return new DatabricksError("AUTH_CLIENT_INVALID", `Databricks refused the OAuth client (HTTP ${status}).${says}`, next)
   }
   if (code === "invalid_grant") {
-    return new DatabricksError("AUTH_REQUIRED", `The sign-in's grant is no longer valid (HTTP ${status}).${says}`, "Sign in again with /connect, or with opencode auth login databricks-<alias>.")
+    return new DatabricksError("AUTH_REQUIRED", `The sign-in's grant is no longer valid (HTTP ${status}).${says}`, `Sign in again with /connect, or with opencode auth login ${integrationIdFor(alias)}.`)
   }
   return new DatabricksError("UNAVAILABLE", `The OAuth token endpoint failed (HTTP ${status}).${says}`, "Try again in a few seconds; if it persists, check the workspace URL and the app connection.")
 }
@@ -108,7 +111,7 @@ export async function requestToken(request: TokenRequest): Promise<TokenSet> {
       if (response.ok) throw new DatabricksError("UNAVAILABLE", "The OAuth token endpoint answered something that is not JSON.", "Try again; if it persists, report it.")
     }
   }
-  if (!response.ok) throw failure(response.status, json, request.invalidScope ?? "client")
+  if (!response.ok) throw failure(request.alias, response.status, json, request.invalidScope ?? "client")
   const accessToken = typeof json["access_token"] === "string" ? json["access_token"] : ""
   if (!accessToken) throw new DatabricksError("UNAVAILABLE", "The OAuth token endpoint returned no access token.", "Try again; if it persists, check the app connection.")
   const refreshToken = typeof json["refresh_token"] === "string" && json["refresh_token"] ? json["refresh_token"] : undefined

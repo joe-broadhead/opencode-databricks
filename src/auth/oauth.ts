@@ -233,6 +233,7 @@ export async function authorizeDatabricks(input: AuthorizeInput): Promise<Author
       processing = true
       try {
         const token = await requestToken({
+          alias: input.alias,
           endpoint: tokenEndpoint,
           form: {
             grant_type: "authorization_code",

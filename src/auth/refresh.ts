@@ -104,6 +104,7 @@ export async function refreshSignIn(input: RefreshInput): Promise<HostCredential
       if (latest.generation > generation) return latest.credential
     }
     const token = await requestToken({
+      alias,
       endpoint: input.tokenEndpoint ?? `${host}/oidc/v1/token`,
       form: {
         grant_type: "refresh_token",

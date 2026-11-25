@@ -107,6 +107,7 @@ export async function m2mToken(input: M2mInput): Promise<MintedToken> {
   const cached = input.cache.get(key, input.now())
   if (cached) return cached
   const token = await requestToken({
+    alias,
     endpoint: input.tokenEndpoint ?? `${endpoint}/oidc/v1/token`,
     form: {
       grant_type: "client_credentials",

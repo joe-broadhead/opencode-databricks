@@ -36,6 +36,10 @@ The old v0.0.x tags are gone; the comparison is the 4a merge `bd5a019`. Every re
 - The single `plan` tool: replaced by `plan_write`, `plan_delete`, `plan_share`, `plan_export`, `plan_run` and
   `plan_admin`, because a v0 planning method is bound to exactly one commit method. The six share one classifier; no
   capability was dropped.
+- The permission-only `databricks.read` action: v0 has no permission-only action. A rule on `databricks.read` no longer
+  applies; move the rule (including a deny) to `databricks.events_list` and `databricks.saved_read`, denying both to
+  keep a blanket deny on source reads. The old `databricks.plan` action is now the six `databricks.plan_*` actions;
+  move a rule to the planner(s) it should cover, and a deny on `databricks.plan` alone no longer applies.
 - The `role` enforcement value: the contract cannot carry a certification, so a configured role reports
   `role-requested`. The role is still assumed at sign-in; the grants it enforces are unchanged.
 

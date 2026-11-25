@@ -221,8 +221,8 @@ export async function eventsPage(deps: Deps, request: PageRequest): Promise<Even
   const scope = value.scope as Scope | undefined
   const binding = bindingOf(request.source, account, scope)
   const limit = Math.max(1, Math.min(value.limit ?? 100, adapter.limitMax))
-  // The read's own grants, before the first call: for a consumer, the method on `*`, then `databricks.read` on each
-  // operation; for the model's tool, its action on each operation.
+  // The read's own grants, before the first call: `databricks.events_list` (the method's action) on `*`, then the
+  // source's declared operations; for the model's tool, the same action on each operation.
   let state: CursorState | undefined
   if (value.cursor !== undefined) {
     const decoded = decodeState(binding, value.cursor)
