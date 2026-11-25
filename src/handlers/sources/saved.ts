@@ -19,7 +19,7 @@ import { typedCell } from "../save/inline.js"
 import { chargeStatement } from "../../provider/guards/budget.js"
 import { sizeOf } from "../../provider/guards/warehouse.js"
 import { DatabricksError } from "../../domain/errors.js"
-import type { StatementAnswer } from "../../ports.js"
+import type { StatementAnswer, Warehouse } from "../../ports.js"
 import type { Deps } from "../deps.js"
 import type { Call } from "../types.js"
 
@@ -72,7 +72,7 @@ export async function savedRead(deps: Deps, input: SavedInput, call: Call): Prom
   if (wantedSha !== undefined && !/^[0-9a-f]{64}$/u.test(wantedSha)) {
     throw sourceError("INPUT_INVALID", "The saved query's sha256 is not a sha256.", "Choose the query again from saved_list.")
   }
-  let query
+  let query: Awaited<ReturnType<Deps["databricks"]["getQuery"]>>
   try {
     query = await deps.databricks.getQuery(input.account, queryId!, call.signal)
   } catch (error) {
@@ -84,7 +84,7 @@ export async function savedRead(deps: Deps, input: SavedInput, call: Call): Prom
   if (query.warehouseId === undefined || query.warehouseId.length === 0) {
     throw sourceError("UNAVAILABLE", "The saved query names no warehouse, so this source cannot read it without starting one.", "Give the saved query a warehouse in the SQL editor, then bind it again.")
   }
-  let warehouse
+  let warehouse: Warehouse
   try {
     warehouse = await deps.databricks.getWarehouse(input.account, query.warehouseId, call.signal)
   } catch (error) {
@@ -171,7 +171,7 @@ export async function savedRead(deps: Deps, input: SavedInput, call: Call): Prom
   let guard = 0
   while (next !== undefined && rows.length <= MAX_ROWS) {
     if (++guard > 100) break
-    let chunk
+    let chunk: Awaited<ReturnType<Deps["databricks"]["getChunk"]>>
     try {
       chunk = await deps.databricks.getChunk(input.account, answer.statementId, next, call.signal)
     } catch (error) {
@@ -228,7 +228,7 @@ export async function savedList(deps: Deps, input: { readonly account?: string; 
   let pageToken: string | undefined
   let guard = 0
   do {
-    let page
+    let page: Awaited<ReturnType<Deps["databricks"]["listQueries"]>>
     try {
       page = await deps.databricks.listQueries(account, { ...(pageToken === undefined ? {} : { pageToken }) }, call.signal)
     } catch (error) {

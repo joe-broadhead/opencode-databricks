@@ -45,8 +45,9 @@ const call = { sessionID: "s", agent: "a", messageID: "m", id: "c", signal: new 
 
 describe("a plan and its commit", () => {
   it("answers the commit method and a private plan, never a planId", async () => {
-    const answer = (await planWrite({ account: "work", warehouse: "wh-small", sql: "CREATE TABLE main.default.orders (id INT)" }, call, deps())) as { method: string; plan: { category: string; payload: { sql: string } } }
+    const answer = (await planWrite({ account: "work", warehouse: "wh-small", sql: "CREATE TABLE main.default.orders (id INT)" }, call, deps())) as { method: string; trust: string; plan: { category: string; payload: { sql: string } } }
     expect(answer.method).toBe("write")
+    expect(answer.trust).toBe("untrusted")
     expect(answer.plan.category).toBe("write")
     expect(answer.plan.payload.sql).toContain("CREATE TABLE")
     expect(answer).not.toHaveProperty("planId")
@@ -63,6 +64,8 @@ describe("a plan and its commit", () => {
   })
 
   it("refuses a change of another class with the plan method to call", async () => {
-    await expect(planWrite({ account: "work", warehouse: "wh-small", sql: "DROP TABLE main.default.orders" }, call, deps())).rejects.toMatchObject({ code: "INPUT_INVALID" })
+    const error = (await planWrite({ account: "work", warehouse: "wh-small", sql: "DROP TABLE main.default.orders" }, call, deps()).catch((caught: unknown) => caught)) as { code: string; nextStep: string }
+    expect(error.code).toBe("INPUT_INVALID")
+    expect(error.nextStep).toContain("databricks_plan_delete")
   })
 })

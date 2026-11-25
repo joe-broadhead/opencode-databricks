@@ -46,7 +46,7 @@ src/options.ts          the options schema
 src/methods.ts          the code's method table, checked against package.json capabilities
 grammar/                the pinned Apache Spark grammar and its action ports
 test/unit/              the method table, access rules, schemas, source pages, the read path and the cursor tie
-test/fixtures/          the conformance fixture builder
+test/fixtures/          the conformance fixture builder (writes fixtures/conformance.json)
 fixtures/conformance.json  the recorded answers the kit replays
 ```
 

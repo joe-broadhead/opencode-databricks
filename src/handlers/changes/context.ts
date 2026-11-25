@@ -2,7 +2,7 @@
  * What the change tools share (design §5.5, §6.2): the account and feature a call needs, the warehouse a plan previews
  * and a commit re-checks, and the one submit a committed statement makes.
  *
- * **Nothing here sends a statement.** `databricks_plan` calls only `warehouses.get` and `tables.get` (free reads,
+ * **Nothing here sends a statement.** `databricks_plan_run` calls only `warehouses.get` and `tables.get` (free reads,
  * design §5.5 step 4) and never `EXPLAIN`s anything (step 3), so this module has no path to `submit` except
  * `submitChange`, which only a commit calls.
  *

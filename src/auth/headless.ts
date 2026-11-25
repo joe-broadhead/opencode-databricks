@@ -102,7 +102,7 @@ export async function m2mToken(input: M2mInput): Promise<MintedToken> {
   const endpoint = parseWorkspaceHost(host, input.allowCustomHost ?? false).host
   const scope = m2mScope(input.scopes)
   // Fine-grained M2M scopes are not live-tested yet (L2): the request asks for the scopes this call needs, and a scoped
-  // secret narrower than that answers invalid_scope, mapped to AUTH_SCOPE_MISSING with the fix. docs/auth.md says so.
+  // secret narrower than that answers invalid_scope, mapped to AUTH_SCOPE_MISSING with the fix.
   const key = `m2m:${alias}:${scope}`
   const cached = input.cache.get(key, input.now())
   if (cached) return cached

@@ -17,7 +17,7 @@
  *
  * Single-use refresh tokens (Beta, `enable_single_use_refresh_tokens` [12]) invalidate the old token on each refresh.
  * Within this process, refreshes of one account are serialized, so two callers never race; across processes the
- * credential store is the host's (M4: see `docs/auth.md` Known limits).
+ * credential store is the host's (see the auth module's known limits).
  */
 import { DatabricksError } from "../domain/errors.js"
 import { isHostHeld, readSignIn, signInMetadata, type SignIn } from "./credential.js"

@@ -34,7 +34,7 @@
  * end), at most `HOLD_MAX_MS` behind now; items running longer than `HOLD_SOFT_MS` are tracked first, and a tracked
  * item is listed whenever it is final, wherever its end falls.
  *
- * **Assumptions** (`docs/sources.md`, Known limits): a new row appears within `LAG_MS` of its start, and the host's
+ * **Assumptions** (Known limits): a new row appears within `LAG_MS` of its start, and the host's
  * clock is within that of Databricks'; an untracked item's final state shows within `HOLD_MAX_MS` of its end (a
  * tracked item that shows otherwise answers a gap). Both APIs page by token over a fixed start range, which new starts
  * (always later than the range) cannot shift.

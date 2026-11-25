@@ -18,8 +18,9 @@
  */
 export const CELL_LIMIT = 200
 
-const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u2028\u2029]/gu
-const escapeControl = (text: string) => text.replace(CONTROL, (character) => `\\u${character.codePointAt(0)!.toString(16).padStart(4, "0")}`)
+const CONTROL = /\p{Cc}|[\u2028\u2029]/gu
+const escapeControl = (text: string) =>
+  text.replace(CONTROL, (character) => (character === "\t" || character === "\n" || character === "\r" ? character : `\\u${character.codePointAt(0)!.toString(16).padStart(4, "0")}`))
 
 /** The base of a type name: `DECIMAL(10,2)` → `DECIMAL`, `ARRAY<INT>` → `ARRAY`. */
 function baseType(typeName: string | undefined): string {

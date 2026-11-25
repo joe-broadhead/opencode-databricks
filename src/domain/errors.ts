@@ -1,8 +1,7 @@
 /**
  * Every code the plugin raises, in one table (design §12), in the family form `CODE: What happened. Next step: What to
- * do.` The README's Troubleshooting rows and docs/errors.md are generated from this table (`errorRows`), and a test
- * fails when they differ. Databricks' own error text never goes in `message` or `next`: it goes only in
- * `providerError`, marked untrusted (design §5.8).
+ * do.` Databricks' own error text never goes in `message` or `next`: it goes only in `providerError`, marked untrusted
+ * (design §5.8).
  */
 
 export type ErrorState = "refused" | "failed"
@@ -40,12 +39,12 @@ export const ERRORS = {
   NOT_FOUND: { state: "refused", what: "The catalog, schema, table, function, statement, job or run was not found or is not visible.", next: "Call databricks_catalog with filter to find the name." },
   // The read path (design §5).
   SQL_INVALID: { state: "refused", what: "The plugin's parser or Databricks rejected the SQL.", next: "Fix it; databricks_table lists columns, and databricks_explain checks a read." },
-  STATEMENT_NOT_READ: { state: "refused", what: "A read tool got text that is not one query, has a semicolon, or has a refused construct.", next: "Plan it with databricks_plan({ sql })." },
-  SQL_UNSUPPORTED: { state: "refused", what: "The pinned Spark grammar cannot parse this text, so it fails closed.", next: "Rewrite it in standard Spark SQL, or plan it with databricks_plan, where it is category run." },
+  STATEMENT_NOT_READ: { state: "refused", what: "A read tool got text that is not one query, has a semicolon, or has a refused construct.", next: "Plan it with the class's plan method: `databricks_plan_write`, `databricks_plan_delete`, `databricks_plan_share`, `databricks_plan_export`, `databricks_plan_run` or `databricks_plan_admin`." },
+  SQL_UNSUPPORTED: { state: "refused", what: "The pinned Spark grammar cannot parse this text, so it fails closed.", next: "Rewrite it in standard Spark SQL, or plan it with `databricks_plan_run`, where it is category run." },
   IDENTIFIER_REFUSED: { state: "refused", what: "A read used IDENTIFIER(…), a name chosen at run time.", next: "Write the table or function name literally, and pass values in params." },
   SESSION_STATEMENT_REFUSED: { state: "refused", what: "SET, SET PATH, RESET, USE, DECLARE, temporary objects and other session statements are refused: the API keeps no session, and a changed path could redirect a function name.", next: "Pass catalog, schema and params on the call instead; for SET TAG, write ALTER … SET TAGS, which plans as run." },
   PATH_NOT_DEFAULT: { state: "refused", what: "The workspace's SQL path does not put system.builtin before every user schema, so a keyword-form built-in could resolve to a user function.", next: "Ask an admin to restore the default path, or write the function call form, which the plugin qualifies as system.builtin." },
-  NEEDS_PLAN: { state: "refused", what: "A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read.", next: "Plan it with databricks_plan({ sql })." },
+  NEEDS_PLAN: { state: "refused", what: "A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read.", next: "Plan it with `databricks_plan_run`." },
   FUNCTION_NAME_PARTIAL: { state: "refused", what: "A read calls a function that is not an allowlisted built-in by a one- or two-part name, which Databricks resolves along the SQL path, not where the plugin checks it.", next: "Write the function's full name, catalog.schema.function." },
   FUNCTION_REFUSED: { state: "refused", what: "reflect, java_method, try_reflect, a script transform or a bucket sample on a function is refused.", next: "Do it another way; these run code outside SQL." },
   SECRET_FUNCTION_REFUSED: { state: "refused", what: "secret, try_secret and list_secrets are refused.", next: "Do not read secrets through the agent." },
@@ -56,11 +55,11 @@ export const ERRORS = {
   // Plans (design §5.5).
   STATEMENT_UNKNOWN: { state: "refused", what: "This version does not classify that statement form.", next: "Run it in the Databricks SQL editor, or update the plugin." },
   CATEGORY_MISMATCH: { state: "refused", what: "A read was sent to plan, or a plan was committed with another category's tool.", next: "Use the tool the message names." },
-  PLAN_NOT_FOUND: { state: "refused", what: "No plan has that id.", next: "Plan the change again with databricks_plan." },
-  PLAN_ALREADY_USED: { state: "refused", what: "That plan was already committed; a plan runs once.", next: "Plan the change again with databricks_plan." },
+  PLAN_NOT_FOUND: { state: "refused", what: "No plan has that id.", next: "Plan the change again with the class's plan method: `databricks_plan_write`, `databricks_plan_delete`, `databricks_plan_share`, `databricks_plan_export`, `databricks_plan_run` or `databricks_plan_admin`." },
+  PLAN_ALREADY_USED: { state: "refused", what: "That plan was already committed; a plan runs once.", next: "Plan the change again with the class's plan method: `databricks_plan_write`, `databricks_plan_delete`, `databricks_plan_share`, `databricks_plan_export`, `databricks_plan_run` or `databricks_plan_admin`." },
   PLAN_EXPIRED: { state: "refused", what: "The plan is older than the 15 minutes it may be committed in.", next: "Plan the change again with the class's plan method." },
   PLAN_CALLER_MISMATCH: { state: "refused", what: "The plan belongs to another session, agent or account.", next: "Plan the change again in this session." },
-  PLAN_CHANGED: { state: "refused", what: "At commit, the category, the targets or the warehouse policy changed.", next: "Plan the change again with databricks_plan." },
+  PLAN_CHANGED: { state: "refused", what: "At commit, the category, the targets or the warehouse policy changed.", next: "Plan the change again with the class's plan method: `databricks_plan_write`, `databricks_plan_delete`, `databricks_plan_share`, `databricks_plan_export`, `databricks_plan_run` or `databricks_plan_admin`." },
   ADMIN_DISABLED: { state: "refused", what: "Admin plans are turned off by this plugin's admin.enabled option.", next: "Set admin.enabled to true, or make the change in Databricks." },
   ADMIN_REASON_REQUIRED: { state: "refused", what: "An admin plan needs a reason.", next: "Plan again with reason." },
   // Runs and results.
@@ -135,14 +134,4 @@ export class DatabricksError extends Error {
   get state(): ErrorState {
     return ERRORS[this.code].state
   }
-}
-
-/** The rows of the README's Troubleshooting table and docs/errors.md, generated from the table. */
-export function errorRows(): string {
-  const escape = (text: string) => text.replaceAll("|", "\\|")
-  return [
-    "| Code | State | What happened | Next step |",
-    "|---|---|---|---|",
-    ...CODES.map((code) => `| \`${code}\` | ${ERRORS[code].state} | ${escape(ERRORS[code].what)} | ${escape(ERRORS[code].next)} |`),
-  ].join("\n")
 }

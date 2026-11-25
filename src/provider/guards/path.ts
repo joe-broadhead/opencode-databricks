@@ -59,7 +59,7 @@ export async function sessionPath(ports: PathPorts, query: PathQuery, signal: Ab
   if (cached && now - cached.at <= PATH_TTL_MS) return cached.path
   const probe = analyzeRead(PATH_PROBE)
   if (!probe.ok) throw new DatabricksError("SQL_UNSUPPORTED", "The plugin's own current_path() probe does not parse; refusing the read rather than guessing the path.", "Report this: the pinned grammar should parse it.")
-  let answer
+  let answer: Awaited<ReturnType<DatabricksPort["submit"]>>
   try {
     answer = await ports.databricks.submit(
       {

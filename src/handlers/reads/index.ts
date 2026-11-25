@@ -4,7 +4,7 @@
  * exposes them to scripts from the same handlers, so the model's tool and the script's method cannot drift.
  *
  * Every one of them asserts its own dotted action first (`assertTool`), and every read goes through
- * `prepareRead` (`src/guards/read.ts`) before a statement is sent. `_catalog`, `_warehouses`, `_statement` and
+ * `prepareRead` (`src/provider/guards/read.ts`) before a statement is sent. `_catalog`, `_warehouses`, `_statement` and
  * `_history` send no statement at all: they are free control-plane reads.
  */
 import type { Handlers } from "../types.js"

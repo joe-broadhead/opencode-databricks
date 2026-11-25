@@ -1,4 +1,4 @@
-// The differential fuzz (design §5.3, §15.1; docs/parser.md): the same inputs through the plugin's generated
+// The differential fuzz (design §5.3, §15.1; the pinned grammar): the same inputs through the plugin's generated
 // TypeScript parser and Spark's own JVM parser from the pinned jar. Token streams (type, channel, text), the parse
 // result, a digest of the whole parse tree's node kinds, and every invocation node must be equal, or the input must be
 // one the read path's local rules refuse.
@@ -39,7 +39,10 @@ function fetchJar(url, sha256) {
 }
 
 // ── the corpus: hand-written cases, then generated ones ──────────────────
-const random = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31
+const random = () => {
+  seed = (seed * 1103515245 + 12345) % 2 ** 31
+  return seed / 2 ** 31
+}
 const pick = (items) => items[Math.floor(random() * items.length)]
 const FRAGMENTS = [
   "select", "SELECT", "from", "where", "t", "cat.sch.t", "`a``b`", "a", "b", ",", "(", ")", "1", "1.5", ".5e3", "2.D", "'s'", "'a''b'", "'\\''",

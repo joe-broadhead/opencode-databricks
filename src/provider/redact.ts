@@ -24,7 +24,7 @@ const SECRETS: readonly (readonly [RegExp, string])[] = [
 const REASON_LIMIT = 160
 
 /** C0 and C1 controls and DEL: a line break or escape sequence must not reach a terminal or the session. */
-const CONTROLS = /[\u0000-\u001f\u007f-\u009f]+/g
+const CONTROLS = /\p{Cc}+/gu
 /** Bidi marks, embeddings, overrides and isolates: a name must not reorder the row it is shown in. */
 const BIDI = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
 

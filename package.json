@@ -31,7 +31,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "npm run typecheck && npm run bundle && npm run test:unit && npm run test:pack && npm run kit",
+    "check": "npm run lint && npm run typecheck && npm run bundle && npm run test:unit && npm run test:pack && npm run kit && npm run docs:check",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "bundle": "node scripts/build.mjs",
     "test": "vitest run",
@@ -39,14 +39,18 @@
     "test:pack": "node test/pack/pack.mjs",
     "conformance": "plugin-kit conformance",
     "kit": "plugin-kit check",
-    "docs": "plugin-kit docs"
+    "docs": "plugin-kit docs",
+    "lint": "biome check .",
+    "docs:check": "plugin-kit docs --check"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.9",
     "@opencode/client": "2.4.1",
     "@opencode/plugin": "2.4.1",
     "@opencode/sdk": "2.4.1",
     "@types/bun": "1.4.4",
     "@types/node": "24.19.2",
+    "@we-the-rebel-alliance/plugin-contract": "github:we-the-rebel-alliance/plugin-contract#v0.0.0",
     "antlr-ng": "1.0.10",
     "antlr4ng": "3.0.16",
     "apache-arrow": "21.1.0",
@@ -54,8 +58,7 @@
     "hyparquet": "1.32.0",
     "typescript": "5.9.3",
     "vitest": "5.0.5",
-    "zod": "4.6.7",
-    "@we-the-rebel-alliance/plugin-contract": "github:we-the-rebel-alliance/plugin-contract#v0.0.0"
+    "zod": "4.6.7"
   },
   "capabilities": {
     "version": 1,

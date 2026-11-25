@@ -4,7 +4,7 @@
  * `{ run_id }` (scope `jobs`, [29], https://docs.databricks.com/api/jobs/v2/cancel-run.md).
  *
  * **Whose statement it is decides it.** The design gives this tool one object — "a statement or job run that this account
- * started" — and §7 reserves ending other people's work for `/databricks-cleanup`, typed by a person. Databricks would
+ * started", and this tool never ends another identity's work. Databricks would
  * allow a manager to cancel a colleague's statement with Can manage, so the check cannot be left to the server: a
  * statement is cancelled only when Query History's record for it names this identity
  * (`executed_as_user_id ?? user_id`, one call with `filter_by.statement_ids`, [24]), and a run only when `runs/get`
@@ -21,7 +21,7 @@ import { accountOf, requireFeature } from "./context.js"
 
 /** The refusal for an object this identity did not start (or cannot be shown to have started). */
 const notYours = (what: string): DatabricksError =>
-  new DatabricksError("STOP_NOT_PERMITTED", `${what} is not this identity's, or its owner cannot be named from what Databricks returned.`, "Only a statement or run this identity started can be cancelled here; /databricks-cleanup, typed by a person, is the only path that ends someone else's.")
+  new DatabricksError("STOP_NOT_PERMITTED", `${what} is not this identity's, or its owner cannot be named from what Databricks returned.`, "Only a statement or run this identity started can be cancelled here; ask the warehouse owner or the run's owner to stop it.")
 
 const cancel: Handler<"cancel"> = async (input, call, deps) => {
   const account = accountOf(input, deps)

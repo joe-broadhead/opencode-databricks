@@ -17,7 +17,7 @@ function deps(): Deps {
     },
     databricks: {
       getWarehouse: async () => (started ? { ...warehouse, state: "RUNNING" } : warehouse),
-      startWarehouse: async () => void (started = true),
+      startWarehouse: async () => { started = true },
     },
     reads: { prepare: async () => { throw new Error("not used") } },
     ledger: {

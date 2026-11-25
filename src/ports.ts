@@ -1,13 +1,11 @@
 /**
- * The ports: every boundary between the plugin's decisions and the outside world (design §16). Each package builds
- * against these, and test/fake/ports.ts has a fake for each, so the packages build in parallel (docs/ownership.md).
+ * The ports: every boundary between the plugin's decisions and the outside world.
  *
- * - `DatabricksPort` (package B builds it over `fetch`): Databricks' REST calls, typed. Every call names its operation
- *   (src/domain/actions.ts), so the scope check (`AUTH_SCOPE_MISSING`) and the operation assert run before it.
- * - `AuthPort` (package A): an access token for an account and the scopes it needs.
- * - `ReadGuardPort` (package C, `src/guards/read.ts`): design §5.1 steps 3–7 after `analyzeRead`, shared by every read
- *   tool and by package E's `saved_read` and `save`, which build against its fake (review #1, LOW 6).
- * - `LedgerPort` (Day 0, src/ledger.ts): the spend ledger.
+ * - `DatabricksPort` builds over `fetch`: Databricks' REST calls, typed. Every call names its operation
+ *   (`src/methods.ts`), so the scope check (`AUTH_SCOPE_MISSING`) and the operation assert run before it.
+ * - `AuthPort`: an access token for an account and the scopes it needs.
+ * - `ReadGuardPort` (`src/provider/guards/read.ts`): the shared read path.
+ * - `LedgerPort` (`src/provider/ledger.ts`): the spend ledger.
  * - `Clock`: time and ids, so tests are deterministic.
  *
  * Every call takes the call's `signal`; a stopped call aborts its request. Databricks' text in an answer is untrusted.

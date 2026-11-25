@@ -1,7 +1,6 @@
 /**
  * Cost facts and the spend formulas (design §6). Estimates only, labelled as such; the account's own
- * `system.billing.list_prices` and `system.billing.usage` are the authority (reconciled by `databricks_status({
- * include: ["spend"] })`).
+ * `system.billing.list_prices` and `system.billing.usage` are the authority.
  */
 
 /** SQL Serverless DBU per hour by size (design §6.1 [21]). Pro and classic use the same table, marked an estimate. */

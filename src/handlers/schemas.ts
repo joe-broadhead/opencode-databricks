@@ -1,7 +1,6 @@
 /**
- * The domain contract: every tool's input and output schema (design §4), and the shapes they share. Day 0 fixes these;
- * the packages implement the handlers against them and may not change a schema without a review of this file
- * (docs/ownership.md). Every result has `state`, and on failure `error` (a code from src/domain/errors.ts), `message`
+ * The handler schemas: every method's input and output shape, and the shapes they share. Every result has `state`, and
+ * on failure `error` (a code from src/domain/errors.ts), `message`
  * and `next` built only from the plugin's own words and validated identifiers; Databricks' text is only in
  * `providerError`. Every result that carries Databricks data has `trust: "untrusted"`.
  */
@@ -106,7 +105,7 @@ const PlanInput = z.strictObject({
 })
 
 export const Inputs = {
-  status: z.strictObject({ account: AccountInput, include: z.array(z.enum(["spend"])).optional() }),
+  status: z.strictObject({ account: AccountInput }),
   catalog: z.strictObject({
     account: AccountInput,
     catalog: z.string().max(255).optional(),
@@ -206,19 +205,6 @@ const AccountStatus = z.object({
   warehouse: z.object({ id: WarehouseId, state: WarehouseState, type: WarehouseType, size: z.string(), autoStopMinutes: z.number(), usdPerHour: z.number() }).optional(),
 })
 
-/**
- * `reconciled` (review of #10, request 3): today's billed DBUs for the default warehouse from `system.billing.usage`.
- * `complete` is always false: billing records arrive up to 12 hours late, and `usageDate` is a UTC date.
- */
-const Spend = z.object({
-  startsToday: z.number(),
-  dbuHoursToday: z.number(),
-  dbuHoursSession: z.number(),
-  estimate: z.literal(true),
-  budget: z.object({ state: z.enum(["off", "ok", "warn", "reached"]), limit: z.number().optional() }),
-  reconciled: z.object({ warehouse: WarehouseId, usageDate: z.string(), dbu: z.number(), complete: z.literal(false) }).optional(),
-})
-
 /** Something this plugin started that is still running. `id` is the bare statement id or run id; `account` is its alias (review of #10, request 3). */
 const Running = z.object({ kind: z.enum(["statement", "run"]), account: z.string(), id: z.string(), warehouse: z.string().optional(), startedAt: z.string(), tool: z.string() })
 
@@ -229,7 +215,7 @@ const PlanOutput = z.object({
   output: z.unknown().optional(),
   changes: z.array(z.string()).optional(),
   cost: z.unknown().optional(),
-  trust: z.literal("untrusted").optional(),
+  trust: z.literal("untrusted"),
   plan: z.unknown().optional(),
 })
 
@@ -239,9 +225,7 @@ export const Outputs = {
     access: z.enum(ACCESS_VALUES),
     accounts: z.array(AccountStatus),
     running: z.array(Running),
-    spend: Spend.optional(),
     disclosure: z.string(),
-    cleanup: z.array(z.object({ what: z.string(), usdPerHour: z.number().optional(), next: z.string() })).optional(),
   }),
   catalog: z.object({
     ...Base,

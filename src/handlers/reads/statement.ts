@@ -12,7 +12,7 @@
  * - This tool sends no statement and asserts no table: it reads a statement the identity already owns.
  */
 import { DatabricksError } from "../../domain/errors.js"
-import type { ChunkAnswer } from "../../ports.js"
+import type { ChunkAnswer, StatementAnswer } from "../../ports.js"
 import type { Handler } from "../types.js"
 import { accountOf, statementRef } from "./context.js"
 import { shapeRows } from "./values.js"
@@ -37,7 +37,7 @@ const statement: Handler<"statement"> = async (input, call, deps) => {
   const key = `${account}|${input.statementId}`
   const seen = firstSeen.get(key) ?? deps.clock.now()
   firstSeen.set(key, seen)
-  let answer
+  let answer: StatementAnswer
   try {
     answer = await deps.databricks.getStatement(account, input.statementId, call.signal)
     if (wait > 0 && (answer.state === "PENDING" || answer.state === "RUNNING")) {

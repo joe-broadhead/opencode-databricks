@@ -28,7 +28,7 @@
  * **Functions** (`functions.get` [28], strict by default, design §5.4):
  * - A call the allowlist does not hold must be written `catalog.schema.function` (one- and two-part names are refused
  *   with `FUNCTION_NAME_PARTIAL` before this runs) and is sent exactly as written.
- * - A name Unity Catalog does not return, or does not show to this identity, is `NEEDS_PLAN` (`docs/ownership.md`); a
+ * - A name Unity Catalog does not return, or does not show to this identity, is `NEEDS_PLAN`; a
  *   name in `system` is `NEEDS_PLAN` too, because a `system.*` routine has no Unity Catalog body to check and the
  *   allowlist already decided every `system.builtin` built-in. That is the fail-closed answer to `system.ai.*`,
  *   `system.session.*` and a built-in added after the allowlist's pin (review `databricks-1.md`, LOW 2).
@@ -103,7 +103,7 @@ export function contextOf(fullName: string): ReadContext {
   return parts.length === 3 ? { catalog: parts[0], schema: parts[1] } : {}
 }
 
-const needsPlan = (detail: string, next = "Plan it with databricks_plan({ sql })."): DatabricksError => new DatabricksError("NEEDS_PLAN", detail, next)
+const needsPlan = (detail: string, next = "Plan it with `databricks_plan_run`."): DatabricksError => new DatabricksError("NEEDS_PLAN", detail, next)
 
 /** What a body says, as the plugin reads it (see `readBody`). */
 interface Body {
@@ -260,7 +260,7 @@ class Resolver {
     if (!body) {
       throw needsPlan(
         `Unity Catalog did not return the definition of the view ${what} to this identity, or it does not parse as one query, so the plugin cannot tell what it reads.`,
-        "Plan it with databricks_plan({ sql }), or ask the view's owner to make its definition visible.",
+        "Plan it with `databricks_plan_run`, or ask the view's owner to make its definition visible.",
       )
     }
     // The union: Unity Catalog's record, and everything the body names, read in the view's own context.
@@ -272,7 +272,7 @@ class Resolver {
   /** One function call from the caller's text, at `depth` hops. */
   async call(invocation: Invocation, depth: number, signal: AbortSignal): Promise<void> {
     if (invocation.parts[0] === "system") {
-      throw needsPlan(`${quoted(invocation.parts.join("."))} is in the system catalog and is not one of the built-ins the read path allows.`, "Use an allowlisted built-in, or plan the statement with databricks_plan({ sql }).")
+      throw needsPlan(`${quoted(invocation.parts.join("."))} is in the system catalog and is not one of the built-ins the read path allows.`, "Use an allowlisted built-in, or plan the statement with `databricks_plan_run`.")
     }
     await this.functionByName(invocation.parts.join("."), depth, signal)
   }
@@ -291,7 +291,7 @@ class Resolver {
       throw needsPlan(`The plugin can only check a function named catalog.schema.function, and ${quoted(full)} has ${full.split(".").length} parts.`)
     }
     if (partsOf(full)[0] === "system") {
-      throw needsPlan(`${quoted(full)} is in the system catalog and is not one of the built-ins the read path allows.`, "Use an allowlisted built-in, or plan the statement with databricks_plan({ sql }).")
+      throw needsPlan(`${quoted(full)} is in the system catalog and is not one of the built-ins the read path allows.`, "Use an allowlisted built-in, or plan the statement with `databricks_plan_run`.")
     }
     if (this.known.has(full)) return
     const routine = await this.lookupFunction(full, signal)
@@ -341,13 +341,13 @@ class Resolver {
     if (captured === undefined) {
       throw needsPlan(
         `The function ${quoted(full)} calls names Databricks resolves along the PATH captured when it was created, and Unity Catalog did not return that path, so the plugin cannot tell what it calls.`,
-        "Plan it with databricks_plan({ sql }).",
+        "Plan it with `databricks_plan_run`.",
       )
     }
     if (!pathIsSafe(captured)) {
       throw needsPlan(
         `The function ${quoted(full)} was created with the SQL path ${safeText(captured, 300)}, which does not put system.builtin before every user schema, so a name in its body could resolve to a user function.`,
-        "Recreate the function under the default path, or plan the statement with databricks_plan({ sql }).",
+        "Recreate the function under the default path, or plan the statement with `databricks_plan_run`.",
       )
     }
   }
@@ -394,7 +394,7 @@ class Resolver {
       if (!resolved) {
         throw needsPlan(
           `${what} reads ${quoted(table.parts.join("."))}, and neither its recorded dependencies nor its own catalog and schema say which table that is.`,
-          "Name the table in full in the object's definition, or plan the statement with databricks_plan({ sql }).",
+          "Name the table in full in the object's definition, or plan the statement with `databricks_plan_run`.",
         )
       }
       if (table.pathRead) {
@@ -407,7 +407,7 @@ class Resolver {
         if (error instanceof DatabricksError && error.code === "NOT_FOUND") {
           throw needsPlan(
             `${what} reads ${quoted(table.parts.join("."))}, which Unity Catalog does not return as ${quoted(resolved.join("."))}.`,
-            "Plan it with databricks_plan({ sql }), or ask the object's owner to name the table in full.",
+            "Plan it with `databricks_plan_run`, or ask the object's owner to name the table in full.",
           )
         }
         throw error
@@ -433,7 +433,7 @@ class Resolver {
       if (matches.length === 1) continue
       throw needsPlan(
         `${what} calls ${quoted(invocation.parts.join("."))}, which only the SQL path captured when it was created resolves, and ${matches.length === 0 ? "no recorded dependency names it" : "more than one recorded dependency could be it"}.`,
-        "Write the function's full name in the object's definition, or plan the statement with databricks_plan({ sql }).",
+        "Write the function's full name in the object's definition, or plan the statement with `databricks_plan_run`.",
       )
     }
   }

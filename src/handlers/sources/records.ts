@@ -86,5 +86,8 @@ export function useRecords(deps: object, store: RecordStore): void {
 
 /** The store a dependency set reads: its own, or the state file. */
 export function recordsOf(deps: object): RecordStore {
-  return injected.get(deps) ?? (fallback ??= fileRecords())
+  const store = injected.get(deps)
+  if (store !== undefined) return store
+  if (fallback === undefined) fallback = fileRecords()
+  return fallback
 }

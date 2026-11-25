@@ -6,7 +6,7 @@
  * (`/api/2.0/sql/history/queries` with `filter_by.warehouse_ids`, scope `query-history`, [24]) and refuses
  * `STOP_NOT_PERMITTED` when a statement that is `RUNNING` or `QUEUED` belongs to another user — or belongs to nobody
  * this call can name, which is the fail-closed reading of a record whose owner it cannot see. There is **no `force`**:
- * ending other people's queries is `/databricks-cleanup`'s, typed by the person (design §4, §7 layer 4).
+ * ending other people's queries is not this tool's: the warehouse owner or a person with Can manage must do it.
  *
  * **What it cannot prove.** Databricks shows other users' statements only to an identity with Can monitor or above [16],
  * and neither Query History nor the warehouse object says which the identity holds, so a person who sees only their own
@@ -15,6 +15,7 @@
  * `next_page_token` is refused too: this call cannot claim it saw every running statement.
  */
 import { DatabricksError } from "../../domain/errors.js"
+import type { Deps } from "../deps.js"
 import type { Handler } from "../types.js"
 import { accountOf } from "./context.js"
 
@@ -29,13 +30,13 @@ const stop: Handler<"stop"> = async (input, call, deps) => {
   if (warehouse.state === "STOPPED") return { state: "ok", warehouse: input.warehouse, stopped: false, next: "It is already stopped: nothing was sent. An idle warehouse that is STOPPED bills nothing." }
   const me = await deps.databricks.me(account, call.signal)
   const mine = Number(me.id)
-  let page
+  let page: Awaited<ReturnType<Deps["databricks"]["history"]>>
   try {
     page = await deps.databricks.history(account, { warehouseIds: [input.warehouse], startMs: deps.clock.now() - STOP_HISTORY_LOOKBACK_MS, maxResults: 1000 }, call.signal)
   } catch (error) {
     const code = error instanceof DatabricksError ? error.code : undefined
     if (code === "PERMISSION_DENIED" || code === "AUTH_SCOPE_MISSING" || code === "UNAVAILABLE" || code === "RATE_LIMITED") {
-      throw stopNotPermitted("This call could not read Query History for the warehouse, so it cannot tell whose statements are running on it.", "Ask someone with Can monitor on the warehouse to stop it, or pass the warehouse to /databricks-cleanup, which is typed by a person.")
+      throw stopNotPermitted("This call could not read Query History for the warehouse, so it cannot tell whose statements are running on it.", "Ask someone with Can monitor on the warehouse to stop it, or ask the warehouse's owner.")
     }
     throw error
   }
@@ -50,7 +51,7 @@ const stop: Handler<"stop"> = async (input, call, deps) => {
   if (foreign.length > 0) {
     throw stopNotPermitted(
       `${foreign.length} statement${foreign.length === 1 ? "" : "s"} on the warehouse ${foreign.length === 1 ? "is" : "are"} still running, and ${foreign.length === 1 ? "it is" : "they are"} not this identity's.`,
-      "This tool never ends other people's queries; ask them to stop, or use /databricks-cleanup, whose stop a person types.",
+      "This tool never ends other people's queries; ask them to stop, or ask the warehouse's owner.",
     )
   }
   try {

@@ -6,17 +6,17 @@
  *
  * `analyzeRead` decides steps 1 and 2 on the plugin's own parse (`src/sql/analyze.ts`), then this module does the rest:
  *
- * 3. **Dependencies** (`src/guards/dependencies.ts`): every table reference resolved with `tables.get`, every view's
+ * 3. **Dependencies** (`src/provider/guards/dependencies.ts`): every table reference resolved with `tables.get`, every view's
  *    dependencies and body followed, every Unity Catalog function's body checked — all of them under the same rules.
- * 4. **The fence and the inline rules** (`src/guards/fence.ts`, `src/guards/inline.ts`), over the resolved source
+ * 4. **The fence and the inline rules** (`src/provider/guards/fence.ts`, `src/provider/guards/inline.ts`), over the resolved source
  *    tables — never the result's columns.
- * 5. **The warehouse policy** (`src/guards/warehouse.ts`): `warehouses.get`; a stopped warehouse without an allowed
+ * 5. **The warehouse policy** (`src/provider/guards/warehouse.ts`): `warehouses.get`; a stopped warehouse without an allowed
  *    start is `WAREHOUSE_STOPPED`: a start is its own method, with its own ask.
  * 6. **Tables are asserted** as `<account>:table:<c>.<s>.<t>` under the calling tool's own dotted action, before any
  *    statement is sent; the register has already asked the method's declared operations. A table's name needs
  *    `tables.get` before it can be named, so it is resolved before the statement, never after
  *    a person's rule stops the read before anything runs or bills.
- * 7. **The path check** (`src/guards/path.ts`) for the forms the plugin cannot qualify.
+ * 7. **The path check** (`src/provider/guards/path.ts`) for the forms the plugin cannot qualify.
  *
  * The statement itself is the caller's: `prepared.sent` is exactly `analyzeRead(sql).sent` — the wrapper around the
  * caller's text with every allowlisted call qualified. A read never sends anything else.

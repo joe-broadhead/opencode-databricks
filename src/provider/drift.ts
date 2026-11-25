@@ -23,7 +23,7 @@
  * **`run` is never in drift.** A `run` category's effects are unknown until it runs (§5.5), so every recorded type is
  * within what it promised; the check is skipped rather than passed.
  *
- * **L7, as evidence only.** This module is what replaces `EXPLAIN`ing a plan (design §5.5 step 3): `databricks_plan`
+ * **L7, as evidence only.** This module is what replaces `EXPLAIN`ing a plan (design §5.5 step 3): `databricks_plan_run`
  * never sends a statement, and the post-run record is the check instead. L7's live evidence (that `EXPLAIN` of a change
  * has effects on a warehouse channel) is not needed by this version and no code path here sends `EXPLAIN` of a change —
  * `test/unit/changes/plan-classification.test.ts` pins that a plan of every mutating form in §5.5 sends nothing.

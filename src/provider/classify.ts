@@ -1,6 +1,6 @@
 /**
  * The statement table (design §5.5): every statement form the pinned grammar parses, mapped to a plan category or a
- * refusal, and the token rules that can only raise a category. One table, so `databricks_plan` (package D) and the
+ * refusal, and the token rules that can only raise a category. One table, so `databricks_plan_run` (package D) and the
  * read path (package C) never disagree. Pure: no network.
  *
  * - The parser's category is final; the token rules (`EXECUTE IMMEDIATE`, `CALL`, `IDENTIFIER` anywhere) only raise it.

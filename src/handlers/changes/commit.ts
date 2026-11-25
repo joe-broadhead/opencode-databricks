@@ -24,7 +24,7 @@ export type CommitTool = "write" | "delete" | "share" | "export" | "run" | "admi
 type CommitDeps = Parameters<Handler<"write">>[2]
 
 const planChanged = (detail: string): DatabricksError =>
-  new DatabricksError("PLAN_CHANGED", detail, "Plan the change again with databricks_plan, and show the new preview before committing it.")
+  new DatabricksError("PLAN_CHANGED", detail, "Plan the change again with the class's plan method and show the new preview before committing it.")
 
 /** A plan as the commit sees it: the private answer plus the id and time the register bound it to. */
 type Plan = StoredPlan & { readonly id: string; readonly sessionId: string; readonly agentId: string; readonly createdAt: number; readonly expiresAt: number }

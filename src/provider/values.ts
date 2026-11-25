@@ -70,14 +70,14 @@ export function baseType(column: ColumnType): string {
  * known way to smuggle instructions past a reader). Escaped, not removed: the cell stays the data it was (§5.8).
  */
 export function sanitizeCell(text: string): string {
-  const escape = (character: string) => {
+  const escapeCell = (character: string) => {
     const code = character.codePointAt(0) ?? 0
     return code > 0xffff ? `\\u{${code.toString(16)}}` : `\\u${code.toString(16).padStart(4, "0")}`
   }
   return text
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, escape)
-    .replace(/[\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/gu, escape)
-    .replace(/[\u{e0000}-\u{e007f}]/gu, escape)
+    .replace(/\p{Cc}/gu, (character) => (character === "\t" || character === "\n" || character === "\r" ? character : escapeCell(character)))
+    .replace(/[\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/gu, escapeCell)
+    .replace(/[\u{e0000}-\u{e007f}]/gu, escapeCell)
 }
 
 /** `text` cut at `limit` characters, with the design's marker; never split inside a code point. */

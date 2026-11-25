@@ -48,7 +48,7 @@ export const TAG_VALUE_MAX = 128
 
 /** Whether a caller's tag may be sent: its key's characters and length, its value's length, no `@@` key, no control. */
 export const validTag = (key: string, value: string): boolean =>
-  TAG_KEY.test(key) && !key.startsWith("@@") && !/[\u0000-\u001f\u007f]/u.test(key) && value.length <= TAG_VALUE_MAX
+  TAG_KEY.test(key) && !key.startsWith("@@") && !/\p{Cc}/u.test(key) && value.length <= TAG_VALUE_MAX
 
 /** `query_tags` as the API takes it: key/value objects, the plugin's tag first, at most 20, and only legal ones. */
 export function queryTagList(tags: Readonly<Record<string, string>>): { key: string; value?: string }[] {

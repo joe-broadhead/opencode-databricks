@@ -9,8 +9,7 @@
  *   `max(duration, min(auto_stop, time since this plugin's previous statement on that warehouse)) × DBU/h × clusters`
  *   (`statementDbuHours`), because a statement on an otherwise idle warehouse keeps it up for one more auto-stop period.
  *   The "previous statement" time is this process's memory, so the estimate is slightly low across processes: the ledger
- *   is an estimate (review M5), and `databricks_status({ include: ["spend"] })` reconciles it with
- *   `system.billing.usage` (design §6.2) [25].
+ *   is an estimate (review M5); the account's `system.billing.usage` is the authority (design §6.2) [25].
  * - **Before a statement**, with `action: "refuse"`, a limit the ledger already reports as spent answers
  *   `BUDGET_REACHED`. A statement's own charge never discards a result the person has already paid for: it records what
  *   it can and reports the excess, which status shows.
@@ -75,10 +74,10 @@ export interface StartCharge {
   readonly dbuHours: number
 }
 
-/** The `BUDGET_OVER` warning a `warn` budget earns when a charge pushes past a limit: the estimate is in status, and the call goes on (design §6.2). */
+/** The `BUDGET_OVER` warning a `warn` budget earns when a charge pushes past a limit: the charge is recorded, and the call goes on (design §6.2). */
 function overWarning(budget: Budget | undefined, exceeded: string | undefined): Warning | undefined {
   if (!exceeded || budget?.action !== "warn") return undefined
-  return { code: "BUDGET_OVER", message: `The ${exceeded} budget is exceeded, and the charge was still recorded: databricks_status({ include: ["spend"] }) shows today's estimate.` }
+  return { code: "BUDGET_OVER", message: `The ${exceeded} budget is exceeded, and the charge was still recorded in the local spend ledger.` }
 }
 
 /** Charges a start before it happens; a `refuse` budget that this start would exceed throws and nothing is started. */

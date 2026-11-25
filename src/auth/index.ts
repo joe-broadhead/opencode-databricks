@@ -22,7 +22,7 @@ import type { AccountInfo, AuthPort, Token } from "../ports.js"
 import { accountSettings, accountInfo, settingsOf, validateAccounts, type AccountBase, type AccountSettings } from "./accounts.js"
 import { readSignIn, type SignIn } from "./credential.js"
 import { authorizeDatabricks, OAUTH_METHOD_ID } from "./oauth.js"
-import { readSignInAnswer, signInForm, type RedirectDefaults } from "./form.js"
+import { integrationIdFor, readSignInAnswer, signInForm, type RedirectDefaults } from "./form.js"
 import { cliToken, m2mToken, patToken, tokenCache, type CliRunner } from "./headless.js"
 import { readHostCredential } from "./host-credential.js"
 import { parseWorkspaceHost } from "./host.js"
@@ -50,19 +50,7 @@ export interface CoreInput {
   readonly tokenEndpoint?: string
 }
 
-const signInAgain = (alias: string) => `Run /connect and choose ${DISPLAY_NAME}, or run opencode auth login databricks-${alias}.`
-
-/** What makes a doctor certification apply to the credential now in force: the workspace, role and granted scopes. */
-interface Seen {
-  readonly host: string
-  readonly roleGroupId?: string
-  readonly grantedScopes: readonly string[]
-}
-
-const sameSeen = (left: Seen, right: Seen): boolean =>
-  left.host === right.host && left.roleGroupId === right.roleGroupId && [...left.grantedScopes].sort().join(" ") === [...right.grantedScopes].sort().join(" ")
-
-const seenOf = (stored: SignIn): Seen => ({ host: stored.host, ...(stored.roleGroupId !== undefined ? { roleGroupId: stored.roleGroupId } : {}), grantedScopes: stored.grantedScopes })
+const signInAgain = (alias: string) => `Run /connect and choose ${DISPLAY_NAME}, or run opencode auth login ${integrationIdFor(alias)}.`
 
 /** The auth port over one set of options. Tests build it with fakes; `createAuth` with the host. */
 export class AuthCore implements AuthPort {
@@ -70,12 +58,6 @@ export class AuthCore implements AuthPort {
   readonly refreshes: RefreshState = refreshState()
   private readonly input: CoreInput
   private readonly cache = tokenCache()
-  /** The credential in force per account, for the certification binding. In memory only. */
-  private readonly current = new Map<string, Seen>()
-  /** A doctor report that earned `role`, bound to the credential it proved. In memory only, never in storage. */
-  private readonly certified = new Map<string, Seen>()
-  /** The role group's display name, when SCIM returned it: display only (the contract's `AccountInfo.role.name`). */
-  private readonly roleNames = new Map<string, string>()
 
   constructor(input: CoreInput) {
     this.input = input
@@ -91,8 +73,8 @@ export class AuthCore implements AuthPort {
     for (const settings of accountSettings(this.input.options)) {
       const summary = this.input.summaries.get(settings.alias)
       try {
-        const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId, this.roleNames.get(settings.alias))
-        if (info) infos.push({ ...info, enforcement: this.enforcementFor(settings.alias, info) })
+        const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId)
+        if (info) infos.push({ ...info, enforcement: this.enforcementFor(info) })
       } catch {
         // A workspace this plugin would refuse is not an account; account() throws HOST_INVALID for it.
       }
@@ -103,7 +85,7 @@ export class AuthCore implements AuthPort {
   account(alias?: string): AccountInfo {
     const settings = this.settings(alias)
     const summary = this.input.summaries.get(settings.alias)
-    const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId, this.roleNames.get(settings.alias))
+    const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId)
     if (!info) {
       throw new DatabricksError(
         "AUTH_REQUIRED",
@@ -111,7 +93,7 @@ export class AuthCore implements AuthPort {
         `Run /connect and choose ${DISPLAY_NAME} and enter the workspace URL, or set accounts.${settings.alias}.host.`,
       )
     }
-    return { ...info, enforcement: this.enforcementFor(settings.alias, info) }
+    return { ...info, enforcement: this.enforcementFor(info) }
   }
 
   async token(alias: string, scopes: readonly string[], signal: AbortSignal): Promise<Token> {
@@ -186,10 +168,6 @@ export class AuthCore implements AuthPort {
   async remember(alias: string, credential: HostCredential, kind: "sign-in" | "read" = "read"): Promise<void> {
     const stored = readSignIn(credential.metadata)
     if (!stored) return
-    const seen = seenOf(stored)
-    this.current.set(alias, seen)
-    const certified = this.certified.get(alias)
-    if (certified && !sameSeen(certified, seen)) this.certified.delete(alias)
     const generation = stored.generation ?? 0
     const latest = this.refreshes.latest.get(alias)
     // A delayed read of an older sign-in never replaces a newer one; a fresh sign-in at the same millisecond does.
@@ -199,11 +177,8 @@ export class AuthCore implements AuthPort {
     await this.input.summaries.remember(alias, { host: stored.host, ...(stored.roleGroupId !== undefined ? { roleGroupId: stored.roleGroupId } : {}) })
   }
 
-  private enforcementFor(alias: string, info: AccountBase): EnforcementKind {
-    const base = info.mode === "m2m" ? "service-principal" : info.role !== undefined ? "role-requested" : "identity"
-    const certified = this.certified.get(alias)
-    const current = this.current.get(alias)
-    return info.role !== undefined && certified && current && sameSeen(certified, current) ? "role" : base
+  private enforcementFor(info: AccountBase): EnforcementKind {
+    return info.mode === "m2m" ? "service-principal" : info.role !== undefined ? "role-requested" : "identity"
   }
 
   private settings(alias?: string): AccountSettings {

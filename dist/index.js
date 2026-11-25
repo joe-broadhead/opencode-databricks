@@ -12178,12 +12178,12 @@ var ERRORS = {
   NOT_FOUND: { state: "refused", what: "The catalog, schema, table, function, statement, job or run was not found or is not visible.", next: "Call databricks_catalog with filter to find the name." },
   // The read path (design §5).
   SQL_INVALID: { state: "refused", what: "The plugin's parser or Databricks rejected the SQL.", next: "Fix it; databricks_table lists columns, and databricks_explain checks a read." },
-  STATEMENT_NOT_READ: { state: "refused", what: "A read tool got text that is not one query, has a semicolon, or has a refused construct.", next: "Plan it with databricks_plan({ sql })." },
-  SQL_UNSUPPORTED: { state: "refused", what: "The pinned Spark grammar cannot parse this text, so it fails closed.", next: "Rewrite it in standard Spark SQL, or plan it with databricks_plan, where it is category run." },
+  STATEMENT_NOT_READ: { state: "refused", what: "A read tool got text that is not one query, has a semicolon, or has a refused construct.", next: "Plan it with the class's plan method: `databricks_plan_write`, `databricks_plan_delete`, `databricks_plan_share`, `databricks_plan_export`, `databricks_plan_run` or `databricks_plan_admin`." },
+  SQL_UNSUPPORTED: { state: "refused", what: "The pinned Spark grammar cannot parse this text, so it fails closed.", next: "Rewrite it in standard Spark SQL, or plan it with `databricks_plan_run`, where it is category run." },
   IDENTIFIER_REFUSED: { state: "refused", what: "A read used IDENTIFIER(\u2026), a name chosen at run time.", next: "Write the table or function name literally, and pass values in params." },
   SESSION_STATEMENT_REFUSED: { state: "refused", what: "SET, SET PATH, RESET, USE, DECLARE, temporary objects and other session statements are refused: the API keeps no session, and a changed path could redirect a function name.", next: "Pass catalog, schema and params on the call instead; for SET TAG, write ALTER \u2026 SET TAGS, which plans as run." },
   PATH_NOT_DEFAULT: { state: "refused", what: "The workspace's SQL path does not put system.builtin before every user schema, so a keyword-form built-in could resolve to a user function.", next: "Ask an admin to restore the default path, or write the function call form, which the plugin qualifies as system.builtin." },
-  NEEDS_PLAN: { state: "refused", what: "A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read.", next: "Plan it with databricks_plan({ sql })." },
+  NEEDS_PLAN: { state: "refused", what: "A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read.", next: "Plan it with `databricks_plan_run`." },
   FUNCTION_NAME_PARTIAL: { state: "refused", what: "A read calls a function that is not an allowlisted built-in by a one- or two-part name, which Databricks resolves along the SQL path, not where the plugin checks it.", next: "Write the function's full name, catalog.schema.function." },
   FUNCTION_REFUSED: { state: "refused", what: "reflect, java_method, try_reflect, a script transform or a bucket sample on a function is refused.", next: "Do it another way; these run code outside SQL." },
   SECRET_FUNCTION_REFUSED: { state: "refused", what: "secret, try_secret and list_secrets are refused.", next: "Do not read secrets through the agent." },
@@ -12194,11 +12194,11 @@ var ERRORS = {
   // Plans (design §5.5).
   STATEMENT_UNKNOWN: { state: "refused", what: "This version does not classify that statement form.", next: "Run it in the Databricks SQL editor, or update the plugin." },
   CATEGORY_MISMATCH: { state: "refused", what: "A read was sent to plan, or a plan was committed with another category's tool.", next: "Use the tool the message names." },
-  PLAN_NOT_FOUND: { state: "refused", what: "No plan has that id.", next: "Plan the change again with databricks_plan." },
-  PLAN_ALREADY_USED: { state: "refused", what: "That plan was already committed; a plan runs once.", next: "Plan the change again with databricks_plan." },
+  PLAN_NOT_FOUND: { state: "refused", what: "No plan has that id.", next: "Plan the change again with the class's plan method: `databricks_plan_write`, `databricks_plan_delete`, `databricks_plan_share`, `databricks_plan_export`, `databricks_plan_run` or `databricks_plan_admin`." },
+  PLAN_ALREADY_USED: { state: "refused", what: "That plan was already committed; a plan runs once.", next: "Plan the change again with the class's plan method: `databricks_plan_write`, `databricks_plan_delete`, `databricks_plan_share`, `databricks_plan_export`, `databricks_plan_run` or `databricks_plan_admin`." },
   PLAN_EXPIRED: { state: "refused", what: "The plan is older than the 15 minutes it may be committed in.", next: "Plan the change again with the class's plan method." },
   PLAN_CALLER_MISMATCH: { state: "refused", what: "The plan belongs to another session, agent or account.", next: "Plan the change again in this session." },
-  PLAN_CHANGED: { state: "refused", what: "At commit, the category, the targets or the warehouse policy changed.", next: "Plan the change again with databricks_plan." },
+  PLAN_CHANGED: { state: "refused", what: "At commit, the category, the targets or the warehouse policy changed.", next: "Plan the change again with the class's plan method: `databricks_plan_write`, `databricks_plan_delete`, `databricks_plan_share`, `databricks_plan_export`, `databricks_plan_run` or `databricks_plan_admin`." },
   ADMIN_DISABLED: { state: "refused", what: "Admin plans are turned off by this plugin's admin.enabled option.", next: "Set admin.enabled to true, or make the change in Databricks." },
   ADMIN_REASON_REQUIRED: { state: "refused", what: "An admin plan needs a reason.", next: "Plan again with reason." },
   // Runs and results.
@@ -19267,7 +19267,7 @@ var PlanInput = strictObject2({
   reason: string4().max(2e3).optional()
 });
 var Inputs = {
-  status: strictObject2({ account: AccountInput, include: array2(_enum2(["spend"])).optional() }),
+  status: strictObject2({ account: AccountInput }),
   catalog: strictObject2({
     account: AccountInput,
     catalog: string4().max(255).optional(),
@@ -19363,14 +19363,6 @@ var AccountStatus = object2({
   scopes: array2(string4()),
   warehouse: object2({ id: WarehouseId, state: WarehouseState, type: WarehouseType, size: string4(), autoStopMinutes: number4(), usdPerHour: number4() }).optional()
 });
-var Spend = object2({
-  startsToday: number4(),
-  dbuHoursToday: number4(),
-  dbuHoursSession: number4(),
-  estimate: literal2(true),
-  budget: object2({ state: _enum2(["off", "ok", "warn", "reached"]), limit: number4().optional() }),
-  reconciled: object2({ warehouse: WarehouseId, usageDate: string4(), dbu: number4(), complete: literal2(false) }).optional()
-});
 var Running = object2({ kind: _enum2(["statement", "run"]), account: string4(), id: string4(), warehouse: string4().optional(), startedAt: string4(), tool: string4() });
 var PlanOutput = object2({
   ...Base,
@@ -19378,7 +19370,7 @@ var PlanOutput = object2({
   output: unknown2().optional(),
   changes: array2(string4()).optional(),
   cost: unknown2().optional(),
-  trust: literal2("untrusted").optional(),
+  trust: literal2("untrusted"),
   plan: unknown2().optional()
 });
 var Outputs = {
@@ -19387,9 +19379,7 @@ var Outputs = {
     access: _enum2(ACCESS_VALUES),
     accounts: array2(AccountStatus),
     running: array2(Running),
-    spend: Spend.optional(),
-    disclosure: string4(),
-    cleanup: array2(object2({ what: string4(), usdPerHour: number4().optional(), next: string4() })).optional()
+    disclosure: string4()
   }),
   catalog: object2({
     ...Base,
@@ -19708,7 +19698,7 @@ var SECRETS = [
   [/[\w+=-]{40,}/g, "[redacted]"]
 ];
 var REASON_LIMIT = 160;
-var CONTROLS = /[\u0000-\u001f\u007f-\u009f]+/g;
+var CONTROLS = new RegExp("\\p{Cc}+", "gu");
 var BIDI = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 var withoutUrlSecrets = (text7) => text7.replace(/\bhttps?:\/\/[^\s"'<>]+/gi, (url2) => url2.replace(/^(https?:\/\/)[^/?#@]*@/i, "$1").replace(/[?#].*$/s, ""));
 var oneLine2 = (text7) => text7.replace(BIDI, "").replace(CONTROLS, " ").replace(/\s+/g, " ").trim();
@@ -19925,7 +19915,7 @@ async function readHostCredential(store, alias, signal, now = Date.now) {
     throw new DatabricksError(
       "AUTH_REQUIRED",
       `The stored Databricks sign-in for ${alias} could not be renewed, in this process or another.`,
-      `Run /connect and choose Databricks, or run opencode auth login databricks-${alias}.`
+      `Run /connect and choose Databricks, or run opencode auth login ${integrationIdFor(alias)}.`
     );
   }
 }
@@ -20058,20 +20048,12 @@ var SignInSummaries = class {
 };
 
 // src/auth/index.ts
-var signInAgain = (alias) => `Run /connect and choose ${DISPLAY_NAME}, or run opencode auth login databricks-${alias}.`;
-var sameSeen = (left, right) => left.host === right.host && left.roleGroupId === right.roleGroupId && [...left.grantedScopes].sort().join(" ") === [...right.grantedScopes].sort().join(" ");
-var seenOf = (stored2) => ({ host: stored2.host, ...stored2.roleGroupId !== void 0 ? { roleGroupId: stored2.roleGroupId } : {}, grantedScopes: stored2.grantedScopes });
+var signInAgain = (alias) => `Run /connect and choose ${DISPLAY_NAME}, or run opencode auth login ${integrationIdFor(alias)}.`;
 var AuthCore = class {
   port = this;
   refreshes = refreshState();
   input;
   cache = tokenCache();
-  /** The credential in force per account, for the certification binding. In memory only. */
-  current = /* @__PURE__ */ new Map();
-  /** A doctor report that earned `role`, bound to the credential it proved. In memory only, never in storage. */
-  certified = /* @__PURE__ */ new Map();
-  /** The role group's display name, when SCIM returned it: display only (the contract's `AccountInfo.role.name`). */
-  roleNames = /* @__PURE__ */ new Map();
   constructor(input) {
     this.input = input;
   }
@@ -20084,8 +20066,8 @@ var AuthCore = class {
     for (const settings of accountSettings(this.input.options)) {
       const summary = this.input.summaries.get(settings.alias);
       try {
-        const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId, this.roleNames.get(settings.alias));
-        if (info) infos.push({ ...info, enforcement: this.enforcementFor(settings.alias, info) });
+        const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId);
+        if (info) infos.push({ ...info, enforcement: this.enforcementFor(info) });
       } catch {
       }
     }
@@ -20094,7 +20076,7 @@ var AuthCore = class {
   account(alias) {
     const settings = this.settings(alias);
     const summary = this.input.summaries.get(settings.alias);
-    const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId, this.roleNames.get(settings.alias));
+    const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId);
     if (!info) {
       throw new DatabricksError(
         "AUTH_REQUIRED",
@@ -20102,7 +20084,7 @@ var AuthCore = class {
         `Run /connect and choose ${DISPLAY_NAME} and enter the workspace URL, or set accounts.${settings.alias}.host.`
       );
     }
-    return { ...info, enforcement: this.enforcementFor(settings.alias, info) };
+    return { ...info, enforcement: this.enforcementFor(info) };
   }
   async token(alias, scopes, signal) {
     if (signal.aborted) throw new DatabricksError("CANCELLED", "The call was stopped.");
@@ -20174,10 +20156,6 @@ var AuthCore = class {
   async remember(alias, credential, kind = "read") {
     const stored2 = readSignIn(credential.metadata);
     if (!stored2) return;
-    const seen = seenOf(stored2);
-    this.current.set(alias, seen);
-    const certified = this.certified.get(alias);
-    if (certified && !sameSeen(certified, seen)) this.certified.delete(alias);
     const generation = stored2.generation ?? 0;
     const latest = this.refreshes.latest.get(alias);
     if (!latest || generation > latest.generation || kind === "sign-in" && generation >= latest.generation) {
@@ -20185,11 +20163,8 @@ var AuthCore = class {
     }
     await this.input.summaries.remember(alias, { host: stored2.host, ...stored2.roleGroupId !== void 0 ? { roleGroupId: stored2.roleGroupId } : {} });
   }
-  enforcementFor(alias, info) {
-    const base = info.mode === "m2m" ? "service-principal" : info.role !== void 0 ? "role-requested" : "identity";
-    const certified = this.certified.get(alias);
-    const current = this.current.get(alias);
-    return info.role !== void 0 && certified && current && sameSeen(certified, current) ? "role" : base;
+  enforcementFor(info) {
+    return info.mode === "m2m" ? "service-principal" : info.role !== void 0 ? "role-requested" : "identity";
   }
   settings(alias) {
     const settings = settingsOf(this.input.options, alias);
@@ -20358,7 +20333,7 @@ var package_default = {
     "LICENSE"
   ],
   scripts: {
-    check: "npm run typecheck && npm run bundle && npm run test:unit && npm run test:pack && npm run kit",
+    check: "npm run lint && npm run typecheck && npm run bundle && npm run test:unit && npm run test:pack && npm run kit && npm run docs:check",
     typecheck: "tsc --noEmit -p tsconfig.json",
     bundle: "node scripts/build.mjs",
     test: "vitest run",
@@ -20366,14 +20341,18 @@ var package_default = {
     "test:pack": "node test/pack/pack.mjs",
     conformance: "plugin-kit conformance",
     kit: "plugin-kit check",
-    docs: "plugin-kit docs"
+    docs: "plugin-kit docs",
+    lint: "biome check .",
+    "docs:check": "plugin-kit docs --check"
   },
   devDependencies: {
+    "@biomejs/biome": "2.6.9",
     "@opencode/client": "2.4.1",
     "@opencode/plugin": "2.4.1",
     "@opencode/sdk": "2.4.1",
     "@types/bun": "1.4.4",
     "@types/node": "24.19.2",
+    "@we-the-rebel-alliance/plugin-contract": "github:we-the-rebel-alliance/plugin-contract#v0.0.0",
     "antlr-ng": "1.0.10",
     antlr4ng: "3.0.16",
     "apache-arrow": "21.1.0",
@@ -20381,8 +20360,7 @@ var package_default = {
     hyparquet: "1.32.0",
     typescript: "5.9.3",
     vitest: "5.0.5",
-    zod: "4.6.7",
-    "@we-the-rebel-alliance/plugin-contract": "github:we-the-rebel-alliance/plugin-contract#v0.0.0"
+    zod: "4.6.7"
   },
   capabilities: {
     version: 1,
@@ -21750,7 +21728,7 @@ var TERMINAL_STATES = ["SUCCEEDED", "FAILED", "CANCELED", "CLOSED"];
 var STATES = ["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELED", "CLOSED"];
 var TAG_KEY = /^[^,:\-/=.]{1,128}$/u;
 var TAG_VALUE_MAX = 128;
-var validTag = (key, value) => TAG_KEY.test(key) && !key.startsWith("@@") && !/[\u0000-\u001f\u007f]/u.test(key) && value.length <= TAG_VALUE_MAX;
+var validTag = (key, value) => TAG_KEY.test(key) && !key.startsWith("@@") && !new RegExp("\\p{Cc}", "u").test(key) && value.length <= TAG_VALUE_MAX;
 function queryTagList(tags) {
   const entries = /* @__PURE__ */ new Map();
   for (const [key, value] of Object.entries(tags)) {
@@ -176162,7 +176140,7 @@ function textRules(sql, options = {}) {
     if (token.type === SqlBaseLexer.BRACKETED_COMMENT && text7.slice(2).includes("/*")) {
       return { code: "STATEMENT_NOT_READ", detail: "A /* comment holds another /*; nested comments are refused." };
     }
-    if (token.type === SqlBaseLexer.SIMPLE_COMMENT && /[\u0085\u000b\u000c]/u.test(text7)) {
+    if (token.type === SqlBaseLexer.SIMPLE_COMMENT && [133, 11, 12].some((code) => text7.includes(String.fromCharCode(code)))) {
       return { code: "STATEMENT_NOT_READ", detail: "A -- comment holds U+0085, a vertical tab or a form feed, which some readers treat as a line break." };
     }
     if (token.type === SqlBaseLexer.SIMPLE_COMMENT && /\\(?:\r|\n|$)/u.test(text7)) {
@@ -176214,7 +176192,7 @@ function functionNameParts(ctx) {
   return qualified ? nameParts(qualified) : void 0;
 }
 var PATH_FORMATS = /* @__PURE__ */ new Set(["delta", "parquet", "json", "csv", "text", "orc", "avro", "binaryfile", "xml"]);
-var NON_ASCII = /[^\u0000-\u007f]/u;
+var NON_ASCII = new RegExp("\\P{ASCII}", "u");
 var NON_ASCII_NAME = { code: "SQL_INVALID", detail: "A function name is written with a non-ASCII character, which Spark and Databricks may read as another name.", next: "Write the function's name in ASCII." };
 var FREE_TEXT = /* @__PURE__ */ new Set([
   SqlBaseLexer.IDENTIFIER,
@@ -176443,7 +176421,7 @@ async function assertBudgetRoom(ledger, options, account, sessionId) {
 }
 function overWarning(budget, exceeded) {
   if (!exceeded || budget?.action !== "warn") return void 0;
-  return { code: "BUDGET_OVER", message: `The ${exceeded} budget is exceeded, and the charge was still recorded: databricks_status({ include: ["spend"] }) shows today's estimate.` };
+  return { code: "BUDGET_OVER", message: `The ${exceeded} budget is exceeded, and the charge was still recorded in the local spend ledger.` };
 }
 async function chargeStart(ledger, options, charge) {
   const result = await ledger.charge({ account: charge.account, ...charge.sessionId ? { sessionId: charge.sessionId } : {}, warehouseId: charge.warehouseId, kind: "start", dbuHours: charge.dbuHours }, budgetOf(options));
@@ -176525,7 +176503,7 @@ function firstMatch(patterns, name) {
   return (patterns ?? []).find((pattern) => patternMatches(pattern, name));
 }
 function safeText(text7, limit = 120) {
-  const flat = text7.replace(/[\u0000-\u001f\u007f\u2028\u2029]/gu, " ").trim();
+  const flat = text7.replace(new RegExp("\\p{Cc}|[\\u2028\\u2029]", "gu"), " ").trim();
   return flat.length > limit ? `${flat.slice(0, limit)}\u2026` : flat;
 }
 function quoted(name, limit = 120) {
@@ -176580,7 +176558,7 @@ function contextOf(fullName) {
   const parts = partsOf(fullName);
   return parts.length === 3 ? { catalog: parts[0], schema: parts[1] } : {};
 }
-var needsPlan = (detail2, next = "Plan it with databricks_plan({ sql }).") => new DatabricksError("NEEDS_PLAN", detail2, next);
+var needsPlan = (detail2, next = "Plan it with `databricks_plan_run`.") => new DatabricksError("NEEDS_PLAN", detail2, next);
 var pathDecides = (body) => body.pathSensitive.length > 0 || body.invocations.some((invocation) => invocation.decision.kind === "builtin" && invocation.parts.length === 1 && !invocation.countStar);
 function pathDecidesOf(walked) {
   if (walked.keywordForms.length > 0) return true;
@@ -176694,7 +176672,7 @@ var Resolver = class {
     if (!body) {
       throw needsPlan(
         `Unity Catalog did not return the definition of the view ${what} to this identity, or it does not parse as one query, so the plugin cannot tell what it reads.`,
-        "Plan it with databricks_plan({ sql }), or ask the view's owner to make its definition visible."
+        "Plan it with `databricks_plan_run`, or ask the view's owner to make its definition visible."
       );
     }
     await this.dependencies(what, recorded, depth, signal, own3);
@@ -176704,7 +176682,7 @@ var Resolver = class {
   /** One function call from the caller's text, at `depth` hops. */
   async call(invocation, depth, signal) {
     if (invocation.parts[0] === "system") {
-      throw needsPlan(`${quoted(invocation.parts.join("."))} is in the system catalog and is not one of the built-ins the read path allows.`, "Use an allowlisted built-in, or plan the statement with databricks_plan({ sql }).");
+      throw needsPlan(`${quoted(invocation.parts.join("."))} is in the system catalog and is not one of the built-ins the read path allows.`, "Use an allowlisted built-in, or plan the statement with `databricks_plan_run`.");
     }
     await this.functionByName(invocation.parts.join("."), depth, signal);
   }
@@ -176721,7 +176699,7 @@ var Resolver = class {
       throw needsPlan(`The plugin can only check a function named catalog.schema.function, and ${quoted(full)} has ${full.split(".").length} parts.`);
     }
     if (partsOf(full)[0] === "system") {
-      throw needsPlan(`${quoted(full)} is in the system catalog and is not one of the built-ins the read path allows.`, "Use an allowlisted built-in, or plan the statement with databricks_plan({ sql }).");
+      throw needsPlan(`${quoted(full)} is in the system catalog and is not one of the built-ins the read path allows.`, "Use an allowlisted built-in, or plan the statement with `databricks_plan_run`.");
     }
     if (this.known.has(full)) return;
     const routine = await this.lookupFunction(full, signal);
@@ -176767,13 +176745,13 @@ var Resolver = class {
     if (captured === void 0) {
       throw needsPlan(
         `The function ${quoted(full)} calls names Databricks resolves along the PATH captured when it was created, and Unity Catalog did not return that path, so the plugin cannot tell what it calls.`,
-        "Plan it with databricks_plan({ sql })."
+        "Plan it with `databricks_plan_run`."
       );
     }
     if (!pathIsSafe(captured)) {
       throw needsPlan(
         `The function ${quoted(full)} was created with the SQL path ${safeText(captured, 300)}, which does not put system.builtin before every user schema, so a name in its body could resolve to a user function.`,
-        "Recreate the function under the default path, or plan the statement with databricks_plan({ sql })."
+        "Recreate the function under the default path, or plan the statement with `databricks_plan_run`."
       );
     }
   }
@@ -176815,7 +176793,7 @@ var Resolver = class {
       if (!resolved) {
         throw needsPlan(
           `${what} reads ${quoted(table3.parts.join("."))}, and neither its recorded dependencies nor its own catalog and schema say which table that is.`,
-          "Name the table in full in the object's definition, or plan the statement with databricks_plan({ sql })."
+          "Name the table in full in the object's definition, or plan the statement with `databricks_plan_run`."
         );
       }
       if (table3.pathRead) {
@@ -176828,7 +176806,7 @@ var Resolver = class {
         if (error3 instanceof DatabricksError && error3.code === "NOT_FOUND") {
           throw needsPlan(
             `${what} reads ${quoted(table3.parts.join("."))}, which Unity Catalog does not return as ${quoted(resolved.join("."))}.`,
-            "Plan it with databricks_plan({ sql }), or ask the object's owner to name the table in full."
+            "Plan it with `databricks_plan_run`, or ask the object's owner to name the table in full."
           );
         }
         throw error3;
@@ -176853,7 +176831,7 @@ var Resolver = class {
       if (matches2.length === 1) continue;
       throw needsPlan(
         `${what} calls ${quoted(invocation.parts.join("."))}, which only the SQL path captured when it was created resolves, and ${matches2.length === 0 ? "no recorded dependency names it" : "more than one recorded dependency could be it"}.`,
-        "Write the function's full name in the object's definition, or plan the statement with databricks_plan({ sql })."
+        "Write the function's full name in the object's definition, or plan the statement with `databricks_plan_run`."
       );
     }
   }
@@ -177455,8 +177433,8 @@ var explain_default = explain;
 
 // src/handlers/reads/values.ts
 var CELL_LIMIT = 200;
-var CONTROL3 = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u2028\u2029]/gu;
-var escapeControl = (text7) => text7.replace(CONTROL3, (character) => `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`);
+var CONTROL3 = new RegExp("\\p{Cc}|[\\u2028\\u2029]", "gu");
+var escapeControl = (text7) => text7.replace(CONTROL3, (character) => character === "	" || character === "\n" || character === "\r" ? character : `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`);
 function baseType(typeName) {
   if (!typeName) return "";
   return typeName.split(/[<(]/u)[0].trim().toUpperCase();
@@ -178067,7 +178045,7 @@ function changeFailure(answer) {
 var statementNext = (statementId) => statementRef(statementId);
 
 // src/handlers/changes/cancel.ts
-var notYours = (what) => new DatabricksError("STOP_NOT_PERMITTED", `${what} is not this identity's, or its owner cannot be named from what Databricks returned.`, "Only a statement or run this identity started can be cancelled here; /databricks-cleanup, typed by a person, is the only path that ends someone else's.");
+var notYours = (what) => new DatabricksError("STOP_NOT_PERMITTED", `${what} is not this identity's, or its owner cannot be named from what Databricks returned.`, "Only a statement or run this identity started can be cancelled here; ask the warehouse owner or the run's owner to stop it.");
 var cancel = async (input, call, deps) => {
   const account = accountOf(input, deps);
   if (input.statementId === void 0 === (input.runId === void 0)) {
@@ -178825,7 +178803,7 @@ var planRun = planFor("run");
 var planAdmin = planFor("admin");
 
 // src/handlers/changes/commit.ts
-var planChanged2 = (detail2) => new DatabricksError("PLAN_CHANGED", detail2, "Plan the change again with databricks_plan, and show the new preview before committing it.");
+var planChanged2 = (detail2) => new DatabricksError("PLAN_CHANGED", detail2, "Plan the change again with the class's plan method and show the new preview before committing it.");
 async function commitSql(tool, plan, call, deps) {
   if (plan.payload.kind !== "sql") throw new DatabricksError("PLAN_CHANGED", "The plan's payload is not the SQL this tool runs.");
   const payload = plan.payload;
@@ -179095,7 +179073,7 @@ var stop = async (input, call, deps) => {
   } catch (error3) {
     const code = error3 instanceof DatabricksError ? error3.code : void 0;
     if (code === "PERMISSION_DENIED" || code === "AUTH_SCOPE_MISSING" || code === "UNAVAILABLE" || code === "RATE_LIMITED") {
-      throw stopNotPermitted("This call could not read Query History for the warehouse, so it cannot tell whose statements are running on it.", "Ask someone with Can monitor on the warehouse to stop it, or pass the warehouse to /databricks-cleanup, which is typed by a person.");
+      throw stopNotPermitted("This call could not read Query History for the warehouse, so it cannot tell whose statements are running on it.", "Ask someone with Can monitor on the warehouse to stop it, or ask the warehouse's owner.");
     }
     throw error3;
   }
@@ -179110,7 +179088,7 @@ var stop = async (input, call, deps) => {
   if (foreign.length > 0) {
     throw stopNotPermitted(
       `${foreign.length} statement${foreign.length === 1 ? "" : "s"} on the warehouse ${foreign.length === 1 ? "is" : "are"} still running, and ${foreign.length === 1 ? "it is" : "they are"} not this identity's.`,
-      "This tool never ends other people's queries; ask them to stop, or use /databricks-cleanup, whose stop a person types."
+      "This tool never ends other people's queries; ask them to stop, or ask the warehouse's owner."
     );
   }
   try {
@@ -180713,7 +180691,10 @@ function fileRecords(path = defaultRecordsPath()) {
 var injected = /* @__PURE__ */ new WeakMap();
 var fallback;
 function recordsOf(deps) {
-  return injected.get(deps) ?? (fallback ??= fileRecords());
+  const store = injected.get(deps);
+  if (store !== void 0) return store;
+  if (fallback === void 0) fallback = fileRecords();
+  return fallback;
 }
 
 // src/handlers/sources/events.ts

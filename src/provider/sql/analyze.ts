@@ -136,7 +136,7 @@ export function textRules(sql: string, options: { allowSemicolons?: boolean; all
     // A backslash before a line break inside the comment (Spark already continued it), before the comment's own line
     // break, or at the very end of the text (the wrapper's line break would continue it).
     // U+0085, U+000B and U+000C end a line for some readers; Spark keeps them in the comment (review #1, LOW 3).
-    if (token.type === SqlBaseLexer.SIMPLE_COMMENT && /[\u0085\u000b\u000c]/u.test(text)) {
+    if (token.type === SqlBaseLexer.SIMPLE_COMMENT && [0x85, 0x0b, 0x0c].some((code) => text.includes(String.fromCharCode(code)))) {
       return { code: "STATEMENT_NOT_READ", detail: "A -- comment holds U+0085, a vertical tab or a form feed, which some readers treat as a line break." }
     }
     if (token.type === SqlBaseLexer.SIMPLE_COMMENT && /\\(?:\r|\n|$)/u.test(text)) {
@@ -202,7 +202,7 @@ function functionNameParts(ctx: FunctionNameContext): string[] | undefined {
 export const PATH_FORMATS: ReadonlySet<string> = new Set(["delta", "parquet", "json", "csv", "text", "orc", "avro", "binaryfile", "xml"])
 
 /** Any character outside ASCII. */
-const NON_ASCII = /[^\u0000-\u007f]/u
+const NON_ASCII = /\P{ASCII}/u
 
 /**
  * A function name with a non-ASCII character is refused on the read path (review of #2, R2-M1). Spark compares the

@@ -45,7 +45,7 @@ export function firstMatch(patterns: readonly string[] | undefined, name: string
  * Unity Catalog and warehouse names are other people's writing.
  */
 export function safeText(text: string, limit = 120): string {
-  const flat = text.replace(/[\u0000-\u001f\u007f\u2028\u2029]/gu, " ").trim()
+  const flat = text.replace(/\p{Cc}|[\u2028\u2029]/gu, " ").trim()
   return flat.length > limit ? `${flat.slice(0, limit)}…` : flat
 }
 
