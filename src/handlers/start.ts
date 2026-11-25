@@ -28,11 +28,11 @@ const start: Handler<"start"> = async (input, call, deps) => {
   const account = input.account ?? Object.keys(deps.options.accounts ?? {})[0] ?? "default"
   const warehouse = await deps.databricks.getWarehouse(account, input.warehouse, call.signal)
   const state = stateClass(warehouse.state)
-  if (state === "ready") return { state: "ok", warehouse: warehouse.id, status: warehouse.state, usdPerHour: usdPerHour(warehouse, deps.options) }
+  if (state === "ready") return { state: "ok", trust: "untrusted" as const, warehouse: warehouse.id, status: warehouse.state, usdPerHour: usdPerHour(warehouse, deps.options) }
   if (state === "starting") {
     const running = await waitForRunning(deps, account, warehouse.id, input.wait ?? deps.options.wait, call.signal)
     if (running.state !== "RUNNING") throw new DatabricksError("UNAVAILABLE", `The warehouse is starting and did not reach RUNNING within ${input.wait ?? deps.options.wait} seconds.`, "Try again in a few seconds.")
-    return { state: "ok", warehouse: running.id, status: running.state, usdPerHour: usdPerHour(running, deps.options) }
+    return { state: "ok", trust: "untrusted" as const, warehouse: running.id, status: running.state, usdPerHour: usdPerHour(running, deps.options) }
   }
   if (state === "hopeless") {
     const refusal = startRefusal(warehouse, deps.options, { allowed: false, reasons: [`it is ${warehouse.state.toLowerCase()}`] })
@@ -60,7 +60,7 @@ const start: Handler<"start"> = async (input, call, deps) => {
       "Check it with databricks_warehouses; the start already bills until it auto-stops.",
     )
   }
-  return { state: "ok", warehouse: running.id, status: running.state, usdPerHour: usdPerHour(running, deps.options), ...(charged.warning ? { warnings: [charged.warning] } : {}) }
+  return { state: "ok", trust: "untrusted" as const, warehouse: running.id, status: running.state, usdPerHour: usdPerHour(running, deps.options), ...(charged.warning ? { warnings: [charged.warning] } : {}) }
 }
 
 export default start

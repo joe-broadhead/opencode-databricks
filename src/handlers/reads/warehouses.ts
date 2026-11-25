@@ -42,7 +42,7 @@ const warehouses: Handler<"warehouses"> = async (input, call, deps) => {
   const warnings: Warning[] = [estimateWarning]
   if (list.some((warehouse) => warehouse.autoStopMins < 1)) warnings.push({ code: "AUTO_STOP_OFF", message: WARNINGS.AUTO_STOP_OFF })
   if (list.some((warehouse) => warehouse.autoStopMins > 30)) warnings.push({ code: "AUTO_STOP_LONG", message: WARNINGS.AUTO_STOP_LONG })
-  return { state: "ok", items, warnings }
+  return { state: "ok", trust: "untrusted" as const, items, warnings }
 }
 
 export default warehouses

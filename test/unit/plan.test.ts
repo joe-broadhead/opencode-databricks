@@ -56,8 +56,9 @@ describe("a plan and its commit", () => {
   it("runs exactly the planned text, once, tagged with the plan id", async () => {
     const d = deps()
     const answer = await planWrite({ account: "work", warehouse: "wh-small", sql: "CREATE TABLE main.default.orders (id INT)" }, call, d)
-    const out = (await commitTool("write")({ planId: "plan-1" }, { ...call, plan: answer }, d)) as { statementId: string; state: string }
+    const out = (await commitTool("write")({ planId: "plan-1" }, { ...call, plan: answer }, d)) as { statementId: string; state: string; trust?: string }
     expect(out.statementId).toBe("stmt-1")
+    expect(out.trust).toBe("untrusted")
     const submitted = (d as unknown as { submitted: () => { statement: string; queryTags: Record<string, string> } }).submitted()
     expect(submitted?.statement).toContain("CREATE TABLE main.default.orders")
     expect(submitted?.queryTags.oc_plan).toBe("plan-1")

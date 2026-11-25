@@ -1,6 +1,6 @@
 // The built plugin in the real embedded OpenCode 2.4.1 host: every packaged skill must be registered after load.
 import { afterAll, describe, expect, it } from "vitest"
-import { mkdtempSync, readdirSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { realpathSync } from "node:fs"
@@ -16,6 +16,7 @@ afterAll(() => rmSync(work, { recursive: true, force: true }))
 
 describe("the packaged skills", () => {
   it("are all registered on the real OpenCode 2.4.1 host", async () => {
+    expect(existsSync(join(work, "skills"))).toBe(false)
     const { OpenCode } = (await import("@opencode/sdk")) as typeof import("@opencode/sdk")
     let ready = false
     const probe = Plugin.define({ id: "databricks-skills-probe", setup: () => { ready = true } })
@@ -27,7 +28,7 @@ describe("the packaged skills", () => {
           plugins: [{ package: repo, options: {} }],
           providers: { lmstudio: { settings: { baseURL: "" } }, ollama: { settings: { baseURL: "" } }, vllm: { settings: { baseURL: "" } } },
         }),
-        directory: join(work, "config"),
+        directory: work,
         project: false,
         claude: false,
       },

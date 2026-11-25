@@ -1,4 +1,4 @@
-// The JVM side of the differential fuzz (docs/parser.md): Spark's own SqlBaseLexer and SqlBaseParser from the pinned
+// The JVM side of the differential fuzz (docs/architecture.md): Spark's own SqlBaseLexer and SqlBaseParser from the pinned
 // spark-sql-api jar, driven as Spark's AbstractParser drives them, with the flags grammar/port.mjs pins. For each input
 // (one base64 line on stdin) it prints one line: the tokens, the parse result, and a digest of the parse tree.
 // test/fuzz/dump.ts prints the same line from the plugin's generated TypeScript parser; test/fuzz/run.mjs compares.

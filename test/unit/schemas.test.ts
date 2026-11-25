@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import * as z from "zod"
-import { PAGE_SCHEMA, PROBE_SCHEMA } from "@we-the-rebel-alliance/plugin-contract/events"
+import { LIST_OPTIONS_SCHEMA, PAGE_SCHEMA, PROBE_SCHEMA } from "@we-the-rebel-alliance/plugin-contract/events"
 import { STATUS_SCHEMA } from "@we-the-rebel-alliance/plugin-contract/accounts"
 import { createHandlers } from "../../src/handlers/index.js"
 import { Inputs, Outputs } from "../../src/handlers/schemas.js"
@@ -30,10 +30,21 @@ describe("the handler table", () => {
     }
   })
 
-  it("reuses the contract's page, probe and status schemas", () => {
+  it("reuses the contract's page, probe, status and list-options schemas", () => {
     expect(table.events_list?.output).toEqual(PAGE_SCHEMA)
     expect(table.probe?.output).toEqual(PROBE_SCHEMA)
     expect(table.status?.output).toEqual(STATUS_SCHEMA)
+    expect(table.saved_list?.output).toEqual(LIST_OPTIONS_SCHEMA)
+  })
+
+  it("requires trust on every plugin-owned success answer schema", () => {
+    // status and saved_list use the contract's closed STATUS_SCHEMA and LIST_OPTIONS_SCHEMA, which do not define trust.
+    const contractOwned = new Set(["status", "saved_list"])
+    for (const [name, schema] of Object.entries(Outputs)) {
+      if (contractOwned.has(name)) continue
+      const json = z.toJSONSchema(schema, { io: "output", unrepresentable: "any" }) as { required?: string[] }
+      expect(json.required, name).toContain("trust")
+    }
   })
 
   it("keeps the account selector out of a handler's input, and out of a commit", () => {

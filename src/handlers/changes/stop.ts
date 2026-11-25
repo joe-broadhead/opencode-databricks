@@ -27,7 +27,7 @@ const stopNotPermitted = (detail: string, next: string): DatabricksError => new 
 const stop: Handler<"stop"> = async (input, call, deps) => {
   const account = accountOf(input, deps)
   const warehouse = await deps.databricks.getWarehouse(account, input.warehouse, call.signal)
-  if (warehouse.state === "STOPPED") return { state: "ok", warehouse: input.warehouse, stopped: false, next: "It is already stopped: nothing was sent. An idle warehouse that is STOPPED bills nothing." }
+  if (warehouse.state === "STOPPED") return { state: "ok", trust: "untrusted" as const, warehouse: input.warehouse, stopped: false, next: "It is already stopped: nothing was sent. An idle warehouse that is STOPPED bills nothing." }
   const me = await deps.databricks.me(account, call.signal)
   const mine = Number(me.id)
   let page: Awaited<ReturnType<Deps["databricks"]["history"]>>
@@ -64,6 +64,7 @@ const stop: Handler<"stop"> = async (input, call, deps) => {
   }
   return {
     state: "ok",
+    trust: "untrusted" as const,
     warehouse: input.warehouse,
     stopped: true,
     next: "A later query on it starts it again automatically, so stopping it only ends the idle billing for now.",

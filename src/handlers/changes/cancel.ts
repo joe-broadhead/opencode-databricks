@@ -45,7 +45,7 @@ const cancel: Handler<"cancel"> = async (input, call, deps) => {
     }
     if (!Number.isSafeInteger(mine) || owner === undefined || owner !== mine) throw notYours(`The statement ${statementId.slice(0, 120)}`)
     await deps.databricks.cancelStatement(account, statementId, call.signal)
-    return { state: "ok", cancelled: `statement ${statementId.slice(0, 120)}`, next: "Check it with databricks_statement; a cancelled statement's results may still be readable." }
+    return { state: "ok", trust: "untrusted" as const, cancelled: `statement ${statementId.slice(0, 120)}`, next: "Check it with databricks_statement; a cancelled statement's results may still be readable." }
   }
 
   requireFeature(deps, account, "jobs", "Cancelling a job run")
@@ -55,7 +55,7 @@ const cancel: Handler<"cancel"> = async (input, call, deps) => {
   await deps.databricks.cancelRun(account, runId, call.signal)
   // Databricks documents that the run "is canceled asynchronously, so it may still be running when this request
   // completes" (https://docs.databricks.com/api/jobs/v2/cancel-run.md), so the answer says so rather than claiming it.
-  return { state: "ok", cancelled: `run ${runId}`, next: `Databricks cancels a run asynchronously: databricks_jobs({ runId: ${runId} }) shows when it stops.` }
+  return { state: "ok", trust: "untrusted" as const, cancelled: `run ${runId}`, next: `Databricks cancels a run asynchronously: databricks_jobs({ runId: ${runId} }) shows when it stops.` }
 }
 
 export default cancel

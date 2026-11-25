@@ -31,8 +31,9 @@ function deps(): Deps {
 
 describe("databricks.start", () => {
   it("starts a stopped warehouse and reports its state", async () => {
-    const answer = (await start({ account: "work", warehouse: "wh-small" }, { sessionID: "s", agent: "a", messageID: "m", id: "c", signal: new AbortController().signal, account: "work" }, deps())) as { state: string; status?: string }
+    const answer = (await start({ account: "work", warehouse: "wh-small" }, { sessionID: "s", agent: "a", messageID: "m", id: "c", signal: new AbortController().signal, account: "work" }, deps())) as { state: string; status?: string; trust?: string }
     expect(answer.state).toBe("ok")
     expect(answer.status).toBe("RUNNING")
+    expect(answer.trust).toBe("untrusted")
   })
 })

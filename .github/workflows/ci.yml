@@ -37,3 +37,18 @@ jobs:
         run: npm run bundle && git diff --exit-code dist/
       # Parser drift, typecheck, bundle, unit, pack, then plugin-kit check. The kit does not run these steps.
       - run: npm run check
+      # Install the pushed head the way a person does, in an isolated home. A fork head SHA is not in the org repo.
+      - name: Install the pushed head in an isolated OpenCode home
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          npm install --global @opencode/cli@2.4.1
+          H=$(mktemp -d)
+          export HOME="$H"
+          export XDG_CONFIG_HOME="$H/c"
+          export XDG_CACHE_HOME="$H/k"
+          export XDG_DATA_HOME="$H/d"
+          export XDG_STATE_HOME="$H/s"
+          opencode plugin add "github:we-the-rebel-alliance/databricks-plugin#${HEAD_SHA}"
+          test -n "$(find "$H/k" -path '*node_modules/@we-the-rebel-alliance/databricks-plugin/dist/index.js' -type f -print -quit)"

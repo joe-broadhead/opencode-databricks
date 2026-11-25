@@ -31,6 +31,7 @@ type Plan = StoredPlan & { readonly id: string; readonly sessionId: string; read
 
 interface CommitOutcome {
   readonly state: "ok" | "running"
+  readonly trust: "untrusted"
   readonly statementId?: string
   readonly runId?: number
   readonly rowsAffected?: number
@@ -95,6 +96,7 @@ async function commitSql(tool: CommitTool, plan: Plan, call: Call, deps: CommitD
   const recovered = answer.ambiguous === true
   return {
     state: "ok",
+    trust: "untrusted",
     statementId: answer.statementId,
     ...(rowsAffected === undefined ? {} : { rowsAffected }),
     durationMs,
@@ -139,7 +141,7 @@ async function commitJob(plan: Plan, call: Call, deps: CommitDeps): Promise<Comm
     call.signal,
   )
   if (!Number.isSafeInteger(answer.runId)) throw new DatabricksError("UNAVAILABLE", "Databricks accepted the run and answered no run id.", "Check databricks_jobs({}) for the run before calling again.")
-  return { state: "running", runId: answer.runId, next: `The job is running: databricks_jobs({ runId: ${answer.runId} }) shows its tasks and output.` }
+  return { state: "running", trust: "untrusted", runId: answer.runId, next: `The job is running: databricks_jobs({ runId: ${answer.runId} }) shows its tasks and output.` }
 }
 
 /** A committed one-time notebook run: `POST /api/2.2/jobs/runs/submit` on serverless compute, with its timeout. */
@@ -153,7 +155,7 @@ async function commitNotebook(plan: Plan, call: Call, deps: CommitDeps): Promise
     call.signal,
   )
   if (!Number.isSafeInteger(answer.runId)) throw new DatabricksError("UNAVAILABLE", "Databricks accepted the run and answered no run id.", "Check databricks_jobs({}) for the run before calling again.")
-  return { state: "running", runId: answer.runId, next: `The notebook is running with a ${payload.timeoutSeconds}-second timeout: databricks_jobs({ runId: ${answer.runId} }) shows it.` }
+  return { state: "running", trust: "untrusted", runId: answer.runId, next: `The notebook is running with a ${payload.timeoutSeconds}-second timeout: databricks_jobs({ runId: ${answer.runId} }) shows it.` }
 }
 
 /** A committed warehouse edit: `POST /api/2.0/sql/warehouses/{id}/edit`, after re-reading the warehouse. */
@@ -177,7 +179,7 @@ async function commitWarehouse(plan: Plan, call: Call, deps: CommitDeps): Promis
   }
   if (Object.keys(edit).length === 0) throw planChanged("The plan's edit names no field this version can change.")
   await deps.databricks.editWarehouse(plan.account, payload.id, edit, call.signal)
-  return { state: "ok", next: "The warehouse is edited: databricks_warehouses({}) shows its new size, auto-stop and estimated price." }
+  return { state: "ok", trust: "untrusted", next: "The warehouse is edited: databricks_warehouses({}) shows its new size, auto-stop and estimated price." }
 }
 
 /** One commit tool: the register has checked the plan, the account and its single use; run exactly what it previewed. */

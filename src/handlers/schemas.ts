@@ -2,7 +2,7 @@
  * The handler schemas: every method's input and output shape, and the shapes they share. Every result has `state`, and
  * on failure `error` (a code from src/domain/errors.ts), `message`
  * and `next` built only from the plugin's own words and validated identifiers; Databricks' text is only in
- * `providerError`. Every result that carries Databricks data has `trust: "untrusted"`.
+ * `providerError`. Every success answer has `trust: "untrusted"`; an error or refusal is not a success answer.
  */
 import * as z from "zod"
 import { ACCESS_VALUES } from "../constants.js"
@@ -45,8 +45,8 @@ export const Base = {
   retryAfterSec: z.number().min(0).optional(),
 }
 
-/** On every result that carries Databricks data; an error result carries none, so it may leave it out. */
-export const Untrusted = { trust: z.literal("untrusted").optional() }
+/** On every success answer. An error or refusal result is not a success answer and carries no trust marker. */
+export const Untrusted = { trust: z.literal("untrusted") }
 
 /** How a call is billed (design §4): control-plane REST, a running warehouse, or outside the warehouse. */
 export const Billing = z.enum(["free", "warehouse", "separate"])
@@ -196,7 +196,8 @@ const PlanOutput = z.object({
 })
 
 export const Outputs = {
-  // `status` uses the contract's STATUS_SCHEMA in handlers/index.ts; this entry only completes the method table.
+  // `status` and `saved_list` use the contract's closed STATUS_SCHEMA and LIST_OPTIONS_SCHEMA in handlers/index.ts;
+  // these entries only complete the method table.
   status: z.unknown(),
   catalog: z.object({
     ...Base,
@@ -225,6 +226,7 @@ export const Outputs = {
   }),
   warehouses: z.object({
     ...Base,
+    ...Untrusted,
     items: z.array(z.object({
       id: WarehouseId,
       name: z.string(),
@@ -288,18 +290,18 @@ export const Outputs = {
     cost: z.object({ units: z.array(z.object({ per: z.string(), count: z.number() })) }).optional(),
     trust: z.literal("untrusted"),
   }),
-  save: z.object({ ...Base, path: z.string().optional(), format: z.enum(["csv", "jsonl", "parquet", "arrow"]).optional(), rows: z.number().optional(), bytes: z.number().optional(), sha256: z.string().optional(), statementId: z.string().optional(), warehouse: WarehouseUse.optional(), charts: z.object({ path: z.string(), format: z.string(), rows: z.number(), fitsCharts: z.boolean() }).optional() }),
-  write: z.object({ ...Base, statementId: z.string().optional(), rowsAffected: z.number().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
-  delete: z.object({ ...Base, statementId: z.string().optional(), rowsAffected: z.number().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
-  share: z.object({ ...Base, statementId: z.string().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
-  export: z.object({ ...Base, statementId: z.string().optional(), rowsAffected: z.number().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
-  run: z.object({ ...Base, statementId: z.string().optional(), runId: z.number().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
-  admin: z.object({ ...Base, statementId: z.string().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
-  cancel: z.object({ ...Base, cancelled: z.string().optional() }),
-  stop: z.object({ ...Base, warehouse: WarehouseId.optional(), stopped: z.boolean().optional() }),
-  start: z.object({ ...Base, warehouse: WarehouseId.optional(), status: z.string().optional(), usdPerHour: z.number().optional() }),
+  save: z.object({ ...Base, ...Untrusted, path: z.string().optional(), format: z.enum(["csv", "jsonl", "parquet", "arrow"]).optional(), rows: z.number().optional(), bytes: z.number().optional(), sha256: z.string().optional(), statementId: z.string().optional(), warehouse: WarehouseUse.optional(), charts: z.object({ path: z.string(), format: z.string(), rows: z.number(), fitsCharts: z.boolean() }).optional() }),
+  write: z.object({ ...Base, ...Untrusted, statementId: z.string().optional(), rowsAffected: z.number().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
+  delete: z.object({ ...Base, ...Untrusted, statementId: z.string().optional(), rowsAffected: z.number().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
+  share: z.object({ ...Base, ...Untrusted, statementId: z.string().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
+  export: z.object({ ...Base, ...Untrusted, statementId: z.string().optional(), rowsAffected: z.number().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
+  run: z.object({ ...Base, ...Untrusted, statementId: z.string().optional(), runId: z.number().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
+  admin: z.object({ ...Base, ...Untrusted, statementId: z.string().optional(), durationMs: z.number().optional(), warehouse: WarehouseUse.optional() }),
+  cancel: z.object({ ...Base, ...Untrusted, cancelled: z.string().optional() }),
+  stop: z.object({ ...Base, ...Untrusted, warehouse: WarehouseId.optional(), stopped: z.boolean().optional() }),
+  start: z.object({ ...Base, ...Untrusted, warehouse: WarehouseId.optional(), status: z.string().optional(), usdPerHour: z.number().optional() }),
   probe: z.object({ account: z.string(), owner: z.object({ id: z.string(), label: z.string() }), scopes: z.array(z.string()).optional(), trust: z.literal("untrusted") }),
-  saved_list: z.object({ options: z.array(z.object({ id: z.string(), label: z.string() })) }),
+  saved_list: z.unknown(),
 } as const satisfies Record<MethodName, z.ZodType>
 
 export type Input<T extends MethodName> = z.output<(typeof Inputs)[T]>

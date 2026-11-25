@@ -19238,7 +19238,7 @@ var Base = {
   /** RATE_LIMITED: the seconds to wait before the same call. */
   retryAfterSec: number4().min(0).optional()
 };
-var Untrusted = { trust: literal2("untrusted").optional() };
+var Untrusted = { trust: literal2("untrusted") };
 var Billing = _enum2(["free", "warehouse", "separate"]);
 var Enforcement = _enum2(["role-requested", "identity", "service-principal"]);
 var WarehouseState = _enum2(["STARTING", "RUNNING", "STOPPING", "STOPPED", "DELETING", "DELETED"]);
@@ -19361,7 +19361,8 @@ var PlanOutput = object2({
   plan: unknown2().optional()
 });
 var Outputs = {
-  // `status` uses the contract's STATUS_SCHEMA in handlers/index.ts; this entry only completes the method table.
+  // `status` and `saved_list` use the contract's closed STATUS_SCHEMA and LIST_OPTIONS_SCHEMA in handlers/index.ts;
+  // these entries only complete the method table.
   status: unknown2(),
   catalog: object2({
     ...Base,
@@ -19390,6 +19391,7 @@ var Outputs = {
   }),
   warehouses: object2({
     ...Base,
+    ...Untrusted,
     items: array2(object2({
       id: WarehouseId,
       name: string4(),
@@ -19453,18 +19455,18 @@ var Outputs = {
     cost: object2({ units: array2(object2({ per: string4(), count: number4() })) }).optional(),
     trust: literal2("untrusted")
   }),
-  save: object2({ ...Base, path: string4().optional(), format: _enum2(["csv", "jsonl", "parquet", "arrow"]).optional(), rows: number4().optional(), bytes: number4().optional(), sha256: string4().optional(), statementId: string4().optional(), warehouse: WarehouseUse.optional(), charts: object2({ path: string4(), format: string4(), rows: number4(), fitsCharts: boolean4() }).optional() }),
-  write: object2({ ...Base, statementId: string4().optional(), rowsAffected: number4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
-  delete: object2({ ...Base, statementId: string4().optional(), rowsAffected: number4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
-  share: object2({ ...Base, statementId: string4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
-  export: object2({ ...Base, statementId: string4().optional(), rowsAffected: number4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
-  run: object2({ ...Base, statementId: string4().optional(), runId: number4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
-  admin: object2({ ...Base, statementId: string4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
-  cancel: object2({ ...Base, cancelled: string4().optional() }),
-  stop: object2({ ...Base, warehouse: WarehouseId.optional(), stopped: boolean4().optional() }),
-  start: object2({ ...Base, warehouse: WarehouseId.optional(), status: string4().optional(), usdPerHour: number4().optional() }),
+  save: object2({ ...Base, ...Untrusted, path: string4().optional(), format: _enum2(["csv", "jsonl", "parquet", "arrow"]).optional(), rows: number4().optional(), bytes: number4().optional(), sha256: string4().optional(), statementId: string4().optional(), warehouse: WarehouseUse.optional(), charts: object2({ path: string4(), format: string4(), rows: number4(), fitsCharts: boolean4() }).optional() }),
+  write: object2({ ...Base, ...Untrusted, statementId: string4().optional(), rowsAffected: number4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
+  delete: object2({ ...Base, ...Untrusted, statementId: string4().optional(), rowsAffected: number4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
+  share: object2({ ...Base, ...Untrusted, statementId: string4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
+  export: object2({ ...Base, ...Untrusted, statementId: string4().optional(), rowsAffected: number4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
+  run: object2({ ...Base, ...Untrusted, statementId: string4().optional(), runId: number4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
+  admin: object2({ ...Base, ...Untrusted, statementId: string4().optional(), durationMs: number4().optional(), warehouse: WarehouseUse.optional() }),
+  cancel: object2({ ...Base, ...Untrusted, cancelled: string4().optional() }),
+  stop: object2({ ...Base, ...Untrusted, warehouse: WarehouseId.optional(), stopped: boolean4().optional() }),
+  start: object2({ ...Base, ...Untrusted, warehouse: WarehouseId.optional(), status: string4().optional(), usdPerHour: number4().optional() }),
   probe: object2({ account: string4(), owner: object2({ id: string4(), label: string4() }), scopes: array2(string4()).optional(), trust: literal2("untrusted") }),
-  saved_list: object2({ options: array2(object2({ id: string4(), label: string4() })) })
+  saved_list: unknown2()
 };
 
 // src/auth/redirect.ts
@@ -177891,7 +177893,7 @@ var warehouses = async (input, call, deps) => {
   const warnings = [estimateWarning];
   if (list3.some((warehouse) => warehouse.autoStopMins < 1)) warnings.push({ code: "AUTO_STOP_OFF", message: WARNINGS.AUTO_STOP_OFF });
   if (list3.some((warehouse) => warehouse.autoStopMins > 30)) warnings.push({ code: "AUTO_STOP_LONG", message: WARNINGS.AUTO_STOP_LONG });
-  return { state: "ok", items, warnings };
+  return { state: "ok", trust: "untrusted", items, warnings };
 };
 var warehouses_default = warehouses;
 
@@ -178047,14 +178049,14 @@ var cancel = async (input, call, deps) => {
     }
     if (!Number.isSafeInteger(mine) || owner === void 0 || owner !== mine) throw notYours(`The statement ${statementId.slice(0, 120)}`);
     await deps.databricks.cancelStatement(account, statementId, call.signal);
-    return { state: "ok", cancelled: `statement ${statementId.slice(0, 120)}`, next: "Check it with databricks_statement; a cancelled statement's results may still be readable." };
+    return { state: "ok", trust: "untrusted", cancelled: `statement ${statementId.slice(0, 120)}`, next: "Check it with databricks_statement; a cancelled statement's results may still be readable." };
   }
   requireFeature(deps, account, "jobs", "Cancelling a job run");
   const runId = input.runId;
   const run = await deps.databricks.getRun(account, runId, call.signal);
   if (run.creatorUserName === void 0 || run.creatorUserName !== me.userName) throw notYours(`The run ${runId}`);
   await deps.databricks.cancelRun(account, runId, call.signal);
-  return { state: "ok", cancelled: `run ${runId}`, next: `Databricks cancels a run asynchronously: databricks_jobs({ runId: ${runId} }) shows when it stops.` };
+  return { state: "ok", trust: "untrusted", cancelled: `run ${runId}`, next: `Databricks cancels a run asynchronously: databricks_jobs({ runId: ${runId} }) shows when it stops.` };
 };
 var cancel_default = cancel;
 
@@ -178838,6 +178840,7 @@ async function commitSql(tool, plan, call, deps) {
   const recovered = answer.ambiguous === true;
   return {
     state: "ok",
+    trust: "untrusted",
     statementId: answer.statementId,
     ...rowsAffected === void 0 ? {} : { rowsAffected },
     durationMs,
@@ -178870,7 +178873,7 @@ async function commitJob(plan, call, deps) {
     call.signal
   );
   if (!Number.isSafeInteger(answer.runId)) throw new DatabricksError("UNAVAILABLE", "Databricks accepted the run and answered no run id.", "Check databricks_jobs({}) for the run before calling again.");
-  return { state: "running", runId: answer.runId, next: `The job is running: databricks_jobs({ runId: ${answer.runId} }) shows its tasks and output.` };
+  return { state: "running", trust: "untrusted", runId: answer.runId, next: `The job is running: databricks_jobs({ runId: ${answer.runId} }) shows its tasks and output.` };
 }
 async function commitNotebook(plan, call, deps) {
   if (plan.payload.kind !== "notebook") throw new DatabricksError("PLAN_CHANGED", "The plan's payload is not a notebook run.");
@@ -178882,7 +178885,7 @@ async function commitNotebook(plan, call, deps) {
     call.signal
   );
   if (!Number.isSafeInteger(answer.runId)) throw new DatabricksError("UNAVAILABLE", "Databricks accepted the run and answered no run id.", "Check databricks_jobs({}) for the run before calling again.");
-  return { state: "running", runId: answer.runId, next: `The notebook is running with a ${payload.timeoutSeconds}-second timeout: databricks_jobs({ runId: ${answer.runId} }) shows it.` };
+  return { state: "running", trust: "untrusted", runId: answer.runId, next: `The notebook is running with a ${payload.timeoutSeconds}-second timeout: databricks_jobs({ runId: ${answer.runId} }) shows it.` };
 }
 async function commitWarehouse(plan, call, deps) {
   if (plan.payload.kind !== "warehouse") throw new DatabricksError("PLAN_CHANGED", "The plan's payload is not a warehouse edit.");
@@ -178904,7 +178907,7 @@ async function commitWarehouse(plan, call, deps) {
   };
   if (Object.keys(edit).length === 0) throw planChanged2("The plan's edit names no field this version can change.");
   await deps.databricks.editWarehouse(plan.account, payload.id, edit, call.signal);
-  return { state: "ok", next: "The warehouse is edited: databricks_warehouses({}) shows its new size, auto-stop and estimated price." };
+  return { state: "ok", trust: "untrusted", next: "The warehouse is edited: databricks_warehouses({}) shows its new size, auto-stop and estimated price." };
 }
 function commitTool(tool) {
   const handler2 = async (input, call, deps) => {
@@ -179003,11 +179006,11 @@ var start = async (input, call, deps) => {
   const account = input.account ?? Object.keys(deps.options.accounts ?? {})[0] ?? "default";
   const warehouse = await deps.databricks.getWarehouse(account, input.warehouse, call.signal);
   const state = stateClass(warehouse.state);
-  if (state === "ready") return { state: "ok", warehouse: warehouse.id, status: warehouse.state, usdPerHour: usdPerHour(warehouse, deps.options) };
+  if (state === "ready") return { state: "ok", trust: "untrusted", warehouse: warehouse.id, status: warehouse.state, usdPerHour: usdPerHour(warehouse, deps.options) };
   if (state === "starting") {
     const running2 = await waitForRunning3(deps, account, warehouse.id, input.wait ?? deps.options.wait, call.signal);
     if (running2.state !== "RUNNING") throw new DatabricksError("UNAVAILABLE", `The warehouse is starting and did not reach RUNNING within ${input.wait ?? deps.options.wait} seconds.`, "Try again in a few seconds.");
-    return { state: "ok", warehouse: running2.id, status: running2.state, usdPerHour: usdPerHour(running2, deps.options) };
+    return { state: "ok", trust: "untrusted", warehouse: running2.id, status: running2.state, usdPerHour: usdPerHour(running2, deps.options) };
   }
   if (state === "hopeless") {
     const refusal2 = startRefusal(warehouse, deps.options, { allowed: false, reasons: [`it is ${warehouse.state.toLowerCase()}`] });
@@ -179035,7 +179038,7 @@ var start = async (input, call, deps) => {
       "Check it with databricks_warehouses; the start already bills until it auto-stops."
     );
   }
-  return { state: "ok", warehouse: running.id, status: running.state, usdPerHour: usdPerHour(running, deps.options), ...charged.warning ? { warnings: [charged.warning] } : {} };
+  return { state: "ok", trust: "untrusted", warehouse: running.id, status: running.state, usdPerHour: usdPerHour(running, deps.options), ...charged.warning ? { warnings: [charged.warning] } : {} };
 };
 var start_default = start;
 
@@ -179045,7 +179048,7 @@ var stopNotPermitted = (detail2, next) => new DatabricksError("STOP_NOT_PERMITTE
 var stop = async (input, call, deps) => {
   const account = accountOf(input, deps);
   const warehouse = await deps.databricks.getWarehouse(account, input.warehouse, call.signal);
-  if (warehouse.state === "STOPPED") return { state: "ok", warehouse: input.warehouse, stopped: false, next: "It is already stopped: nothing was sent. An idle warehouse that is STOPPED bills nothing." };
+  if (warehouse.state === "STOPPED") return { state: "ok", trust: "untrusted", warehouse: input.warehouse, stopped: false, next: "It is already stopped: nothing was sent. An idle warehouse that is STOPPED bills nothing." };
   const me = await deps.databricks.me(account, call.signal);
   const mine = Number(me.id);
   let page2;
@@ -179082,6 +179085,7 @@ var stop = async (input, call, deps) => {
   }
   return {
     state: "ok",
+    trust: "untrusted",
     warehouse: input.warehouse,
     stopped: true,
     next: "A later query on it starts it again automatically, so stopping it only ends the idle billing for now."

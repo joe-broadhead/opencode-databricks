@@ -1,6 +1,6 @@
 // The real OpenCode 2.4.1 host, after load: the new method table, both skills, and no removed command or agent.
 import { afterAll, describe, expect, it } from "vitest"
-import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -41,6 +41,7 @@ describe("parity after load", () => {
   }, 90_000)
 
   it("registers both skills and leaves the removed commands and agents absent", async () => {
+    expect(existsSync(join(work, "skills"))).toBe(false)
     const { OpenCode } = (await import("@opencode/sdk")) as typeof import("@opencode/sdk")
     let ready = false
     const probe = Plugin.define({ id: "databricks-parity-probe", setup: () => { ready = true } })
@@ -52,7 +53,7 @@ describe("parity after load", () => {
           plugins: [{ package: repo, options: {} }],
           providers: { lmstudio: { settings: { baseURL: "" } }, ollama: { settings: { baseURL: "" } }, vllm: { settings: { baseURL: "" } } },
         }),
-        directory: join(work, "config"),
+        directory: work,
         project: false,
         claude: false,
       },
