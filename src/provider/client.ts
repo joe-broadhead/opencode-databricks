@@ -384,15 +384,10 @@ export function createDatabricksClient(options: DatabricksClientOptions): Databr
   const port: DatabricksPort = {
     async me(account: string, signal: AbortSignal): Promise<Identity> {
       const answer = record(await call(account, "scim.me.get", "GET", "/api/2.0/preview/scim/v2/Me", { idempotent: true, signal }))
-      const groups = list(answer.groups)
-        .map((entry) => record(entry))
-        .map((group) => ({ id: text(group.value ?? group.id), ...(maybeText(group.display) ?? maybeText(group.displayName) ? { displayName: maybeText(group.display) ?? maybeText(group.displayName) } : {}) }))
-        .filter((group) => group.id !== "")
       return {
         id: text(answer.id),
         userName: text(answer.userName),
         ...(maybeText(answer.displayName) ? { displayName: maybeText(answer.displayName) } : {}),
-        ...(groups.length > 0 ? { groups } : {}),
       }
     },
 

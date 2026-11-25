@@ -120,14 +120,14 @@ export function validateAccounts(options: Options): void {
  */
 export type AccountBase = Omit<AccountInfo, "enforcement">
 
-export function accountInfo(account: AccountSettings, snapshotHost: string | undefined, allowCustomHost: boolean, roleGroupId?: string, roleName?: string): AccountBase | undefined {
+export function accountInfo(account: AccountSettings, snapshotHost: string | undefined, allowCustomHost: boolean, roleGroupId?: string): AccountBase | undefined {
   const raw = account.host ?? snapshotHost
   if (!raw) return undefined
   const { host, cloud } = parseWorkspaceHost(raw, allowCustomHost)
   const role =
     account.mode === "interactive"
       ? roleGroupId !== undefined && (account.role === undefined || account.role === roleGroupId)
-        ? { groupId: roleGroupId, ...(roleName !== undefined ? { name: roleName } : {}) }
+        ? { groupId: roleGroupId }
         : undefined
       : account.role !== undefined
         ? { groupId: account.role }
@@ -146,8 +146,7 @@ export function accountInfo(account: AccountSettings, snapshotHost: string | und
 }
 
 /**
- * The enforcement a token carries, before `doctor` proves the role (design §5.6). Status words `role-requested` as
- * "<name> (requested)" until a clean doctor report earns `role`; this package owns the doctor, package F words status.
+ * The enforcement a token carries: a service principal, a configured role requested at sign-in, or the person's identity.
  */
 export function enforcementOf(account: Pick<AccountInfo, "mode" | "role">): EnforcementKind {
   if (account.mode === "m2m") return "service-principal"

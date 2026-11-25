@@ -52,20 +52,12 @@ export const Untrusted = { trust: z.literal("untrusted").optional() }
 export const Billing = z.enum(["free", "warehouse", "separate"])
 
 /**
- * Which guarantee holds for reads (design §3.4, §5.6). `"role"` is earned only by a doctor report from this process,
- * bound to the credential's host, role group and granted scopes, held in memory only, and cleared by any sign-in or
- * refresh that changes them; after a restart status says `"role-requested"` until `/databricks-doctor` runs again.
- *
- * Under **fine** scopes, `"role"` is earned over the Unity Catalog checks, and its wording names the exclusions: "SQL
- * writes refused on what doctor checked; secret scopes and serving endpoints not checked; job runs use each job's Run
- * as identity". Under `all-apis`, secret scopes and serving endpoints stay NOT_CHECKED and block `"role"`. (Decision
- * (a) on the review of package A, #5, ruling 1.)
+ * Which guarantee holds for reads (design §3.4, §5.6): the person's identity, a service principal, or a role requested
+ * at sign-in. A role is assumed at sign-in; plugin-contract v0 carries no separate role certification, so there is no
+ * `"role"` value to earn.
  */
-export const Enforcement = z.enum(["role", "role-requested", "identity", "service-principal"])
+export const Enforcement = z.enum(["role-requested", "identity", "service-principal"])
 export type EnforcementKind = z.output<typeof Enforcement>
-
-/** The wording of `"role"` under fine scopes (decision (a) on the review of #5). */
-export const ROLE_ENFORCEMENT_TEXT = "SQL writes refused on what doctor checked; secret scopes and serving endpoints not checked; job runs use each job's Run as identity"
 
 export const WarehouseState = z.enum(["STARTING", "RUNNING", "STOPPING", "STOPPED", "DELETING", "DELETED"])
 export const WarehouseType = z.enum(["serverless", "pro", "classic"])
@@ -192,22 +184,6 @@ export const Inputs = {
 
 // ── outputs ──────────────────────────────────────────────────────────────
 
-const AccountStatus = z.object({
-  alias: z.string(),
-  mode: z.enum(["interactive", "pat", "m2m", "cli"]),
-  host: z.string().optional(),
-  cloud: z.enum(["aws", "azure", "gcp", "custom"]).optional(),
-  identity: z.object({ userName: z.string(), id: z.string(), displayName: z.string().optional() }).optional(),
-  role: z.string().optional(),
-  enforcement: Enforcement,
-  writes: z.enum(["without asking", "ask", "never"]),
-  scopes: z.array(z.string()),
-  warehouse: z.object({ id: WarehouseId, state: WarehouseState, type: WarehouseType, size: z.string(), autoStopMinutes: z.number(), usdPerHour: z.number() }).optional(),
-})
-
-/** Something this plugin started that is still running. `id` is the bare statement id or run id; `account` is its alias (review of #10, request 3). */
-const Running = z.object({ kind: z.enum(["statement", "run"]), account: z.string(), id: z.string(), warehouse: z.string().optional(), startedAt: z.string(), tool: z.string() })
-
 /** The plan handler's private answer; the register publishes its preview fields and mints the planId. */
 const PlanOutput = z.object({
   ...Base,
@@ -220,13 +196,8 @@ const PlanOutput = z.object({
 })
 
 export const Outputs = {
-  status: z.object({
-    ...Base,
-    access: z.enum(ACCESS_VALUES),
-    accounts: z.array(AccountStatus),
-    running: z.array(Running),
-    disclosure: z.string(),
-  }),
+  // `status` uses the contract's STATUS_SCHEMA in handlers/index.ts; this entry only completes the method table.
+  status: z.unknown(),
   catalog: z.object({
     ...Base,
     ...Untrusted,

@@ -3,8 +3,7 @@
  * host-agnostic and unit-testable: `createAuth` adapts the real context once (design §16, package A).
  *
  * Only what package A needs is here: the integration registration and the credential lookup it resolves a token
- * through, one command registration for `/databricks-doctor`, a synthetic session message, and storage for the
- * non-secret sign-in summary. No private host package is imported.
+ * through, and storage for the non-secret sign-in summary. No private host package is imported.
  */
 export interface Registration {
   dispose(): Promise<void>

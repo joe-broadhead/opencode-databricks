@@ -32,9 +32,8 @@ export interface AccountInfo {
   readonly catalog?: string
   readonly schema?: string
   /**
-   * Which guarantee holds (`enforcementOf(account)`, package A). Raised to `"role"` only by a doctor report from this
-   * process, bound to the credential's (host, role group, granted scopes), in memory only, cleared when they change.
-   * Status and `PreparedRead.enforcement` read this field. See `Enforcement` in src/domain/contract.ts.
+   * Which guarantee holds (`enforcementOf(account)`): the person's identity, a service principal, or a role requested at
+   * sign-in. Status and `PreparedRead.enforcement` read this field. See `Enforcement` in handlers/schemas.ts.
    */
   readonly enforcement: EnforcementKind
 }
@@ -282,8 +281,6 @@ export interface Identity {
   readonly id: string
   readonly userName: string
   readonly displayName?: string
-  /** SCIM `Me`'s groups (no further scope needed). The doctor resolves the role's name for `principal` from them. */
-  readonly groups?: readonly { readonly id: string; readonly displayName?: string }[]
 }
 
 export interface DatabricksPort {

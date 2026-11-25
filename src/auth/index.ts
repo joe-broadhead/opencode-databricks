@@ -164,7 +164,7 @@ export class AuthCore implements AuthPort {
     return renewed
   }
 
-  /** Record a completed sign-in or a resolved token's triple; clears a certification the new credential no longer matches. */
+  /** Record a completed sign-in or a resolved token's triple. */
   async remember(alias: string, credential: HostCredential, kind: "sign-in" | "read" = "read"): Promise<void> {
     const stored = readSignIn(credential.metadata)
     if (!stored) return
@@ -279,7 +279,7 @@ function redirectDefaults(options: Options): RedirectDefaults {
   return { ...(options.redirectUri !== undefined ? { redirectUri: options.redirectUri } : {}), callbackPort: options.callbackPort }
 }
 
-/** One OAuth integration per interactive account, and the doctor command. */
+/** One OAuth integration per interactive account. */
 export interface AuthSetup {
   readonly port: AuthPort
   readonly problems: readonly string[]

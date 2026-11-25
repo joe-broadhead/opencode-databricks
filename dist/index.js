@@ -12369,11 +12369,11 @@ function validateAccounts(options) {
     }
   }
 }
-function accountInfo(account, snapshotHost, allowCustomHost, roleGroupId, roleName) {
+function accountInfo(account, snapshotHost, allowCustomHost, roleGroupId) {
   const raw = account.host ?? snapshotHost;
   if (!raw) return void 0;
   const { host: host2, cloud } = parseWorkspaceHost(raw, allowCustomHost);
-  const role = account.mode === "interactive" ? roleGroupId !== void 0 && (account.role === void 0 || account.role === roleGroupId) ? { groupId: roleGroupId, ...roleName !== void 0 ? { name: roleName } : {} } : void 0 : account.role !== void 0 ? { groupId: account.role } : void 0;
+  const role = account.mode === "interactive" ? roleGroupId !== void 0 && (account.role === void 0 || account.role === roleGroupId) ? { groupId: roleGroupId } : void 0 : account.role !== void 0 ? { groupId: account.role } : void 0;
   return {
     alias: account.alias,
     mode: account.mode,
@@ -19240,7 +19240,7 @@ var Base = {
 };
 var Untrusted = { trust: literal2("untrusted").optional() };
 var Billing = _enum2(["free", "warehouse", "separate"]);
-var Enforcement = _enum2(["role", "role-requested", "identity", "service-principal"]);
+var Enforcement = _enum2(["role-requested", "identity", "service-principal"]);
 var WarehouseState = _enum2(["STARTING", "RUNNING", "STOPPING", "STOPPED", "DELETING", "DELETED"]);
 var WarehouseType = _enum2(["serverless", "pro", "classic"]);
 var WarehouseSize = _enum2(["2X-Small", "X-Small", "Small", "Medium", "Large", "X-Large", "2X-Large", "3X-Large", "4X-Large"]);
@@ -19351,19 +19351,6 @@ var Inputs = {
   probe: strictObject2({ account: AccountInput, source: string4().max(64).optional() }),
   saved_list: strictObject2({ account: AccountInput, source: string4().max(64).optional() })
 };
-var AccountStatus = object2({
-  alias: string4(),
-  mode: _enum2(["interactive", "pat", "m2m", "cli"]),
-  host: string4().optional(),
-  cloud: _enum2(["aws", "azure", "gcp", "custom"]).optional(),
-  identity: object2({ userName: string4(), id: string4(), displayName: string4().optional() }).optional(),
-  role: string4().optional(),
-  enforcement: Enforcement,
-  writes: _enum2(["without asking", "ask", "never"]),
-  scopes: array2(string4()),
-  warehouse: object2({ id: WarehouseId, state: WarehouseState, type: WarehouseType, size: string4(), autoStopMinutes: number4(), usdPerHour: number4() }).optional()
-});
-var Running = object2({ kind: _enum2(["statement", "run"]), account: string4(), id: string4(), warehouse: string4().optional(), startedAt: string4(), tool: string4() });
 var PlanOutput = object2({
   ...Base,
   method: string4().optional(),
@@ -19374,13 +19361,8 @@ var PlanOutput = object2({
   plan: unknown2().optional()
 });
 var Outputs = {
-  status: object2({
-    ...Base,
-    access: _enum2(ACCESS_VALUES),
-    accounts: array2(AccountStatus),
-    running: array2(Running),
-    disclosure: string4()
-  }),
+  // `status` uses the contract's STATUS_SCHEMA in handlers/index.ts; this entry only completes the method table.
+  status: unknown2(),
   catalog: object2({
     ...Base,
     ...Untrusted,
@@ -20152,7 +20134,7 @@ var AuthCore = class {
     await this.remember(alias, renewed, "read");
     return renewed;
   }
-  /** Record a completed sign-in or a resolved token's triple; clears a certification the new credential no longer matches. */
+  /** Record a completed sign-in or a resolved token's triple. */
   async remember(alias, credential, kind = "read") {
     const stored2 = readSignIn(credential.metadata);
     if (!stored2) return;
@@ -22656,12 +22638,10 @@ function createDatabricksClient(options) {
   const port = {
     async me(account, signal) {
       const answer = record4(await call(account, "scim.me.get", "GET", "/api/2.0/preview/scim/v2/Me", { idempotent: true, signal }));
-      const groups = list2(answer.groups).map((entry) => record4(entry)).map((group) => ({ id: text4(group.value ?? group.id), ...maybeText(group.display) ?? maybeText(group.displayName) ? { displayName: maybeText(group.display) ?? maybeText(group.displayName) } : {} })).filter((group) => group.id !== "");
       return {
         id: text4(answer.id),
         userName: text4(answer.userName),
-        ...maybeText(answer.displayName) ? { displayName: maybeText(answer.displayName) } : {},
-        ...groups.length > 0 ? { groups } : {}
+        ...maybeText(answer.displayName) ? { displayName: maybeText(answer.displayName) } : {}
       };
     },
     async listWarehouses(account, signal) {
