@@ -1,56 +1,94 @@
-// The built plugin in the real embedded OpenCode 2.4.1 host: every packaged skill must be registered after load.
-import { afterAll, describe, expect, it } from "vitest"
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
+// The real OpenCode 2.4.1 host: every packaged skill and its YAML description, loaded from the built bundle.
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { realpathSync } from "node:fs"
 import { fileURLToPath } from "node:url"
-import { Plugin } from "@opencode/plugin"
-import type { OpenCodeClient } from "@opencode/client"
+import { describe, expect, it } from "vitest"
+import { OpenCode } from "@opencode/sdk"
+import type { Plugin } from "@opencode/plugin"
+import { load, resolve } from "@opencode/plugin/host"
+import { waitForActivation } from "@we-the-rebel-alliance/plugin-contract/kit"
+import { parse as parseYaml } from "yaml"
 
-const repo = realpathSync(fileURLToPath(new URL("../..", import.meta.url)))
-const work = mkdtempSync(join(tmpdir(), "databricks-skills-"))
-const expected = readdirSync(join(repo, "skills"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+const root = fileURLToPath(new URL("../..", import.meta.url))
 
-afterAll(() => rmSync(work, { recursive: true, force: true }))
+/** The real host's domains this test reads, as `@opencode/plugin` exposes them to a plugin. */
+interface Host {
+  readonly sessions: {
+    create(input: Record<string, unknown>): Promise<{ readonly id: string }>
+    prompt(input: Record<string, unknown>): Promise<unknown>
+  }
+  readonly plugin: {
+    list(input: Record<string, unknown>): Promise<{ readonly data: readonly { readonly id?: string }[] }>
+  }
+  readonly skill: {
+    list(input: Record<string, unknown>): Promise<{
+      readonly data: readonly { readonly id: string; readonly name: string; readonly description?: string; readonly path: string; readonly content: string }[]
+    }>
+  }
+  close(): Promise<void>
+}
 
 describe("the packaged skills", () => {
-  it("are all registered on the real OpenCode 2.4.1 host", async () => {
-    expect(existsSync(join(work, "skills"))).toBe(false)
-    const { OpenCode } = (await import("@opencode/sdk")) as typeof import("@opencode/sdk")
-    let ready = false
-    const probe = Plugin.define({ id: "databricks-skills-probe", setup: () => { ready = true } })
-    const client = (await OpenCode.create({
-      plugins: [probe],
-      app: { version: "2.4.1" },
-      config: {
-        content: JSON.stringify({
-          plugins: [{ package: repo, options: {} }],
-          providers: { lmstudio: { settings: { baseURL: "" } }, ollama: { settings: { baseURL: "" } }, vllm: { settings: { baseURL: "" } } },
-        }),
-        directory: work,
-        project: false,
-        claude: false,
-      },
-      database: { path: join(work, "opencode.db") },
-      models: { fetch: false },
-      fs: { filewatcher: false },
-      log: { level: "error" },
-    })) as OpenCodeClient & { close(): Promise<void> }
+  it("are all registered on the real OpenCode 2.4.1 host with their YAML descriptions", async () => {
+    const entry = resolve({ directory: root }).server
+    expect(entry, "the package has no server entry").toBeDefined()
+    const module = (await load(entry!)) as { readonly default?: Plugin.Plugin }
+    const definition = module.default
+    expect(definition, "the server entry exports no Plugin.define value").toBeDefined()
+    if (definition === undefined) throw new Error("the server entry exports no Plugin.define value")
+
+    const ids = readdirSync(join(root, "skills"), { withFileTypes: true })
+      .filter((candidate) => candidate.isDirectory())
+      .map((candidate) => candidate.name)
+      .sort()
+    expect(ids.length).toBeGreaterThan(0)
+
+    // An empty project: OpenCode discovers `<project>/skills/` itself, so using the repository root here would let
+    // the test pass without `registerSkills`. The skills must come from the plugin's transform alone.
+    const project = mkdtempSync(join(tmpdir(), "databricks-skill-project-"))
     try {
-      const deadline = Date.now() + 60_000
-      let ids: string[] = []
-      while (Date.now() < deadline) {
-        const answer = await client.skill.list({ location: { directory: work } })
-        ids = answer.data.map((skill) => String(skill.id))
-        if (ready && expected.every((id) => ids.includes(id))) break
-        await new Promise((resolve) => setTimeout(resolve, 100))
+      const host = (await OpenCode.create({
+        plugins: [definition],
+        config: { directory: project },
+        app: { name: "opencode", version: "2.4.1" },
+        log: { level: "error", emit: () => undefined },
+      })) as unknown as Host
+
+      try {
+        const session = await host.sessions.create({ location: { directory: project }, agent: "build", permissions: [] })
+        await host.sessions.prompt({ sessionID: session.id, text: "activate the skill registration", delivery: "queue" }).catch(() => undefined)
+        await waitForActivation({
+          isActive: async () => {
+            const list = await host.plugin.list({ location: { directory: project } }).catch(() => undefined)
+            return list?.data.some((candidate) => candidate.id === definition.id) ?? false
+          },
+          timeoutMs: 20_000,
+        })
+        const answer = await host.skill.list({ location: { directory: project } })
+        for (const id of ids) {
+          const skill = answer.data.find((candidate) => candidate.id === id)
+          expect(skill, `the host did not register the ${id} skill`).toBeDefined()
+          expect(skill!.name).toBe(id)
+          expect(skill!.path).toBe(join(root, "skills", id, "SKILL.md"))
+          expect(skill!.content.trim().length).toBeGreaterThan(0)
+          const text = readFileSync(skill!.path, "utf8")
+          const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)
+          expect(frontmatter, `the ${id} skill has no frontmatter`).not.toBeNull()
+          const parsed = parseYaml(frontmatter![1] ?? "") as { readonly description?: unknown }
+          expect(typeof parsed.description, `the ${id} skill has no YAML description`).toBe("string")
+          const expected = parsed.description as string
+          expect(expected.trim(), `the ${id} skill has an empty description`).not.toBe("")
+          for (const marker of [">", "|", ">-", "|-", ">+", "|+"]) {
+            expect(expected.trim(), `the ${id} skill registers the block marker ${marker}, not its text`).not.toBe(marker)
+          }
+          expect(skill!.description, `the ${id} skill description is not the YAML text`).toBe(expected)
+        }
+      } finally {
+        await host.close()
       }
-      expect(ready).toBe(true)
-      expect(expected.length).toBeGreaterThan(0)
-      for (const id of expected) expect(ids, id).toContain(id)
     } finally {
-      await client.close()
+      rmSync(project, { recursive: true, force: true })
     }
   }, 90_000)
 })

@@ -1,7 +1,7 @@
 /**
  * The three source reads (contract §7): `events_list` for the two event sources, `saved_read` for the snapshot, and the
  * `probe`/`saved_list` reads a consumer uses at bind time. The contract's register owns the account, the permission gate
- * and the answer schema; these handlers own the provider work.
+ * and the answer schema; these handlers own only the provider work.
  */
 import type { Deps } from "../deps.js"
 import type { Call, Handler } from "../types.js"

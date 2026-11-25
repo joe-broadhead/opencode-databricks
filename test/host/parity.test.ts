@@ -1,6 +1,6 @@
 // The real OpenCode 2.4.1 host, after load: the new method table, both skills, and no removed command or agent.
 import { afterAll, describe, expect, it } from "vitest"
-import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -8,10 +8,11 @@ import { Plugin } from "@opencode/plugin"
 import type { OpenCodeClient } from "@opencode/client"
 import { createHost } from "@we-the-rebel-alliance/plugin-contract/kit"
 import { METHOD_NAMES } from "../../src/methods.js"
+import { expectedSkills } from "./frontmatter.js"
 
 const repo = realpathSync(fileURLToPath(new URL("../..", import.meta.url)))
 const work = mkdtempSync(join(tmpdir(), "databricks-parity-"))
-const skillIds = readdirSync(join(repo, "skills"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
+const skillList = expectedSkills(repo)
 
 // The 4a tool table (`git show bd5a019:src/domain/actions.ts`) and the one method that splits. Every old tool must still
 // have a new method; the three new methods are additions, not replacements. This is the table the PR body reports.
@@ -64,22 +65,29 @@ describe("parity after load", () => {
     })) as OpenCodeClient & { close(): Promise<void> }
     try {
       const deadline = Date.now() + 60_000
-      let skills: string[] = []
+      let skills: { id: string; description: string | undefined }[] = []
       let commands: string[] = []
       let agents: string[] = []
       while (Date.now() < deadline) {
         const skillAnswer = await client.skill.list({ location: { directory: work } })
-        skills = skillAnswer.data.map((skill) => String(skill.id))
+        skills = skillAnswer.data.map((skill) => ({ id: String(skill.id), description: typeof skill.description === "string" ? skill.description : undefined }))
         const commandAnswer = await client.command.list({ location: { directory: work } })
         commands = commandAnswer.data.map((command) => String(command.name))
         const agentAnswer = await client.agent.list({ location: { directory: work } })
         agents = agentAnswer.data.map((agent) => String(agent.id))
-        if (ready && skillIds.every((id) => skills.includes(id))) break
+        if (ready && skillList.every((skill) => skills.some((item) => item.id === skill.id && item.description === skill.description))) break
         await new Promise((resolve) => setTimeout(resolve, 100))
       }
       expect(ready).toBe(true)
-      for (const id of skillIds) expect(skills, id).toContain(id)
-      expect(skills).not.toContain("example")
+      for (const skill of skillList) {
+        const actual = skills.find((item) => item.id === skill.id)
+        expect(actual, skill.id).toBeDefined()
+        expect(actual?.description, skill.id).toBe(skill.description)
+        expect(skill.description.trim(), skill.id).not.toBe("")
+        expect(skill.description, skill.id).not.toBe(">")
+        expect(skill.description, skill.id).not.toBe("|")
+      }
+      expect(skills.map((skill) => skill.id)).not.toContain("example")
       // The four 4a commands (status, doctor, cleanup and the TUI view) are gone; status is the method/tool, and no
       // command or custom agent is registered.
       expect(commands.filter((name) => name.startsWith("databricks"))).toEqual([])

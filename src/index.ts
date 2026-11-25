@@ -12,14 +12,16 @@ import { createDatabricksClient } from "./provider/client.js"
 import { createReadGuard } from "./provider/guards/read.js"
 import { createLedger } from "./provider/ledger.js"
 import { createHandlers } from "./handlers/index.js"
-import { registerSkills } from "./skills.js"
+import { readSkills, registerSkills } from "./skills.js"
 import type { Deps } from "./handlers/deps.js"
 
 export default Plugin.define({
   id: manifest.plugin.name,
   async setup(ctx) {
     assertHost(ctx, manifest)
-    const skills = await registerSkills(ctx)
+    // Check every skill before anything registers, so a malformed file fails setup with one clear error.
+    const skills = readSkills()
+    const skillRegistration = await registerSkills(ctx, skills)
     try {
       const options = loadOptions(ctx.options)
       const auth = await createAuth({ ctx, manifest, options })
@@ -41,11 +43,11 @@ export default Plugin.define({
       })
       const registration = await register(ctx, manifest, handlers)
       return async () => {
-        await skills.dispose()
+        await skillRegistration.dispose()
         await registration.dispose()
       }
     } catch (error) {
-      await skills.dispose().catch(() => undefined)
+      await skillRegistration.dispose().catch(() => undefined)
       throw error
     }
   },
