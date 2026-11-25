@@ -25,7 +25,8 @@ credentials: one OpenCode integration per account alias. The provider client liv
 | Command | Does |
 |---|---|
 | `npm ci` | installs dev tooling only; there are no runtime dependencies |
-| `npm run check` | typecheck, build, unit and pack tests, then `plugin-kit check` |
+| `npm run check` | typecheck, bundle, unit and pack tests, then `plugin-kit check` |
+| `npm run bundle` | rebuilds `dist/index.js`, then commit it |
 | `npx plugin-kit check` | the contract's conformance, docs, forbidden and bundle checks |
 | `npx plugin-kit docs` | regenerates the generated doc sections from the manifest |
 | `npx plugin-kit record --account <alias>` | records and redacts conformance fixtures from a real account |
@@ -91,7 +92,7 @@ plain English: short sentences, one term per concept.
 
 ## Forbidden
 
-- Editing `dist/` by hand, or committing it outside a release.
+- Editing `dist/` by hand; run `npm run bundle` and commit its output.
 - Adding runtime dependencies, peer dependencies or lifecycle scripts.
 - Naming any app in code, manifest or docs, except in an `x-<app>` key.
 - Copying contract code into this repository.

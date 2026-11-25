@@ -31,9 +31,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "npm run typecheck && npm run build && npm run test:unit && npm run test:pack && npm run kit",
+    "check": "npm run typecheck && npm run bundle && npm run test:unit && npm run test:pack && npm run kit",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "build": "node scripts/build.mjs",
+    "bundle": "node scripts/build.mjs",
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:pack": "node test/pack/pack.mjs",

@@ -21,13 +21,13 @@ npm run check
 | Step | What it proves |
 |---|---|
 | `npm run typecheck` | the sources and tests typecheck under strict settings |
-| `npm run build` | `dist/index.js` is built from `src/index.ts` with esbuild |
+| `npm run bundle` | `dist/index.js` is built from `src/index.ts` with esbuild |
 | `npm run test:unit` | the method table, access rules, schemas, the read path, both events sources and the warehouse start |
 | `npm run test:pack` | the tarball holds `package.json`, `dist/index.js`, the skills, the assets, `README.md` and `LICENSE` |
 | `plugin-kit check` | conformance T0 and T1, the doc file set, the forbidden patterns and no bundled kit |
 
-CI runs `npm run check` in one job, named `ci`. `dist/` is generated and is not committed; the build runs before the pack
-check and the kit.
+CI runs `npm run check` in one job, named `ci`. `dist/` is committed: after a source change, run `npm run bundle` and
+commit the result, and CI fails when the committed bundle is stale.
 
 ## The contract pin
 

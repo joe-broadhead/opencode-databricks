@@ -32,5 +32,8 @@ jobs:
         run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
       # OpenCode installs plugins without lifecycle scripts, and no dev dependency needs them.
       - run: npm ci --ignore-scripts
-      # Parser drift, typecheck, build, unit, pack, then plugin-kit check. The kit does not run these steps.
+      # The tag ships the committed bundle, so a stale dist/ fails here rather than at install time.
+      - name: The committed bundle is current
+        run: npm run bundle && git diff --exit-code dist/
+      # Parser drift, typecheck, bundle, unit, pack, then plugin-kit check. The kit does not run these steps.
       - run: npm run check

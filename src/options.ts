@@ -56,7 +56,7 @@ export const OptionsSchema = z.strictObject({
 export type Options = z.output<typeof OptionsSchema>
 export type AccountOptions = z.output<typeof AccountSchema>
 
-const EXAMPLE = `"plugins": [{ "package": "github:we-the-rebel-alliance/databricks-plugin#v<version>", "options": { "access": "ask-changes" } }]`
+const EXAMPLE = `"plugins": [{ "package": "github:we-the-rebel-alliance/databricks-plugin#v0.0.0", "options": { "access": "ask-changes" } }]`
 
 /** Bytes for a size option: a number, or "32KiB", "256MiB", "1GiB". */
 export function bytesOf(value: number | string): number {
