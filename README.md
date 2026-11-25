@@ -1,147 +1,139 @@
-# Databricks for OpenCode
+# Databricks plugin
 
-Connects OpenCode to [Databricks](https://www.databricks.com): Unity Catalog, SQL warehouses, queries, jobs and saved
-results, through Databricks' own REST APIs, with every change planned first and every warehouse start visible. No MCP
-server is wrapped and no SDK is installed: the plugin calls the documented REST APIs with `fetch`.
-
-Unofficial; not affiliated with Databricks. The icon is the family's own tile, not Databricks' mark. Databricks is a
-trademark of Databricks, Inc.; this unofficial plugin is not endorsed by them.
-
-## Requirements
-
-- OpenCode `>=2.4.1 <2.5.0`, tested on 2.4.1. Outside that range the plugin refuses to load, unless you set
-  [`allowUntestedHost`](docs/configuration.md#options).
-- macOS or Linux.
-- A Databricks workspace on AWS, Azure or GCP, and an OAuth app connection your account admin creates once
-  ([Sign in](docs/configuration.md#sign-in)). You need `Can use` on a SQL warehouse, and `USE CATALOG`, `USE SCHEMA` and
-  `SELECT` on the data you read.
+Databricks for OpenCode: Unity Catalog, SQL warehouses, queries, jobs and saved results, through the plugin contract.
+The plugin reads with your Databricks identity, plans every change before committing it, and never starts a warehouse
+unless you call `databricks.start`.
 
 ## Install
 
-Install from a release: `opencode plugin add github:we-the-rebel-alliance/databricks-plugin#v<version>`. The first
-release on plugin-contract is `v0.0.0` (phase 4b).
+```sh
+opencode plugin add github:we-the-rebel-alliance/databricks-plugin#v0.0.0
+```
 
-The plugin calls Databricks only from a tagged release; anything else answers `NOT_RELEASED`. After it is installed,
-run `/databricks-status` in a session.
+The plugin needs OpenCode 2.4.1 (the tested release). An unsupported release refuses with `HOST_UNTESTED`; set
+`allowUntestedHost: true` only to try one.
 
 ## Sign in
 
-Each workspace is an account alias with its own sign-in, `databricks-<alias>`, through `/connect` → Databricks or
-`opencode auth login databricks-<alias>`. Several aliases work at once; every call names the account it uses.
-[Configuration](docs/configuration.md#sign-in) has the OAuth app connection and the form's fields.
+The plugin holds the credentials, one OpenCode integration per account alias. With one account, sign in with
+`/connect` and choose Databricks. With several, each alias is `databricks-<alias>`; see [docs/accounts.md](docs/accounts.md).
 
-## What the agent may do
+## Access levels
 
-> At Allowed, the agent can change or delete anything your Databricks identity can, after a plan it makes itself.
-> For a hard limit, sign in with a read-only role.
+`access` is one of `all` (the default), `ask-changes` or `read-only`. Reads run at every level. Writes, deletes, shares
+and exports run, ask or are refused according to the level. `databricks.start` is a write with effect `ask`: it asks
+at every level where it may run, and never runs at `read-only`.
 
-The `access` option generates the default rules: `all` (the default) runs every tool without asking; `ask-changes` asks
-before each change and each warehouse start; `read-only` denies changes, and reads may still start a small serverless
-warehouse that bills until it auto-stops. The plugin checks reads as far as it can, but the only read-only Databricks
-enforces is your identity's privileges. [Safety](docs/safety.md) says what each layer stops.
+<!-- generated:capabilities -->
+### Methods
 
-## Cost
+| Method | Class | Accounts | Operations |
+|---|---|---|---|
+| `status` | read | none | `scim.me.get`, `sql.warehouses.list`, `sql.warehouses.get`, `sql.history.queries.list` |
+| `catalog` | read | optional | `unity-catalog.catalogs.list`, `unity-catalog.schemas.list`, `unity-catalog.tables.list`, `unity-catalog.functions.list`, `unity-catalog.volumes.list` |
+| `table` | read | optional | `unity-catalog.tables.get`, `unity-catalog.functions.get`, `sql.warehouses.get`, `sql.statements.query` |
+| `warehouses` | read | optional | `sql.warehouses.list` |
+| `explain` | read | optional | `unity-catalog.tables.get`, `unity-catalog.functions.get`, `sql.warehouses.get`, `sql.statements.query` |
+| `query` | read | optional | `unity-catalog.tables.get`, `unity-catalog.functions.get`, `sql.warehouses.get`, `sql.statements.query` |
+| `statement` | read | optional | `sql.statements.get`, `sql.statements.cancel` |
+| `history` | read | optional | `scim.me.get`, `sql.history.queries.list` |
+| `profile` | read | optional | `unity-catalog.tables.get`, `unity-catalog.functions.get`, `sql.warehouses.get`, `sql.statements.query` |
+| `jobs` | read | optional | `jobs.jobs.list`, `jobs.runs.list`, `jobs.runs.get`, `jobs.runs.output.get` |
+| `workspace` | read | optional | `workspace.objects.list`, `workspace.objects.get`, `files.directories.list` |
+| `plan_write` | read | optional | `unity-catalog.tables.get`, `unity-catalog.schemas.list`, `unity-catalog.tables.list`, `unity-catalog.functions.list`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `jobs.jobs.get`, `workspace.objects.list` |
+| `plan_delete` | read | optional | `unity-catalog.tables.get`, `unity-catalog.schemas.list`, `unity-catalog.tables.list`, `unity-catalog.functions.list`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `jobs.jobs.get`, `workspace.objects.list` |
+| `plan_share` | read | optional | `unity-catalog.tables.get`, `unity-catalog.schemas.list`, `unity-catalog.tables.list`, `unity-catalog.functions.list`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `jobs.jobs.get`, `workspace.objects.list` |
+| `plan_export` | read | optional | `unity-catalog.tables.get`, `unity-catalog.schemas.list`, `unity-catalog.tables.list`, `unity-catalog.functions.list`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `jobs.jobs.get`, `workspace.objects.list` |
+| `plan_run` | read | optional | `unity-catalog.tables.get`, `unity-catalog.schemas.list`, `unity-catalog.tables.list`, `unity-catalog.functions.list`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `jobs.jobs.get`, `workspace.objects.list` |
+| `plan_admin` | read | optional | `unity-catalog.tables.get`, `unity-catalog.schemas.list`, `unity-catalog.tables.list`, `unity-catalog.functions.list`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `jobs.jobs.get`, `workspace.objects.list` |
+| `events_list` | read | optional | `sql.history.queries.list`, `scim.me.get`, `jobs.runs.list`, `jobs.runs.get` |
+| `saved_read` | read | optional | `sql.queries.get`, `sql.warehouses.get`, `sql.statements.query`, `sql.statements.get`, `scim.me.get` |
+| `save` | export | optional | `unity-catalog.tables.get`, `unity-catalog.functions.get`, `sql.warehouses.get`, `sql.statements.query`, `sql.statements.get` |
+| `write` | write | optional | `unity-catalog.tables.get`, `unity-catalog.tables.list`, `unity-catalog.schemas.list`, `unity-catalog.functions.list`, `unity-catalog.functions.get`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `sql.history.queries.list`, `sql.statements.change` |
+| `delete` | delete | optional | `unity-catalog.tables.get`, `unity-catalog.tables.list`, `unity-catalog.schemas.list`, `unity-catalog.functions.list`, `unity-catalog.functions.get`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `sql.history.queries.list`, `sql.statements.change` |
+| `share` | share | optional | `unity-catalog.tables.get`, `unity-catalog.tables.list`, `unity-catalog.schemas.list`, `unity-catalog.functions.list`, `unity-catalog.functions.get`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `sql.history.queries.list`, `sql.statements.change` |
+| `export` | export | optional | `unity-catalog.tables.get`, `unity-catalog.tables.list`, `unity-catalog.schemas.list`, `unity-catalog.functions.list`, `unity-catalog.functions.get`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `sql.history.queries.list`, `sql.statements.change` |
+| `run` | delete | optional | `unity-catalog.tables.get`, `unity-catalog.tables.list`, `unity-catalog.schemas.list`, `unity-catalog.functions.list`, `unity-catalog.functions.get`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `sql.history.queries.list`, `sql.statements.change`, `jobs.jobs.get`, `jobs.jobs.runNow`, `jobs.runs.submit` |
+| `admin` | admin | optional | `unity-catalog.tables.get`, `unity-catalog.tables.list`, `unity-catalog.schemas.list`, `unity-catalog.functions.list`, `unity-catalog.functions.get`, `unity-catalog.volumes.list`, `unity-catalog.registered-models.list`, `sql.warehouses.get`, `sql.history.queries.list`, `sql.statements.change`, `sql.warehouses.edit` |
+| `cancel` | write | optional | `sql.statements.get`, `sql.statements.cancel`, `jobs.runs.cancel`, `scim.me.get`, `sql.history.queries.list`, `jobs.runs.get` |
+| `stop` | write | optional | `sql.warehouses.get`, `scim.me.get`, `sql.history.queries.list`, `sql.warehouses.stop` |
+| `start` | write | optional | `sql.warehouses.get`, `sql.warehouses.start` |
+| `probe` | read | optional | `scim.me.get` |
+| `saved_list` | read | optional | `sql.queries.list` |
 
-Queries run on a SQL warehouse your workspace bills by the hour while it runs, and an idle warehouse keeps billing
-until it auto-stops. No call starts a stopped warehouse unless the call passes `start: true` and the start policy
-allows it. Unity Catalog reads are free; AI functions and jobs bill separately. `databricks_status` reports this
-plugin's running statements and the warehouses this plugin started, with their estimated $/hour and idle time;
-`/databricks-cleanup` lists every running warehouse. [Costs](docs/costs.md) has the numbers and the cleanup command.
+### Sources
 
-## Known limits
+| Source | Kind | Reads or output | Method | Cost |
+|---|---|---|---|---|
+| `databricks.queries` | events | `x-databricks/query` | `events_list` | free |
+| `databricks.runs` | events | `x-databricks/run` | `events_list` | free |
+| `databricks.saved` | snapshot | `table` | `saved_read` | billed |
 
-- **Privileges are the only server-enforced read-only.** The wrapper, the function allowlist, the dependency checks and
-  the fence are the plugin's own, over its own parse of Spark's grammar, and best-effort. Sign in with a role for a hard
-  limit, and run `/databricks-doctor` to see what the role really allows.
-- **A start bills.** There is no per-query or per-user spending cap for SQL warehouses; budgets are opt-in estimates.
-  Starting a warehouse bills until it auto-stops.
-- **Masks and filters run functions you cannot see.** Column masks and row filters set by your admins run their own
-  functions on every read; Databricks enforces them, and the plugin cannot see them.
-- **Results and history are bounded by Databricks.** A statement's results are kept 12 hours, Query History goes back
-  30 days, and job runs are kept 60 days.
-- **Automation runs only while OpenCode runs.** It cancels this plugin's own orphaned reads when a session ends and
-  stops nothing; `/databricks-cleanup` is yours to type.
-- **Actions can email people.** A change (`GRANT`, `ALTER … OWNER`, a job run) reaches the people Databricks notifies;
-  the plugin cannot see or stop those notifications.
+### Actions
 
-[Safety](docs/safety.md#known-limits), [Auth](docs/auth.md#known-limits) and [Sources](docs/sources.md#known-limits)
-carry the rest.
+None.
+
+### Bus events
+
+`rpc.databricks.changed`
+<!-- /generated:capabilities -->
 
 ## Errors
 
-Every error has the form `CODE: What happened. Next step: What to do.`
+Every failure reads `CODE: What happened. Next step: What to do.`
 
-<!-- errors:start -->
-| Code | State | What happened | Next step |
-|---|---|---|---|
-| `ADMIN_DISABLED` | refused | Admin plans are turned off by this plugin's admin.enabled option. | Set admin.enabled to true, or make the change in Databricks. |
-| `ADMIN_REASON_REQUIRED` | refused | An admin plan needs a reason. | Plan again with reason. |
-| `AUTH_CLIENT_INVALID` | refused | Databricks refused the OAuth client, its scopes or its redirect URL. | Check the client ID; for invalid_scope choose the other scope set on the form; app changes can take 30 minutes. |
-| `AUTH_REQUIRED` | refused | No usable Databricks credential: none stored, a refresh failed, or the configured role differs from the one bound at sign-in. | Run /connect and choose Databricks, or run opencode auth login databricks-<alias>. |
-| `AUTH_SCOPE_MISSING` | refused | The sign-in lacks the API scope this call needs, so Databricks was not called. | Add the feature and sign in again, or ask the admin to allow the scope on the app connection. |
-| `BUDGET_REACHED` | refused | An opt-in budget with action refuse is spent. | Wait for the reset, or raise the budget option. |
-| `CANCELLED` | failed | The call was stopped, and the statement it started was cancelled. | Call the tool again if you still need the result. |
-| `CATEGORY_MISMATCH` | refused | A read was sent to plan, or a plan was committed with another category's tool. | Use the tool the message names. |
-| `CLASSIFICATION_DRIFT` | failed | Query History's statement type differed from the plan or the read, and it was recorded. | Report it; databricks_history shows the statement. |
-| `DEPENDENCIES_UNKNOWN` | refused | A view's dependencies cannot be resolved while a fence or an inline rule applies. | Name tables fully and avoid views without recorded dependencies. |
-| `EXTERNAL_LINK_REFUSED` | refused | A result link was not https on the cloud's storage host. | Report it; databricks_save falls back only when links are unavailable. |
-| `FENCED` | refused | A resolved table is outside the fence, or a permission rule denied it. | Query allowed catalogs only, or change the fence option. |
-| `FENCE_UNVERIFIABLE` | refused | A path-based read cannot be checked against the fence. | Read the table by its Unity Catalog name. |
-| `FUNCTION_NAME_PARTIAL` | refused | A read calls a function that is not an allowlisted built-in by a one- or two-part name, which Databricks resolves along the SQL path, not where the plugin checks it. | Write the function's full name, catalog.schema.function. |
-| `FUNCTION_REFUSED` | refused | reflect, java_method, try_reflect, a script transform or a bucket sample on a function is refused. | Do it another way; these run code outside SQL. |
-| `HOST_INVALID` | refused | The workspace URL is not https, or not a Databricks host. | Enter the workspace URL from the browser, or set allowCustomHost for a private link. |
-| `HOST_UNTESTED` | refused | This OpenCode version is outside the tested range. | Use a tested OpenCode release, or set the option allowUntestedHost. |
-| `IDENTIFIER_REFUSED` | refused | A read used IDENTIFIER(…), a name chosen at run time. | Write the table or function name literally, and pass values in params. |
-| `INLINE_WITHHELD` | refused | This account's inline rules keep these rows out of the conversation. | Run it with databricks_save({ sql }) to write them to a file. |
-| `INPUT_INVALID` | refused | The input does not fit the tool's schema. | Check the input against the tool's schema, then call it again. |
-| `NEEDS_PLAN` | refused | A read calls a function that is not on the built-in allowlist, a user-defined table function, an external function, or a function whose body cannot be read. | Plan it with databricks_plan({ sql }). |
-| `NOT_FOUND` | refused | The catalog, schema, table, function, statement, job or run was not found or is not visible. | Call databricks_catalog with filter to find the name. |
-| `NOT_RELEASED` | refused | This copy is not a released install, so Databricks was not called. | Wait for a release tag: only a tagged release calls Databricks. |
-| `OPTIONS_INVALID` | refused | A plugin option is invalid or unknown. | Fix the plugin's options in opencode.json; the message names the option. |
-| `PATH_NOT_DEFAULT` | refused | The workspace's SQL path does not put system.builtin before every user schema, so a keyword-form built-in could resolve to a user function. | Ask an admin to restore the default path, or write the function call form, which the plugin qualifies as system.builtin. |
-| `PERMISSION_DENIED` | refused | Unity Catalog or an access control list refused the call. | Ask for the privilege the message names. |
-| `PLAN_ALREADY_USED` | refused | That plan was already committed; a plan runs once. | Plan the change again with databricks_plan. |
-| `PLAN_CALLER_MISMATCH` | refused | The plan belongs to another session, agent or account. | Plan the change again in this session. |
-| `PLAN_CHANGED` | refused | At commit, the category, the targets or the warehouse policy changed. | Plan the change again with databricks_plan. |
-| `PLAN_EXPIRED` | refused | The plan is older than planTtlSeconds. | Plan the change again with databricks_plan. |
-| `PLAN_NOT_FOUND` | refused | No plan has that id. | Plan the change again with databricks_plan. |
-| `RATE_LIMITED` | failed | Databricks answered 429 or REQUEST_LIMIT_EXCEEDED after retries. | Make the same call after retryAfterSec. |
-| `RESULTS_EXPIRED` | refused | The statement's results are gone (kept 12 hours) or its links expired beyond re-reading. | Run it again; the result cache may serve it. |
-| `RULES_NOT_ADDED` | failed | The default permission rules could not be added to the agents. | Restart OpenCode. |
-| `RUN_SIZE_REFUSED` | refused | The warehouse is larger than maxRunSize, so an agent may not run on it. | Use a smaller warehouse, or raise maxRunSize. |
-| `RUN_TIMEOUT` | failed | Databricks cancelled the read at its wait, or the plugin did at maxRunSeconds. | Narrow the query, or pass a longer wait (above 50 seconds the limit is the plugin's). |
-| `SAVE_EXISTS` | refused | A file already exists at the save path. | Pass overwrite: true, or choose another path. |
-| `SAVE_LIMIT` | refused | The result is larger than maxSaveRows or maxSaveBytes; the partial file was removed. | Filter or aggregate the query, or raise the limit. |
-| `SAVE_PATH_REFUSED` | refused | The save path is outside the project and allowedRoots. | Save under resultsDir, or add the folder to allowedRoots. |
-| `SECRET_FUNCTION_REFUSED` | refused | secret, try_secret and list_secrets are refused. | Do not read secrets through the agent. |
-| `SESSION_STATEMENT_REFUSED` | refused | SET, SET PATH, RESET, USE, DECLARE, temporary objects and other session statements are refused: the API keeps no session, and a changed path could redirect a function name. | Pass catalog, schema and params on the call instead; for SET TAG, write ALTER … SET TAGS, which plans as run. |
-| `SKILLS_INVALID` | refused | A packaged skill is missing or malformed. | Reinstall the plugin. |
-| `SQL_INVALID` | refused | The plugin's parser or Databricks rejected the SQL. | Fix it; databricks_table lists columns, and databricks_explain checks a read. |
-| `SQL_UNSUPPORTED` | refused | The pinned Spark grammar cannot parse this text, so it fails closed. | Rewrite it in standard Spark SQL, or plan it with databricks_plan, where it is category run. |
-| `START_REFUSED` | refused | The start policy refuses this warehouse: not serverless, too large, or its auto-stop is too long or off. | Use another warehouse; maxStartSize and maxStartAutoStopMinutes are your options to raise. |
-| `STATEMENT_FAILED` | failed | The warehouse ran the statement and it failed. | Fix it as providerError says, or check it with databricks_statement. |
-| `STATEMENT_NOT_READ` | refused | A read tool got text that is not one query, has a semicolon, or has a refused construct. | Plan it with databricks_plan({ sql }). |
-| `STATEMENT_UNKNOWN` | refused | This version does not classify that statement form. | Run it in the Databricks SQL editor, or update the plugin. |
-| `STATUS_UNAVAILABLE` | failed | Status could not be computed right now. | Try again in a few seconds; if it persists, restart OpenCode. |
-| `STOP_NOT_PERMITTED` | refused | Stopping needs Can manage, or other users' statements are not visible without Can monitor. | Ask the warehouse's owner to stop it. |
-| `UNAVAILABLE` | failed | Databricks or the network failed, or an ambiguous submit was not found in history. | Make the same call later; after an ambiguous submit, check databricks_history first. |
-| `WAREHOUSE_FORBIDDEN` | refused | The identity has no Can use permission on the warehouse. | Ask the warehouse's owner for Can use. |
-| `WAREHOUSE_REQUIRED` | refused | No SQL warehouse was given or configured. | Call databricks_warehouses({}), then pass warehouse. |
-| `WAREHOUSE_STOPPED` | refused | The warehouse is stopped and the call did not ask to start it. | Use a running warehouse, or pass start: true. |
-<!-- errors:end -->
+<!-- generated:errors -->
+| Code | Meaning |
+|---|---|
+| `NEEDS_SIGN_IN` | the account is not signed in |
+| `SCOPE_MISSING` | the call needs a scope the person has not confirmed |
+| `ACCOUNT_REQUIRED` | the plugin serves several accounts and the call names none |
+| `ACCOUNT_UNKNOWN` | the call names an alias the plugin does not serve |
+| `ACCOUNT_MISMATCH` | the item belongs to another account |
+| `CURSOR_INVALID` | the cursor is malformed, or belongs to another source, account or scope |
+| `CURSOR_EXPIRED` | the provider no longer keeps the history the cursor names |
+| `RATE_LIMITED` | the provider asked the plugin to slow down |
+| `BUDGET_EXCEEDED` | the read would cost more than the person allows |
+| `SOURCE_DISABLED` | the person turned this source or action off |
+| `TOO_LARGE` | the answer is larger than the source's maxBytes |
+| `INPUT_INVALID` | the input does not match the method's schema |
+| `SOURCE_UNKNOWN` | the plugin declares no such source |
+| `SCHEMA_VIOLATION` | an answer does not keep the contract's shape |
+| `PERMISSION_DENIED` | the person's grant does not cover the call |
+| `PLAN_INVALID` | the plan is missing, or belongs to another method |
+| `PLAN_USED` | the plan was already used by an earlier commit |
+| `GRANT_INVALID` | the action grant did not verify, or was already spent |
+| `HOST_UNTESTED` | OpenCode is outside the plugin's tested range |
+| `OPTIONS_INVALID` | the plugin's options do not match their schema |
+| `UNAVAILABLE` | the provider could not be reached |
+<!-- /generated:errors -->
 
-## Docs
+## Options
 
-- [Configuration](docs/configuration.md): options, sign-in, the default rules.
-- [Safety](docs/safety.md): the read path, the allowlist, dependencies, plans, and where read-only is enforced.
-- [Costs](docs/costs.md): warehouse billing, starts, the ledger, budgets and cleanup.
-- [Scripting](docs/scripting.md): the tools RPC.
-- [Sources](docs/sources.md): the event sources and the saved-query snapshot.
-- [Auth](docs/auth.md): modes, the role and the doctor.
-- [Errors](docs/errors.md): every code.
-- Contributors: [Architecture](docs/architecture.md), [Ownership](docs/ownership.md), [The parser](docs/parser.md).
+- `access`: `all` (the default), `ask-changes` or `read-only`.
+- `accounts`: one profile per alias; each alias is one workspace, with optional `host`, `warehouse`, `catalog`, `schema`,
+  `features` and `mode`.
+- `allowUntestedHost`: start outside the tested OpenCode range (default `false`).
 
-## License
+The full schema, defaults and examples are in [docs/configuration.md](docs/configuration.md).
 
-MIT. The bundle includes third-party code under its own licences, listed in `NOTICE`, including the SQL parser
-generated from Apache Spark's grammar (Apache License 2.0).
+## Troubleshooting
+
+Start with `databricks.status`: it reports each alias as `ready`, `needs_sign_in` or `error`, and names the agents that
+lack the generated access rules. Every failure is `CODE: What happened. Next step: What to do.` — follow the next step.
+A stopped warehouse is not started by a read or a plan; call `databricks.start` (it always asks). If a commit refuses
+with `PLAN_INVALID`, plan the change again and commit the new id.
+
+## Contract
+
+This plugin implements [plugin-contract](https://github.com/we-the-rebel-alliance/plugin-contract) v0.0.0 and the
+[plugin standard](https://github.com/we-the-rebel-alliance/plugin-contract/blob/master/docs/plugin-standard.md).
+
+## Documentation
+
+- [Capabilities](docs/capabilities.md)
+- [Accounts](docs/accounts.md)
+- [Configuration](docs/configuration.md)
+- [Architecture](docs/architecture.md)
+- [Security](docs/security.md)
+- [Automations](docs/automations.md)

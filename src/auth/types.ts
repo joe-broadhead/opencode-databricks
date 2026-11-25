@@ -3,8 +3,7 @@
  * host-agnostic and unit-testable: `createAuth` adapts the real context once (design §16, package A).
  *
  * Only what package A needs is here: the integration registration and the credential lookup it resolves a token
- * through, one command registration for `/databricks-doctor`, a synthetic session message, and storage for the
- * non-secret sign-in summary. No private host package is imported.
+ * through, and storage for the non-secret sign-in summary. No private host package is imported.
  */
 export interface Registration {
   dispose(): Promise<void>
@@ -61,24 +60,6 @@ export interface HostConnection {
   readonly id: string
 }
 
-export interface CommandInvocation {
-  readonly sessionID: string
-  readonly delivery: "steer" | "queue"
-  readonly prompt?: { readonly text?: string }
-}
-
-export interface CommandEditor {
-  add(definition: { readonly name: string; readonly description?: string; readonly execute: (input: CommandInvocation) => Promise<void> }): void
-}
-
-export interface SyntheticMessage {
-  readonly sessionID: string
-  readonly delivery: "steer" | "queue"
-  readonly text: string
-  readonly description: string
-  readonly resume: boolean
-}
-
 export interface AuthContext {
   readonly integration: {
     transform(callback: (draft: IntegrationDraft) => void): Promise<Registration>
@@ -87,7 +68,6 @@ export interface AuthContext {
       resolve(connection: HostConnection): Promise<HostCredential | undefined>
     }
   }
-  readonly command: { transform(callback: (editor: CommandEditor) => void): Promise<Registration> }
-  readonly session: { synthetic(message: SyntheticMessage): Promise<void> }
+  readonly mcp: { transform(callback: (editor: unknown) => void): Promise<Registration> }
   readonly storage: { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void> }
 }

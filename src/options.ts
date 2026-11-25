@@ -3,7 +3,7 @@
 // `tokenEnv` and `clientSecretEnv` name environment variables, and `profile` names a CLI profile.
 import * as z from "zod"
 import { ACCESS_VALUES } from "./constants.js"
-import { SIZES } from "./domain/cost.js"
+import { SIZES } from "./provider/cost.js"
 import { DatabricksError } from "./domain/errors.js"
 
 const Pattern = z.string().min(1).max(767)
@@ -30,7 +30,7 @@ const BudgetLimit = z.strictObject({ starts: z.number().int().min(0).optional(),
 
 export const OptionsSchema = z.strictObject({
   access: z.enum(ACCESS_VALUES).default("all"),
-  accounts: z.record(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/u, "an alias: lower-case letters, digits and dashes"), AccountSchema).optional(),
+  accounts: z.record(z.string().regex(/^[a-z][a-z0-9]{0,31}$/u, "an alias: lower-case letters and digits, starting with a letter"), AccountSchema).optional(),
   redirectUri: z.string().url().optional(),
   callbackPort: z.number().int().min(1024).max(65535).default(8765),
   allowCustomHost: z.boolean().default(false),
@@ -46,12 +46,9 @@ export const OptionsSchema = z.strictObject({
   maxSaveRows: z.number().int().min(1).max(10_000_000).default(1_000_000),
   maxSaveBytes: ByteSize.default("256MiB"),
   resultsDir: z.string().max(4096).default(".databricks/results"),
-  allowedRoots: z.array(z.string().max(4096)).default([]),
   inlinePii: z.enum(["warn", "save-only"]).default("warn"),
   dependencyDepth: z.number().int().min(1).max(10).default(4),
   runTimeoutSeconds: z.number().int().min(60).max(172800).default(3600),
-  automation: z.enum(["auto", "on", "off"]).default("auto"),
-  planTtlSeconds: z.number().int().min(30).max(3600).default(300),
   admin: z.strictObject({ enabled: z.boolean().default(true), requireReason: z.boolean().default(true) }).default({ enabled: true, requireReason: true }),
   allowUntestedHost: z.boolean().default(false),
 })
@@ -59,7 +56,7 @@ export const OptionsSchema = z.strictObject({
 export type Options = z.output<typeof OptionsSchema>
 export type AccountOptions = z.output<typeof AccountSchema>
 
-const EXAMPLE = `"plugins": [{ "package": "github:we-the-rebel-alliance/databricks-plugin#v<version>", "options": { "access": "ask-changes" } }]`
+const EXAMPLE = `"plugins": [{ "package": "github:we-the-rebel-alliance/databricks-plugin#v0.0.0", "options": { "access": "ask-changes" } }]`
 
 /** Bytes for a size option: a number, or "32KiB", "256MiB", "1GiB". */
 export function bytesOf(value: number | string): number {

@@ -4,7 +4,7 @@
  * The store is the host's, and single-use refresh tokens (Beta [12]) mean a second process's rotation invalidates the
  * credential this process holds. When `resolve` fails, a second `active` and `resolve` reads what the winner has just
  * stored: the host persists the credential a refresh callback returns, so the second read usually succeeds. That is the
- * mitigation the review accepts; the residual race is in `docs/auth.md` and the README's Known limits.
+ * mitigation the review accepts; the residual race is documented in the auth module.
  *
  * `resolve` may also renew a credential itself. Its failure is the sign-in's failure only after the second read.
  *
@@ -71,7 +71,7 @@ export async function readHostCredential(store: HostCredentialStore, alias: stri
     throw new DatabricksError(
       "AUTH_REQUIRED",
       `The stored Databricks sign-in for ${alias} could not be renewed, in this process or another.`,
-      `Run /connect and choose Databricks, or run opencode auth login databricks-${alias}.`,
+      `Run /connect and choose Databricks, or run opencode auth login ${integrationIdFor(alias)}.`,
     )
   }
 }

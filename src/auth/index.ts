@@ -1,43 +1,37 @@
 /**
  * Package A's entry point (design §16): the auth port, and the host registration behind it.
  *
- * `createAuth` is what `src/plugin.ts`'s one-line auth seam calls. It:
+ * `createAuth` is what `src/index.ts` calls. It:
  * 1. validates every account's mode-specific options, so a misconfiguration fails at startup (`OPTIONS_INVALID`,
  *    `HOST_INVALID`) rather than on the first tool call;
  * 2. loads the non-secret sign-in summary so status can name a workspace before the first call;
- * 3. registers one OAuth integration per interactive account, `databricks-<alias>`, with the form, the browser flow,
- *    the refresh callback and the role binding (design §3.2);
- * 4. registers `/databricks-doctor` (design §14), and keeps the certification it earns in memory only;
- * 5. returns the `AuthPort` package B and every tool call `token(account, scopes, signal)` on.
+ * 3. registers one integration per alias through the contract's `accounts` module, with the OAuth form and refresh for
+ *    an interactive account;
+ * 4. returns the `AuthPort` every provider call mints a token through.
  *
  * The token call is the one seat belt every Databricks request passes: a missing sign-in is `AUTH_REQUIRED`, a scope
  * the sign-in does not carry is `AUTH_SCOPE_MISSING` before any fetch, and a configured role that differs from the one
  * bound at sign-in is `AUTH_REQUIRED`. `pat`, `m2m` and `cli` read a secret only from the environment or the CLI's own
- * cache (design §3.2); no option holds one.
- *
- * Two accepted contract additions are computed here before the keeper lands them, and are returned as extra fields:
- * `AccountInfo.enforcement` (design §5.6; `role` only from a doctor report of this process, bound to the credential's
- * host, role and grant, and cleared by any sign-in or refresh that changes them) and `Token.host` (the workspace the
- * token was minted for, so package B never uses a stale display summary).
+ * cache; no option holds one.
  */
 import { DISPLAY_NAME } from "../constants.js"
-import type { EnforcementKind } from "../domain/contract.js"
+import type { EnforcementKind } from "../handlers/schemas.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { Options } from "../options.js"
-import type { AccountInfo, AuthPort, DatabricksPort, Token } from "../ports.js"
+import type { AccountInfo, AuthPort, Token } from "../ports.js"
 import { accountSettings, accountInfo, settingsOf, validateAccounts, type AccountBase, type AccountSettings } from "./accounts.js"
-import { registerDoctorCommand } from "./commands.js"
 import { readSignIn, type SignIn } from "./credential.js"
-import type { DoctorReport } from "./doctor.js"
 import { authorizeDatabricks, OAUTH_METHOD_ID } from "./oauth.js"
-import { integrationIdFor, integrationNames, readSignInAnswer, signInForm, type RedirectDefaults } from "./form.js"
+import { integrationIdFor, readSignInAnswer, signInForm, type RedirectDefaults } from "./form.js"
 import { cliToken, m2mToken, patToken, tokenCache, type CliRunner } from "./headless.js"
 import { readHostCredential } from "./host-credential.js"
 import { parseWorkspaceHost } from "./host.js"
 import { refreshSignIn, refreshState, type RefreshState } from "./refresh.js"
 import { featureOfScope, requestedScopes } from "./scopes.js"
 import { SignInSummaries, type SummaryStorage } from "./store.js"
-import type { AuthContext, HostCredential, Registration } from "./types.js"
+import { registerAccounts, type IntegrationMethodRegistration } from "@we-the-rebel-alliance/plugin-contract/accounts"
+import type { Manifest } from "@we-the-rebel-alliance/plugin-contract/manifest"
+import type { AuthContext, HostCredential } from "./types.js"
 
 /** Where a token comes from in production: the host's credential store, resolved through the integration. */
 export interface CredentialsSource {
@@ -56,19 +50,7 @@ export interface CoreInput {
   readonly tokenEndpoint?: string
 }
 
-const signInAgain = (alias: string) => `Run /connect and choose ${DISPLAY_NAME}, or run opencode auth login databricks-${alias}.`
-
-/** What makes a doctor certification apply to the credential now in force: the workspace, role and granted scopes. */
-interface Seen {
-  readonly host: string
-  readonly roleGroupId?: string
-  readonly grantedScopes: readonly string[]
-}
-
-const sameSeen = (left: Seen, right: Seen): boolean =>
-  left.host === right.host && left.roleGroupId === right.roleGroupId && [...left.grantedScopes].sort().join(" ") === [...right.grantedScopes].sort().join(" ")
-
-const seenOf = (stored: SignIn): Seen => ({ host: stored.host, ...(stored.roleGroupId !== undefined ? { roleGroupId: stored.roleGroupId } : {}), grantedScopes: stored.grantedScopes })
+const signInAgain = (alias: string) => `Run /connect and choose ${DISPLAY_NAME}, or run opencode auth login ${integrationIdFor(alias)}.`
 
 /** The auth port over one set of options. Tests build it with fakes; `createAuth` with the host. */
 export class AuthCore implements AuthPort {
@@ -76,12 +58,6 @@ export class AuthCore implements AuthPort {
   readonly refreshes: RefreshState = refreshState()
   private readonly input: CoreInput
   private readonly cache = tokenCache()
-  /** The credential in force per account, for the certification binding. In memory only. */
-  private readonly current = new Map<string, Seen>()
-  /** A doctor report that earned `role`, bound to the credential it proved. In memory only, never in storage. */
-  private readonly certified = new Map<string, Seen>()
-  /** The role group's display name, when SCIM returned it: display only (the contract's `AccountInfo.role.name`). */
-  private readonly roleNames = new Map<string, string>()
 
   constructor(input: CoreInput) {
     this.input = input
@@ -97,8 +73,8 @@ export class AuthCore implements AuthPort {
     for (const settings of accountSettings(this.input.options)) {
       const summary = this.input.summaries.get(settings.alias)
       try {
-        const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId, this.roleNames.get(settings.alias))
-        if (info) infos.push({ ...info, enforcement: this.enforcementFor(settings.alias, info) })
+        const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId)
+        if (info) infos.push({ ...info, enforcement: this.enforcementFor(info) })
       } catch {
         // A workspace this plugin would refuse is not an account; account() throws HOST_INVALID for it.
       }
@@ -109,7 +85,7 @@ export class AuthCore implements AuthPort {
   account(alias?: string): AccountInfo {
     const settings = this.settings(alias)
     const summary = this.input.summaries.get(settings.alias)
-    const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId, this.roleNames.get(settings.alias))
+    const info = accountInfo(settings, summary?.host, this.input.options.allowCustomHost, summary?.roleGroupId)
     if (!info) {
       throw new DatabricksError(
         "AUTH_REQUIRED",
@@ -117,7 +93,7 @@ export class AuthCore implements AuthPort {
         `Run /connect and choose ${DISPLAY_NAME} and enter the workspace URL, or set accounts.${settings.alias}.host.`,
       )
     }
-    return { ...info, enforcement: this.enforcementFor(settings.alias, info) }
+    return { ...info, enforcement: this.enforcementFor(info) }
   }
 
   async token(alias: string, scopes: readonly string[], signal: AbortSignal): Promise<Token> {
@@ -188,14 +164,10 @@ export class AuthCore implements AuthPort {
     return renewed
   }
 
-  /** Record a completed sign-in or a resolved token's triple; clears a certification the new credential no longer matches. */
+  /** Record a completed sign-in or a resolved token's triple. */
   async remember(alias: string, credential: HostCredential, kind: "sign-in" | "read" = "read"): Promise<void> {
     const stored = readSignIn(credential.metadata)
     if (!stored) return
-    const seen = seenOf(stored)
-    this.current.set(alias, seen)
-    const certified = this.certified.get(alias)
-    if (certified && !sameSeen(certified, seen)) this.certified.delete(alias)
     const generation = stored.generation ?? 0
     const latest = this.refreshes.latest.get(alias)
     // A delayed read of an older sign-in never replaces a newer one; a fresh sign-in at the same millisecond does.
@@ -205,20 +177,8 @@ export class AuthCore implements AuthPort {
     await this.input.summaries.remember(alias, { host: stored.host, ...(stored.roleGroupId !== undefined ? { roleGroupId: stored.roleGroupId } : {}) })
   }
 
-  /** A doctor report raised `role`: remember the credential it proved, so `account().enforcement` can say so in this process. */
-  certify(report: DoctorReport): void {
-    if (report.role?.name !== undefined) this.roleNames.set(report.alias, report.role.name)
-    if (report.enforcement !== "role" || report.role === undefined || report.binding === undefined) return
-    // The report proved the credential it ran with. A sign-in that landed during the run is not covered (R2-L1).
-    const current = this.current.get(report.alias)
-    if (current && sameSeen(report.binding, current)) this.certified.set(report.alias, current)
-  }
-
-  private enforcementFor(alias: string, info: AccountBase): EnforcementKind {
-    const base = info.mode === "m2m" ? "service-principal" : info.role !== undefined ? "role-requested" : "identity"
-    const certified = this.certified.get(alias)
-    const current = this.current.get(alias)
-    return info.role !== undefined && certified && current && sameSeen(certified, current) ? "role" : base
+  private enforcementFor(info: AccountBase): EnforcementKind {
+    return info.mode === "m2m" ? "service-principal" : info.role !== undefined ? "role-requested" : "identity"
   }
 
   private settings(alias?: string): AccountSettings {
@@ -303,9 +263,6 @@ export interface CreateAuthInput {
   /** The host context; typed structurally by `types.ts`, so no private host package is imported. */
   readonly ctx: unknown
   readonly options: Options
-  readonly keep: <R extends Registration>(registration: R) => R
-  /** Package B's port, read when the doctor command runs, not at setup. */
-  readonly databricks: () => DatabricksPort
   /** Test seams; production takes the process's. */
   readonly fetch?: typeof globalThis.fetch
   readonly now?: () => number
@@ -322,13 +279,22 @@ function redirectDefaults(options: Options): RedirectDefaults {
   return { ...(options.redirectUri !== undefined ? { redirectUri: options.redirectUri } : {}), callbackPort: options.callbackPort }
 }
 
-/** One OAuth integration per interactive account, and the doctor command. */
-export async function createAuth(input: CreateAuthInput): Promise<AuthPort> {
+/** One OAuth integration per interactive account. */
+export interface AuthSetup {
+  readonly port: AuthPort
+  readonly problems: readonly string[]
+}
+
+/**
+ * The auth port and the one integration per alias, through the contract's `accounts` module. The plugin holds the
+ * credentials: an interactive alias signs in through its own integration (`databricks` or `databricks-<alias>`), while
+ * a headless alias reads its token from the environment or the CLI and needs no sign-in.
+ */
+export async function createAuth(input: CreateAuthInput & { readonly manifest: Manifest }): Promise<AuthSetup> {
   validateAccounts(input.options)
   const context = input.ctx as AuthContext
   const fetch = input.fetch ?? globalThis.fetch
   const now = input.now ?? Date.now
-  const registrations: Registration[] = []
   const core = new AuthCore({
     options: input.options,
     credentials: { read: (alias, signal) => readHostCredential(context.integration.connection, alias, signal) },
@@ -340,62 +306,49 @@ export async function createAuth(input: CreateAuthInput): Promise<AuthPort> {
     ...(input.cliCommand !== undefined ? { cliCommand: input.cliCommand } : {}),
     ...(input.tokenEndpoint !== undefined ? { tokenEndpoint: input.tokenEndpoint } : {}),
   })
-  try {
-    await core.load()
-    const accounts = accountSettings(input.options)
-    const interactive = accounts.filter((account) => account.mode === "interactive")
-    if (interactive.length > 0) {
-      const names = integrationNames(accounts)
-      const defaults = redirectDefaults(input.options)
-      registrations.push(
-        await context.integration.transform((draft) => {
-          for (const account of interactive) {
-            const integrationID = integrationIdFor(account.alias)
-            const name = names.get(account.alias) ?? DISPLAY_NAME
-            draft.update(integrationID, (integration) => {
-              integration.name = name
+  await core.load()
+  const defaults = redirectDefaults(input.options)
+  const registered = await registerAccounts(context, {
+    manifest: input.manifest,
+    options: input.options,
+    auth: (account): readonly IntegrationMethodRegistration[] => {
+      const settings = settingsOf(input.options, account.alias)
+      if (settings === undefined || settings.mode !== "interactive") return []
+      return [
+        {
+          integrationID: "",
+          method: { id: OAUTH_METHOD_ID, type: "oauth", label: "Sign in with Databricks", form: signInForm(settings, defaults) },
+          authorize: async (answer: Record<string, unknown>) => {
+            const parsed = readSignInAnswer(answer, settings, defaults, input.options.allowCustomHost)
+            const authorization = await authorizeDatabricks({
+              alias: settings.alias,
+              host: parsed.host.host,
+              clientId: parsed.clientId,
+              scopes: requestedScopes(settings.features, parsed.scopes),
+              choice: parsed.scopes,
+              redirect: parsed.redirect,
+              fetch,
+              now,
+              ...(parsed.roleGroupId !== undefined ? { roleGroupId: parsed.roleGroupId } : {}),
+              ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+              ...(input.authorizeEndpoint !== undefined ? { authorizeEndpoint: input.authorizeEndpoint } : {}),
+              ...(input.tokenEndpoint !== undefined ? { tokenEndpoint: input.tokenEndpoint } : {}),
             })
-            draft.method.update({
-              integrationID,
-              method: { id: OAUTH_METHOD_ID, type: "oauth", label: "Sign in with Databricks", form: signInForm(account, defaults) },
-              authorize: async (answer) => {
-                const parsed = readSignInAnswer(answer, account, defaults, input.options.allowCustomHost)
-                const authorization = await authorizeDatabricks({
-                  alias: account.alias,
-                  host: parsed.host.host,
-                  clientId: parsed.clientId,
-                  scopes: requestedScopes(account.features, parsed.scopes),
-                  choice: parsed.scopes,
-                  redirect: parsed.redirect,
-                  fetch,
-                  now,
-                  ...(parsed.roleGroupId !== undefined ? { roleGroupId: parsed.roleGroupId } : {}),
-                  ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-                  ...(input.authorizeEndpoint !== undefined ? { authorizeEndpoint: input.authorizeEndpoint } : {}),
-                  ...(input.tokenEndpoint !== undefined ? { tokenEndpoint: input.tokenEndpoint } : {}),
-                })
-                return {
-                  url: authorization.url,
-                  instructions: authorization.instructions,
-                  expiresAt: authorization.expiresAt,
-                  mode: "auto" as const,
-                  callback: authorization.callback.then(async (credential) => {
-                    await core.remember(account.alias, credential, "sign-in")
-                    return credential
-                  }),
-                }
-              },
-              refresh: (credential) => core.refresh(account.alias, credential),
-            })
-          }
-        }),
-      )
-    }
-    registrations.push(await registerDoctorCommand(context, { options: input.options, auth: core.port, databricks: input.databricks, onReport: (report) => core.certify(report) }))
-  } catch (cause) {
-    for (const registration of registrations.splice(0).reverse()) await registration.dispose().catch(() => undefined)
-    throw cause
-  }
-  for (const registration of registrations) input.keep(registration)
-  return core.port
+            return {
+              url: authorization.url,
+              instructions: authorization.instructions,
+              expiresAt: authorization.expiresAt,
+              mode: "auto" as const,
+              callback: authorization.callback.then(async (credential) => {
+                await core.remember(settings.alias, credential, "sign-in")
+                return credential
+              }),
+            }
+          },
+          refresh: (credential: HostCredential) => core.refresh(settings.alias, credential),
+        },
+      ]
+    },
+  })
+  return { port: core.port, problems: registered.problems }
 }

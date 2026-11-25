@@ -10,7 +10,6 @@ permissions:
   contents: read
 
 concurrency:
-  # The event is part of the group, so a run by hand on master never cancels the push run a release stands on.
   group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -26,32 +25,30 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          # The host and pack stages install each release in TESTED_HOSTS (src/constants.ts) themselves, so that file
-          # is part of the key.
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            src/constants.ts
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-          # The runner's Bun cache can restore an archive without the binary; install it fresh, as release.yml does.
-          no-cache: true
-      # actionlint parses the workflows as workflows, not as YAML: a `${{ }}` in a context that does not exist makes
-      # GitHub reject the file and run nothing at all. `npm run check` runs it as its `actionlint` stage when it is on
-      # PATH.
-      - name: actionlint
-        run: |
-          set -euo pipefail
-          version=1.7.12
-          base="https://github.com/rhysd/actionlint/releases/download/v${version}"
-          cd "$RUNNER_TEMP"
-          curl -sSfLO "${base}/actionlint_${version}_linux_amd64.tar.gz"
-          curl -sSfLO "${base}/actionlint_${version}_checksums.txt"
-          grep " actionlint_${version}_linux_amd64.tar.gz$" "actionlint_${version}_checksums.txt" | sha256sum -c -
-          tar xzf "actionlint_${version}_linux_amd64.tar.gz" actionlint
-          # On PATH for the next step, where `npm run check` runs the actionlint stage; nothing is written to the checkout.
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          cache-dependency-path: package-lock.json
+      - name: Fetch the contract over HTTPS
+        # The contract is a public repository, and an older lock may record its dependency over ssh; a runner has no key.
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
       # OpenCode installs plugins without lifecycle scripts, and no dev dependency needs them.
       - run: npm ci --ignore-scripts
+      # The tag ships the committed bundle, so a stale dist/ fails here rather than at install time.
+      - name: The committed bundle is current
+        run: npm run bundle && git diff --exit-code dist/
+      # Parser drift, typecheck, bundle, unit, pack, then plugin-kit check. The kit does not run these steps.
       - run: npm run check
+      # Install the pushed head the way a person does, in an isolated home. A fork head SHA is not in the org repo.
+      - name: Install the pushed head in an isolated OpenCode home
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          npm install --global @opencode/cli@2.4.1
+          H=$(mktemp -d)
+          export HOME="$H"
+          export XDG_CONFIG_HOME="$H/c"
+          export XDG_CACHE_HOME="$H/k"
+          export XDG_DATA_HOME="$H/d"
+          export XDG_STATE_HOME="$H/s"
+          opencode plugin add "github:we-the-rebel-alliance/databricks-plugin#${HEAD_SHA}"
+          test -n "$(find "$H/k" -path '*node_modules/@we-the-rebel-alliance/databricks-plugin/dist/index.js' -type f -print -quit)"

@@ -18,7 +18,7 @@
  */
 import { spawn } from "node:child_process"
 import { DatabricksError } from "../domain/errors.js"
-import { shortReason } from "../redact.js"
+import { shortReason } from "../provider/redact.js"
 import type { AccountSettings } from "./accounts.js"
 import { parseWorkspaceHost } from "./host.js"
 import { requestToken } from "./token.js"
@@ -34,7 +34,7 @@ export type MintedToken = Omit<Token, "host">
 /** A token with the moment it stops being usable, shared by the modes that mint one. */
 export interface TokenCache {
   get(key: string, now: number): MintedToken | undefined
-  set(key: string, token: MintedToken): void
+  set(key: string, minted: MintedToken): void
 }
 
 export function tokenCache(): TokenCache {
@@ -45,8 +45,8 @@ export function tokenCache(): TokenCache {
       if (!token || token.expiresAt - CACHE_SKEW_MS <= now) return undefined
       return token
     },
-    set(key, token) {
-      entries.set(key, token)
+    set(key, minted) {
+      entries.set(key, minted)
     },
   }
 }
@@ -102,11 +102,12 @@ export async function m2mToken(input: M2mInput): Promise<MintedToken> {
   const endpoint = parseWorkspaceHost(host, input.allowCustomHost ?? false).host
   const scope = m2mScope(input.scopes)
   // Fine-grained M2M scopes are not live-tested yet (L2): the request asks for the scopes this call needs, and a scoped
-  // secret narrower than that answers invalid_scope, mapped to AUTH_SCOPE_MISSING with the fix. docs/auth.md says so.
+  // secret narrower than that answers invalid_scope, mapped to AUTH_SCOPE_MISSING with the fix.
   const key = `m2m:${alias}:${scope}`
   const cached = input.cache.get(key, input.now())
   if (cached) return cached
   const token = await requestToken({
+    alias,
     endpoint: input.tokenEndpoint ?? `${endpoint}/oidc/v1/token`,
     form: {
       grant_type: "client_credentials",
@@ -248,7 +249,7 @@ export async function cliToken(input: CliInput): Promise<MintedToken> {
   if (!access) throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI returned no access token for profile ${profile}.`, `Run databricks auth login --profile ${profile} again.`)
   if (Number.isNaN(expiry)) throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI returned no usable expiry for profile ${profile}.`, "Update the Databricks CLI, then run databricks auth login again.")
   if (expiry <= input.now()) throw new DatabricksError("AUTH_REQUIRED", `The Databricks CLI's cached token for profile ${profile} has expired.`, `Run databricks auth login --profile ${profile} again.`)
-  const token: MintedToken = { accessToken: access, expiresAt: expiry, scopes: ["all-apis"] }
-  input.cache.set(`cli:${alias}`, token)
-  return token
+  const minted: MintedToken = { accessToken: access, expiresAt: expiry, scopes: ["all-apis"] }
+  input.cache.set(`cli:${alias}`, minted)
+  return minted
 }

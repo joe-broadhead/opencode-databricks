@@ -6,9 +6,15 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "jsx": "preserve",
-    "jsxImportSource": "@opentui/solid",
-    "types": ["node", "bun"]
+    "types": [
+      "node",
+      "bun"
+    ],
+    "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts", "src/tui/**/*.tsx", "test/fake/**/*.ts", "test/unit/**/*.ts", "test/host/**/*.ts", "test/pack/**/*.ts", "test/conformance/**/*.ts", "test/support/**/*.ts"]
+  "include": [
+    "src/**/*.ts",
+    "test/unit/**/*.ts",
+    "test/pack/**/*.mjs"
+  ]
 }

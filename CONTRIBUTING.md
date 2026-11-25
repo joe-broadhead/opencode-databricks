@@ -1,60 +1,68 @@
 # Contributing
 
-## Setup
+This repository is the Databricks plugin on
+[plugin-contract](https://github.com/we-the-rebel-alliance/plugin-contract) v0. The contract is
+[docs/contract.md](https://github.com/we-the-rebel-alliance/plugin-contract/blob/master/docs/contract.md), the bar for
+every plugin repository is
+[docs/plugin-standard.md](https://github.com/we-the-rebel-alliance/plugin-contract/blob/master/docs/plugin-standard.md),
+and [AGENTS.md](AGENTS.md) is the working guide.
 
-- Node.js 22.12 or later, with npm. CI uses Node.js 24.
-- Bun 1.4 (CI uses 1.4.4). The conformance, host and pack tests run with `bun test`.
-- macOS or Linux.
+## Set up and check
+
+You need Node 24.
 
 ```sh
-git clone https://github.com/we-the-rebel-alliance/databricks-plugin.git
-cd databricks-plugin
 npm ci --ignore-scripts
 npm run check
 ```
 
-No dependency needs install scripts, and OpenCode installs plugins without them, so always pass `--ignore-scripts`.
+`npm run check` runs the whole gate:
 
-### Run your checkout in OpenCode
+| Step | What it proves |
+|---|---|
+| `npm run lint` | `biome check .` finds no lint error |
+| `npm run typecheck` | the sources and tests typecheck under strict settings |
+| `npm run bundle` | `dist/index.js` is built from `src/index.ts` with esbuild |
+| `npm run test:unit` | the method table, access rules, schemas, the read path, both events sources and the warehouse start |
+| `npm run test:host` | every packaged skill is registered on the real OpenCode 2.4.1 host |
+| `npm run test:pack` | the tarball holds `package.json`, `dist/index.js`, the skills, the assets, `README.md` and `LICENSE`, and it host-loads |
+| `plugin-kit check` | conformance T0 and T1, the doc file set, the forbidden patterns and no bundled kit |
+| `npm run docs:check` | every generated doc section matches the manifest |
 
-Build it with `npm run build`, then point the `plugins` entry of a development OpenCode config at the clone's directory
-instead of the release install. A development build answers `NOT_RELEASED` and never calls Databricks.
+`biome.json` is strict JSON; its only exclusion beyond the template is `src/provider/sql/generated`, the ANTLR tree, which the parser tool generates rather than a person writing it.
 
-## `npm run check`
+CI runs `npm run check` in one job, named `ci`. `dist/` is committed: after a source change, run `npm run bundle` and
+commit the result, and CI fails when the committed bundle is stale.
 
-One command, `scripts/check.mjs`, runs every stage in order and stops at the first failure. `node scripts/check.mjs
-<stage>...` runs only the named stages.
+## The contract pin
 
-| Stage | What it does |
-| --- | --- |
-| `parser` | Regenerates the SQL parser and the built-in list into a temporary folder and fails on any difference. |
-| `typecheck` | `tsc` over `src/` and the tests. |
-| `unit` | Vitest over `test/unit/`. |
-| `conformance` | The `sources` declaration against the source contract v0.3.0, under Bun; the kit's run over the sources lands with them. |
-| `kit` | The release kit's own tests. |
-| `build` | esbuild bundles `dist/index.js` and `dist/tui.js`, and checks `NOTICE`. |
-| `icons` | The family icon contract. |
-| `host` | The built plugin in an embedded OpenCode host, once per tested release, against a loopback fake. |
-| `pack` | Packs, installs with scripts disabled and imports both entries. |
-| `forbidden` | The forbidden APIs and private names. |
-| `copies` | The shared kit files against their pinned hashes. |
-| `whitelist` | `package.json` and `dist/` against the approved package shape. |
-| `actionlint` | The workflows, when `actionlint` is on PATH. |
+`package.json` pins the contract to `github:we-the-rebel-alliance/plugin-contract#v0.0.0`. Move the pin to the
+contract's next release tag; never follow a branch. Never copy a contract module into this repository. The committed
+`package-lock.json` records the contract over `git+ssh`; CI rewrites GitHub SSH URLs to HTTPS with
+`git config url."https://github.com/".insteadOf "ssh://git@github.com/"`, so a fresh `npm ci` needs no SSH key.
 
-## The parser
+## Pull requests
 
-`src/sql/generated/` is generated: never edit it. To move the grammar pin, copy the two grammar files of the new
-Apache Spark tag into `grammar/spark/`, update `grammar/spark/PIN.json`, port any changed action in `grammar/port.mjs`,
-run `node scripts/generate-parser.mjs`, and run the fuzz (`npm run fuzz`, which needs Java 17). See
-[The parser](docs/parser.md).
+One change per pull request, based on `master`, with a conventional commit (`feat:`, `fix:`, `docs:`, `chore:`). The
+pull request says what changed and why, the contract section it implements, and the exact `npm run check` result.
+
+A new method, source or action starts in `package.json` `capabilities`, then its handler in `src/handlers/`, then its
+tests, then `npx plugin-kit docs`, then `npx plugin-kit check`. Every capability has tests, including its negative cases.
+
+## Fixtures
+
+`fixtures/conformance.json` is the plugin's evidence to the conformance kit. It records two synthetic accounts; rebuild
+it with `node test/fixtures/make-conformance.mjs`, then run `npx plugin-kit record` to redact it. Once a real workspace
+is available, record from two real accounts:
+
+```sh
+npx plugin-kit record --account work
+npx plugin-kit record --account personal
+```
 
 ## Releases
 
-Versions follow semantic versioning on the plugin's contract: its options, the namespace `databricks`, the
-`/databricks-status` command, the status RPC, the skill names, the tool schemas and the default rules.
-
-Each release is the GitHub tag `v<version>`, made only by `.github/workflows/release.yml` after the owner approves the
-`release` environment. While changes land, their notes go under `## [Unreleased]` in `CHANGELOG.md`; a release-prep
-commit runs `node scripts/changelog.mjs release`. `package.json` stays `"private": true` and in canonical form.
-
-CI runs one `ci` job on every pull request and every push to `master`; the release stands on that run.
+Releases are tags, not npm packages. A release is prepared in one pull request, `chore(release): prepare vX.Y.Z`: the
+version in `package.json` and `package-lock.json`, the `CHANGELOG.md` section, and `npx plugin-kit docs` if the manifest
+changed. The owner pushes the tag after `master`'s CI passed; the release workflow checks the tag, builds, and creates
+the GitHub release with the packed tarball, the conformance report and `SHA256SUMS`.

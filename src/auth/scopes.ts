@@ -9,7 +9,7 @@
  * The check before a call is the other half: `missingScopes` runs in the auth port, before package B's fetch exists, so
  * a call whose family was not granted answers `AUTH_SCOPE_MISSING` without touching Databricks.
  */
-import type { Feature } from "../domain/actions.js"
+import type { Feature } from "../methods.js"
 
 /** The scopes every sign-in requests: the three API families the reads use, and the identity claims [8][9][30]. */
 export const BASE_SCOPES: readonly string[] = ["sql", "unity-catalog", "query-history", "openid", "email", "profile", "offline_access"]

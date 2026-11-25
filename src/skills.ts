@@ -1,10 +1,25 @@
 // Registers the plugin's hand-written skills. Each is read once at setup from the package's skills/<id>/SKILL.md.
-import { readFile } from "node:fs/promises"
+import { readFile, readdir } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { type Plugin, Skill } from "@opencode/plugin"
 import { DatabricksError } from "./domain/errors.js"
 
-export const SKILL_IDS = ["databricks", "databricks-sql"] as const
+/** Every skill directory with a SKILL.md, in name order. */
+export async function skillIds(): Promise<string[]> {
+  const root = fileURLToPath(new URL("../skills/", import.meta.url))
+  const entries = await readdir(root, { withFileTypes: true })
+  const ids: string[] = []
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory()) continue
+    try {
+      await readFile(fileURLToPath(new URL(`../skills/${entry.name}/SKILL.md`, import.meta.url)), "utf8")
+      ids.push(entry.name)
+    } catch {
+      // A directory without a SKILL.md is not a skill.
+    }
+  }
+  return ids
+}
 
 type ParsedSkill = { readonly name: string; readonly description: string; readonly content: string }
 
@@ -22,11 +37,13 @@ export function parseSkill(id: string, text: string): ParsedSkill {
   const name = fields.get("name")
   const description = fields.get("description")
   if (fields.size !== 2 || name !== id || !description) throw invalid(`skills/${id}/SKILL.md needs exactly a name equal to "${id}" and a description.`)
-  return { name, description, content: match[2]!.trimStart() }
+  const content = match[2]!.trimStart()
+  if (content.trim() === "") throw invalid(`skills/${id}/SKILL.md has no content.`)
+  return { name, description, content }
 }
 
 function invalid(message: string): DatabricksError {
-  return new DatabricksError("SKILLS_INVALID", message, "Reinstall the plugin.")
+  return new DatabricksError("UNAVAILABLE", message, "Reinstall the plugin.")
 }
 
 export function skillPath(id: string): string {
@@ -36,8 +53,10 @@ export function skillPath(id: string): string {
 type SkillContext = { readonly skill: Pick<Plugin.Context["skill"], "transform"> }
 
 export async function registerSkills(ctx: SkillContext): Promise<{ dispose(): Promise<void> }> {
+  const ids = await skillIds()
+  if (ids.length === 0) throw invalid("The package has no skills.")
   const skills = await Promise.all(
-    SKILL_IDS.map(async (id) => {
+    ids.map(async (id) => {
       const path = skillPath(id)
       const text = await readFile(path, "utf8").catch(() => {
         throw invalid(`skills/${id}/SKILL.md is missing or unreadable.`)

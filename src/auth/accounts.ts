@@ -2,15 +2,15 @@
  * One account is one workspace (design §3.1). These are the option-derived settings, the mode-specific requirements
  * checked at setup, and the `AccountInfo` the auth port hands to every tool and to status.
  *
- * The settings hold no secret: `tokenEnv` and `clientSecretEnv` name variables, `profile` names a CLI profile, and the
- * client ID of a public app connection is public [11][12]. A missing requirement of a headless mode is an option error
- * (`OPTIONS_INVALID`) at setup, before any call: a `pat` account without `tokenEnv` can never work, and failing at
- * startup says so once instead of on every tool call.
+ * The settings hold no credential: the environment-variable names, the profile name, and the client JSON identify
+ * where a value is read, and the client ID of a public app connection is public [11][12]. A missing requirement of a
+ * headless mode is an option error (`OPTIONS_INVALID`) at setup, before any call: an account with no environment
+ * variable can never work, and failing at startup says so once instead of on every tool call.
  */
-import type { Feature } from "../domain/actions.js"
+import type { Feature } from "../methods.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { Options } from "../options.js"
-import type { EnforcementKind } from "../domain/contract.js"
+import type { EnforcementKind } from "../handlers/schemas.js"
 import type { AccountInfo, Mode } from "../ports.js"
 import { parseWorkspaceHost } from "./host.js"
 import type { ScopeChoice } from "./scopes.js"
@@ -120,14 +120,14 @@ export function validateAccounts(options: Options): void {
  */
 export type AccountBase = Omit<AccountInfo, "enforcement">
 
-export function accountInfo(account: AccountSettings, snapshotHost: string | undefined, allowCustomHost: boolean, roleGroupId?: string, roleName?: string): AccountBase | undefined {
+export function accountInfo(account: AccountSettings, snapshotHost: string | undefined, allowCustomHost: boolean, roleGroupId?: string): AccountBase | undefined {
   const raw = account.host ?? snapshotHost
   if (!raw) return undefined
   const { host, cloud } = parseWorkspaceHost(raw, allowCustomHost)
   const role =
     account.mode === "interactive"
       ? roleGroupId !== undefined && (account.role === undefined || account.role === roleGroupId)
-        ? { groupId: roleGroupId, ...(roleName !== undefined ? { name: roleName } : {}) }
+        ? { groupId: roleGroupId }
         : undefined
       : account.role !== undefined
         ? { groupId: account.role }
@@ -146,8 +146,7 @@ export function accountInfo(account: AccountSettings, snapshotHost: string | und
 }
 
 /**
- * The enforcement a token carries, before `doctor` proves the role (design §5.6). Status words `role-requested` as
- * "<name> (requested)" until a clean doctor report earns `role`; this package owns the doctor, package F words status.
+ * The enforcement a token carries: a service principal, a configured role requested at sign-in, or the person's identity.
  */
 export function enforcementOf(account: Pick<AccountInfo, "mode" | "role">): EnforcementKind {
   if (account.mode === "m2m") return "service-principal"

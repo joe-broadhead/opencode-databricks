@@ -1,24 +1,19 @@
 /**
- * The ports: every boundary between the plugin's decisions and the outside world (design §16). Each package builds
- * against these, and test/fake/ports.ts has a fake for each, so the packages build in parallel (docs/ownership.md).
+ * The ports: every boundary between the plugin's decisions and the outside world.
  *
- * - `DatabricksPort` (package B builds it over `fetch`): Databricks' REST calls, typed. Every call names its operation
- *   (src/domain/actions.ts), so the scope check (`AUTH_SCOPE_MISSING`) and the operation assert run before it.
- * - `AuthPort` (package A): an access token for an account and the scopes it needs.
- * - `ReadGuardPort` (package C, `src/guards/read.ts`): design §5.1 steps 3–7 after `analyzeRead`, shared by every read
- *   tool and by package E's `saved_read` and `save`, which build against its fake (review #1, LOW 6).
- * - `LedgerPort` (Day 0, src/ledger.ts): the spend ledger.
- * - `PlanStorePort` (Day 0, src/domain/plans.ts): single-use plans.
- * - `PermissionPort`: OpenCode's `ctx.permission.assert`, so a tool asserts its dotted action before any call.
+ * - `DatabricksPort` builds over `fetch`: Databricks' REST calls, typed. Every call names its operation
+ *   (`src/methods.ts`), so the scope check (`AUTH_SCOPE_MISSING`) and the operation assert run before it.
+ * - `AuthPort`: an access token for an account and the scopes it needs.
+ * - `ReadGuardPort` (`src/provider/guards/read.ts`): the shared read path.
+ * - `LedgerPort` (`src/provider/ledger.ts`): the spend ledger.
  * - `Clock`: time and ids, so tests are deterministic.
  *
  * Every call takes the call's `signal`; a stopped call aborts its request. Databricks' text in an answer is untrusted.
  */
-import type { Feature, Operation } from "./domain/actions.js"
-import type { EnforcementKind } from "./domain/contract.js"
+import type { Feature, Operation } from "./methods.js"
+import type { EnforcementKind } from "./handlers/schemas.js"
 import type { ProviderError } from "./domain/errors.js"
 
-export type { PlanStorePort } from "./domain/plans.js"
 
 // ── auth (package A) ─────────────────────────────────────────────────────
 
@@ -37,9 +32,8 @@ export interface AccountInfo {
   readonly catalog?: string
   readonly schema?: string
   /**
-   * Which guarantee holds (`enforcementOf(account)`, package A). Raised to `"role"` only by a doctor report from this
-   * process, bound to the credential's (host, role group, granted scopes), in memory only, cleared when they change.
-   * Status and `PreparedRead.enforcement` read this field. See `Enforcement` in src/domain/contract.ts.
+   * Which guarantee holds (`enforcementOf(account)`): the person's identity, a service principal, or a role requested at
+   * sign-in. Status and `PreparedRead.enforcement` read this field. See `Enforcement` in handlers/schemas.ts.
    */
   readonly enforcement: EnforcementKind
 }
@@ -287,8 +281,6 @@ export interface Identity {
   readonly id: string
   readonly userName: string
   readonly displayName?: string
-  /** SCIM `Me`'s groups (no further scope needed). The doctor resolves the role's name for `principal` from them. */
-  readonly groups?: readonly { readonly id: string; readonly displayName?: string }[]
 }
 
 export interface DatabricksPort {
@@ -374,8 +366,6 @@ export interface ReadRequest {
   readonly warehouse?: string
   readonly catalog?: string
   readonly schema?: string
-  /** `start: true` from the call; never set by a source. */
-  readonly start?: boolean
   /** The saved source: refuse unless the warehouse is already RUNNING (design §11.3). */
   readonly runningOnly?: boolean
   /** The call's own `wait`, in seconds: how long to wait for a STARTING warehouse. Defaults to the `wait` option. */
@@ -394,8 +384,6 @@ export interface PreparedRead {
   readonly warehouseId: string
   /** The warehouse as the guard last read it (RUNNING): its size, type and clusters, for cost text and the ledger. */
   readonly warehouse: Warehouse
-  /** This call started the warehouse (STARTED_WAREHOUSE). */
-  readonly started: boolean
   /** Resolved tables, `catalog.schema.table`. */
   readonly tables: readonly string[]
   /** `AccountInfo.enforcement`, read when the read was prepared. */
@@ -444,23 +432,6 @@ export interface LedgerPort {
    * is empty for a start charged outside a session.
    */
   starts(account: string, sinceMs: number): Promise<readonly { readonly warehouseId: string; readonly atMs: number; readonly sessionId: string }[]>
-}
-
-// ── permissions and time ─────────────────────────────────────────────────
-
-export interface PermissionRequest {
-  /** The dotted action: `databricks.<tool>`, `databricks.start`, `databricks.probe` or `databricks.read`. */
-  readonly action: string
-  /** `<account>:<operation>`, `<account>:table:<c>.<s>.<t>` or `<account>:warehouse:<id>`. */
-  readonly resource: string
-  readonly sessionID: string
-  readonly messageID?: string
-  readonly callID?: string
-}
-
-export interface PermissionPort {
-  /** Resolves when allowed (asking the person if the rules say ask); rejects when denied. */
-  assert(request: PermissionRequest, signal: AbortSignal): Promise<void>
 }
 
 export interface Clock {
