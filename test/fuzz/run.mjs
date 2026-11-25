@@ -23,7 +23,7 @@ const arg = (name, fallback) => {
 }
 const total = Number(arg("cases", "3000"))
 let seed = Number(arg("seed", "20261117"))
-const jars = arg("jars", join(tmpdir(), "opencode-databricks-fuzz-jars"))
+const jars = arg("jars", join(tmpdir(), "databricks-plugin-fuzz-jars"))
 const java = (tool) => (process.env.JAVA_HOME ? join(process.env.JAVA_HOME, "bin", tool) : tool)
 
 function fetchJar(url, sha256) {

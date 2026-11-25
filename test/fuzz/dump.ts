@@ -1,12 +1,12 @@
-// The TypeScript side of the differential fuzz: the plugin's generated parser, through src/sql/parse.ts, printing the
+// The TypeScript side of the differential fuzz: the plugin's generated parser, through src/provider/sql/parse.ts, printing the
 // same line per input as test/fuzz/Harness.java prints from Spark's own parser, then a fifth field: whether the read
 // path's local rules refuse the input (a difference is excused only then). Reads base64 lines from the file named on
 // the command line; writes to stdout.
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { type ParseTree, TerminalNode } from "antlr4ng"
-import { stripTrailingSemicolon, textRules } from "../../src/sql/analyze.js"
-import { contextName, parseStatement } from "../../src/sql/parse.js"
+import { stripTrailingSemicolon, textRules } from "../../src/provider/sql/analyze.js"
+import { contextName, parseStatement } from "../../src/provider/sql/parse.js"
 
 const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64")
 

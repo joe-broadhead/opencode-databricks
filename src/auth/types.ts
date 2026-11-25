@@ -61,24 +61,6 @@ export interface HostConnection {
   readonly id: string
 }
 
-export interface CommandInvocation {
-  readonly sessionID: string
-  readonly delivery: "steer" | "queue"
-  readonly prompt?: { readonly text?: string }
-}
-
-export interface CommandEditor {
-  add(definition: { readonly name: string; readonly description?: string; readonly execute: (input: CommandInvocation) => Promise<void> }): void
-}
-
-export interface SyntheticMessage {
-  readonly sessionID: string
-  readonly delivery: "steer" | "queue"
-  readonly text: string
-  readonly description: string
-  readonly resume: boolean
-}
-
 export interface AuthContext {
   readonly integration: {
     transform(callback: (draft: IntegrationDraft) => void): Promise<Registration>
@@ -87,7 +69,6 @@ export interface AuthContext {
       resolve(connection: HostConnection): Promise<HostCredential | undefined>
     }
   }
-  readonly command: { transform(callback: (editor: CommandEditor) => void): Promise<Registration> }
-  readonly session: { synthetic(message: SyntheticMessage): Promise<void> }
+  readonly mcp: { transform(callback: (editor: unknown) => void): Promise<Registration> }
   readonly storage: { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void> }
 }

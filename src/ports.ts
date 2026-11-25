@@ -8,17 +8,14 @@
  * - `ReadGuardPort` (package C, `src/guards/read.ts`): design §5.1 steps 3–7 after `analyzeRead`, shared by every read
  *   tool and by package E's `saved_read` and `save`, which build against its fake (review #1, LOW 6).
  * - `LedgerPort` (Day 0, src/ledger.ts): the spend ledger.
- * - `PlanStorePort` (Day 0, src/domain/plans.ts): single-use plans.
- * - `PermissionPort`: OpenCode's `ctx.permission.assert`, so a tool asserts its dotted action before any call.
  * - `Clock`: time and ids, so tests are deterministic.
  *
  * Every call takes the call's `signal`; a stopped call aborts its request. Databricks' text in an answer is untrusted.
  */
-import type { Feature, Operation } from "./domain/actions.js"
-import type { EnforcementKind } from "./domain/contract.js"
+import type { Feature, Operation } from "./methods.js"
+import type { EnforcementKind } from "./handlers/schemas.js"
 import type { ProviderError } from "./domain/errors.js"
 
-export type { PlanStorePort } from "./domain/plans.js"
 
 // ── auth (package A) ─────────────────────────────────────────────────────
 
@@ -374,8 +371,6 @@ export interface ReadRequest {
   readonly warehouse?: string
   readonly catalog?: string
   readonly schema?: string
-  /** `start: true` from the call; never set by a source. */
-  readonly start?: boolean
   /** The saved source: refuse unless the warehouse is already RUNNING (design §11.3). */
   readonly runningOnly?: boolean
   /** The call's own `wait`, in seconds: how long to wait for a STARTING warehouse. Defaults to the `wait` option. */
@@ -444,23 +439,6 @@ export interface LedgerPort {
    * is empty for a start charged outside a session.
    */
   starts(account: string, sinceMs: number): Promise<readonly { readonly warehouseId: string; readonly atMs: number; readonly sessionId: string }[]>
-}
-
-// ── permissions and time ─────────────────────────────────────────────────
-
-export interface PermissionRequest {
-  /** The dotted action: `databricks.<tool>`, `databricks.start`, `databricks.probe` or `databricks.read`. */
-  readonly action: string
-  /** `<account>:<operation>`, `<account>:table:<c>.<s>.<t>` or `<account>:warehouse:<id>`. */
-  readonly resource: string
-  readonly sessionID: string
-  readonly messageID?: string
-  readonly callID?: string
-}
-
-export interface PermissionPort {
-  /** Resolves when allowed (asking the person if the rules say ask); rejects when denied. */
-  assert(request: PermissionRequest, signal: AbortSignal): Promise<void>
 }
 
 export interface Clock {

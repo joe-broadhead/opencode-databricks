@@ -7,10 +7,10 @@
  * (`OPTIONS_INVALID`) at setup, before any call: a `pat` account without `tokenEnv` can never work, and failing at
  * startup says so once instead of on every tool call.
  */
-import type { Feature } from "../domain/actions.js"
+import type { Feature } from "../methods.js"
 import { DatabricksError } from "../domain/errors.js"
 import type { Options } from "../options.js"
-import type { EnforcementKind } from "../domain/contract.js"
+import type { EnforcementKind } from "../handlers/schemas.js"
 import type { AccountInfo, Mode } from "../ports.js"
 import { parseWorkspaceHost } from "./host.js"
 import type { ScopeChoice } from "./scopes.js"

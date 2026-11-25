@@ -10,8 +10,9 @@
  * answer can get wrong is refused here, before the browser opens: a bad host (`HOST_INVALID`), a missing or
  * unparseable client ID and a non-numeric role (`AUTH_CLIENT_INVALID`), and a redirect this plugin cannot listen on.
  */
-import { DISPLAY_NAME, INTEGRATION_PREFIX } from "../constants.js"
-import { WRITE_DISCLOSURE } from "../domain/contract.js"
+import { DISPLAY_NAME } from "../constants.js"
+import { accountName } from "@we-the-rebel-alliance/plugin-contract/accounts"
+import { WRITE_DISCLOSURE } from "../handlers/schemas.js"
 import { DatabricksError } from "../domain/errors.js"
 import { parseWorkspaceHost, type WorkspaceHost } from "./host.js"
 import { ROLE_GROUP, type AccountSettings } from "./accounts.js"
@@ -58,15 +59,9 @@ const CLIENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/u
 const CLIENT_PATTERN = "^\\s*$|[A-Za-z0-9][A-Za-z0-9._-]{7,127}$"
 const HOST_PATTERN = "^\\s*$|https://\\S+$"
 
-/** The integration of one account: `databricks-<alias>` (design §3.2, constants.ts). */
+/** The one integration name of an account: `databricks`, or `databricks-<alias>` (contract §3). */
 export function integrationIdFor(alias: string): string {
-  return `${INTEGRATION_PREFIX}${alias}`
-}
-
-/** The name `/connect` shows: "Databricks", plus the alias when more than one account signs in. */
-export function integrationNames(accounts: readonly AccountSettings[]): Map<string, string> {
-  const interactive = accounts.filter((account) => account.mode === "interactive")
-  return new Map(interactive.map((account) => [account.alias, interactive.length > 1 ? `${DISPLAY_NAME} (${account.alias})` : DISPLAY_NAME]))
+  return accountName(DISPLAY_NAME.toLowerCase(), alias)
 }
 
 /**

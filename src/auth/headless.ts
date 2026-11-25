@@ -18,7 +18,7 @@
  */
 import { spawn } from "node:child_process"
 import { DatabricksError } from "../domain/errors.js"
-import { shortReason } from "../redact.js"
+import { shortReason } from "../provider/redact.js"
 import type { AccountSettings } from "./accounts.js"
 import { parseWorkspaceHost } from "./host.js"
 import { requestToken } from "./token.js"
