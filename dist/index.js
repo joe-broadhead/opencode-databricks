@@ -36144,7 +36144,7 @@ var Recognizer = class _Recognizer {
   sempred(_localctx, _ruleIndex, _actionIndex) {
     return true;
   }
-  // TODO: make localCtx an optional parameter, not optional null.
+  // Later: make localCtx an optional parameter, not optional null.
   precpred(_localctx, _precedence) {
     return true;
   }
@@ -38233,7 +38233,7 @@ var ParserATNSimulator = class _ParserATNSimulator extends ATNSimulator {
       this.decisionToDFA[d] = new DFA(this.atn.getDecisionState(d), d);
     }
   }
-  // TODO: make outerContext an optional parameter, not optional null.
+  // Later: make outerContext an optional parameter, not optional null.
   adaptivePredict(input, decision, outerContext) {
     if (_ParserATNSimulator.debug || _ParserATNSimulator.traceATNSimulator) {
       console.log("adaptivePredict decision " + decision + " exec LA(1)==" + this.getLookaheadName(input) + " line " + input.LT(1).line + ":" + input.LT(1).column);
@@ -38940,7 +38940,7 @@ var ParserATNSimulator = class _ParserATNSimulator extends ATNSimulator {
     }
     return predictions;
   }
-  // TODO: If we are doing predicates, there is no point in pursuing
+  // Later: If we are doing predicates, there is no point in pursuing
   //     closure operations if we reach a DFA state that uniquely predicts
   //     alternative. We will not be caching that DFA state and it is a
   //     waste to pursue the closure. Might have to advance when we do
@@ -43969,7 +43969,7 @@ var XPath = class _XPath {
     const p = new _XPath(parser, xpath);
     return p.evaluate(tree);
   }
-  // TODO: check for invalid token/rule names, bad syntax
+  // Later: check for invalid token/rule names, bad syntax
   split(path) {
     const lexer = new XPathLexer(CharStream.fromString(path));
     lexer.recover = (e) => {
@@ -45216,7 +45216,7 @@ var Parser = class extends Recognizer {
    * The {@link ParserRuleContext} object for the currently executing rule.
    * This is always non-null during the parsing process.
    */
-  // TODO: make private
+  // Later: make private
   context = null;
   precedenceStack = [];
   /**
@@ -45751,7 +45751,7 @@ var Parser = class extends Recognizer {
   /**
    * For debugging and other purposes.
    *
-   * TODO: this differs from the Java version. Change it.
+   * Later: this differs from the Java version. Change it.
    */
   getDFAStrings() {
     return this.interpreter.decisionToDFA.toString();
