@@ -20347,6 +20347,7 @@ var package_default = {
     hyparquet: "1.32.0",
     typescript: "5.9.3",
     vitest: "5.0.5",
+    yaml: "2.9.1",
     zod: "4.6.7"
   },
   capabilities: {
@@ -181725,6 +181726,13 @@ async function skillIds() {
   }
   return ids;
 }
+function descriptionOf(id, raw) {
+  const text7 = raw?.trim();
+  if (!text7 || text7.startsWith(">") || text7.startsWith("|") || text7.includes("\n") || text7.includes("\r")) {
+    throw invalid3(`skills/${id}/SKILL.md needs a one-line description: not empty, not ">", "|", or a block scalar.`);
+  }
+  return text7;
+}
 function parseSkill(id, text7) {
   const source3 = text7.replace(/\r\n/g, "\n");
   const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(source3);
@@ -181736,8 +181744,8 @@ function parseSkill(id, text7) {
     fields.set(field[1], field[2].trim());
   }
   const name = fields.get("name");
-  const description = fields.get("description");
-  if (fields.size !== 2 || name !== id || !description) throw invalid3(`skills/${id}/SKILL.md needs exactly a name equal to "${id}" and a description.`);
+  if (fields.size !== 2 || name !== id) throw invalid3(`skills/${id}/SKILL.md needs exactly a name equal to "${id}" and a description.`);
+  const description = descriptionOf(id, fields.get("description"));
   const content = match[2].trimStart();
   if (content.trim() === "") throw invalid3(`skills/${id}/SKILL.md has no content.`);
   return { name, description, content };
