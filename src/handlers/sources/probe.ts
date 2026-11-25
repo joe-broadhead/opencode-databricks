@@ -24,12 +24,11 @@ const probe: Handler<"probe"> = async (input, call, deps) => {
   const name = SOURCES[asked]
   if (name === undefined) throw new RegisterError(refusal("SOURCE_UNKNOWN", `This plugin has no source "${asked}".`, "Pass databricks.queries, databricks.runs or databricks.saved."))
   const account = input.account ?? Object.keys(deps.options.accounts ?? {})[0] ?? "default"
-  let host: string
-  try {
-    host = deps.auth.account(account).host
-  } catch {
-    throw new RegisterError(refusal("ACCOUNT_UNKNOWN", `This plugin has no account "${account}".`, `Pass one of: ${Object.keys(deps.options.accounts ?? {}).join(", ") || "default"}.`))
+  const aliases = Object.keys(deps.options.accounts ?? {})
+  if (aliases.length > 0 && !aliases.includes(account)) {
+    throw new RegisterError(refusal("ACCOUNT_UNKNOWN", `This plugin has no account "${account}".`, `Pass one of: ${aliases.join(", ")}.`))
   }
+  const host = deps.auth.account(account).host
   const me = await deps.databricks.me(account, call.signal)
   recordsOf(deps).put(account, host, { userId: me.id, userName: me.userName, ...(me.displayName ? { displayName: me.displayName } : {}), at: deps.clock.now() })
   return probeResult({ source: name, account, owner: ownerOf(me, host) })
