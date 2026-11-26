@@ -15,7 +15,7 @@ const isolated = mkdtempSync(join(tmpdir(), "databricks-install-"))
 try {
   const packed = JSON.parse(execFileSync("npm", ["pack", "--json", "--pack-destination", work], { cwd: root, encoding: "utf8" }))[0]
   const files = packed.files.map((file) => file.path).sort()
-  const required = ["dist/index.js", "package.json", "README.md", "LICENSE", "skills/databricks/SKILL.md", "skills/databricks-sql/SKILL.md", "assets/icon.svg"]
+  const required = ["dist/index.js", "package.json", "README.md", "LICENSE", "NOTICE", "skills/databricks/SKILL.md", "skills/databricks-sql/SKILL.md", "assets/icon.svg"]
   const missing = required.filter((file) => !files.includes(file))
   if (missing.length > 0) throw new Error(`the tarball is missing ${missing.join(", ")}`)
   const forbidden = files.filter((file) => file.startsWith("src/") || file.startsWith("test/") || file.startsWith("scripts/") || file.endsWith(".ts"))
