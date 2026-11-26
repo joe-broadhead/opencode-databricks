@@ -27684,7 +27684,8 @@ var package_default = {
     "skills",
     "assets",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   scripts: {
     check: "npm run lint && npm run typecheck && npm run bundle && npm run test:unit && npm run test:host && npm run test:pack && npm run kit && npm run docs:check",
