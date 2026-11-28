@@ -4,6 +4,20 @@ Databricks for OpenCode: Unity Catalog, SQL warehouses, queries, jobs and saved 
 The plugin reads with your Databricks identity, plans every change before committing it, and never starts a warehouse
 unless you call `databricks.start`.
 
+## Databricks' MCP servers
+
+Databricks provides managed MCP servers for [SQL](https://docs.databricks.com/aws/en/agents/mcp-tools/databricks-sql),
+[Genie One](https://docs.databricks.com/aws/en/agents/mcp-tools/genie-mcp),
+[Unity Catalog functions](https://docs.databricks.com/aws/en/agents/mcp-tools/uc-functions), and its other
+[built-in services](https://docs.databricks.com/aws/en/agents/mcp-tools/built-in-mcp-services); checked on 28 November 2026.
+None covers this plugin's job: the SQL server runs a raw statement, Genie answers a natural-language question, and
+the functions server calls one Unity Catalog function, while this plugin browses Unity Catalog, reads warehouse state,
+jobs, saved queries and Query History, and plans every change before it commits it. The SQL server's `execute_sql` is not
+a copy of the plugin's `query`: `query` goes through the read path, which resolves and fences tables, applies the inline
+rules and caps, and refuses a stopped warehouse. Passing the server's tools through would bypass those guarantees and let
+a write skip its plan. The plugin therefore keeps its own tools and provider code: there is no Databricks MCP server to
+build this plugin on, and it declares no `mcp:` rows.
+
 ## Install
 
 ```sh
